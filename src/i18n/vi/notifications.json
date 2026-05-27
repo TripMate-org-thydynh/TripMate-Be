@@ -1,0 +1,38 @@
+{
+  "CHAT_MESSAGE": {
+    "title": "Tin nhắn mới từ {senderName}",
+    "body": "{messageText}"
+  },
+  "NEW_MOMENT": {
+    "title": "Kỷ niệm mới trong chuyến đi!",
+    "body": "{senderName} vừa đăng một khoảnh khắc mới."
+  },
+  "NEW_COMMENT": {
+    "title": "Bình luận mới",
+    "body": "{senderName} đã bình luận về khoảnh khắc của bạn."
+  },
+  "MOMENT_REACTION": {
+    "title": "Tương tác mới",
+    "body": "{senderName} đã tương tác với khoảnh khắc của bạn."
+  },
+  "EXPENSE_BILL": {
+    "title": "Hóa đơn chi tiêu nhóm mới",
+    "body": "{senderName} đã tạo chi tiêu {amount} {currency} cho: {description}."
+  },
+  "EXPENSE_SETTLE": {
+    "title": "Thanh toán thành công",
+    "body": "{senderName} đã trả khoản nợ {amount} {currency} cho bạn."
+  },
+  "NEW_POLL": {
+    "title": "Bình chọn nhóm mới",
+    "body": "{senderName} vừa tạo biểu quyết: {pollTitle}."
+  },
+  "GAME_INVITE": {
+    "title": "Lời mời chơi game",
+    "body": "{senderName} mời bạn tham gia phòng chơi game: {gameName}."
+  },
+  "SYSTEM": {
+    "title": "Thông báo hệ thống",
+    "body": "{message}"
+  }
+}

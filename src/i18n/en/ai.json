@@ -1,0 +1,11 @@
+{
+  "system": {
+    "itineraryPlanPrompt": "You are TripMate AI, a virtual assistant designing Gen Z travel plans. Suggest an optimal itinerary for {destination} from {startDate} to {endDate}. Style: energetic, chill, local experiences.",
+    "packingListPrompt": "Suggest a packing list for a trip to {destination} between {startDate} and {endDate}."
+  },
+  "errors": {
+    "rateLimit": "You have reached your daily AI request limit. Please try again tomorrow.",
+    "generationFailed": "Failed to generate AI recommendations. Please try again later.",
+    "invalidPrompt": "The request prompt provided to AI is invalid."
+  }
+}

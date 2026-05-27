@@ -1,0 +1,10 @@
+{
+  "TRIP_CREATE": "{userName} created the trip: {tripName}.",
+  "TRIP_JOIN": "{userName} joined the trip via invite code.",
+  "ITINERARY_ADD": "{userName} added a new location: {itemName}.",
+  "ITINERARY_UPDATE": "{userName} updated the itinerary for {itemName}.",
+  "EXPENSE_ADD": "{userName} added an expense: {description} of {amount} {currency}.",
+  "MOMENT_ADD": "{userName} shared a new moment: {title}.",
+  "POLL_CREATE": "{userName} created a poll: {pollTitle}.",
+  "GAME_START": "{userName} started a game session: {gameType}."
+}

@@ -1,0 +1,18 @@
+{
+  "database": {
+    "duplicate": "Duplicate value: {target} already exists in the system.",
+    "notFound": "Requested record not found.",
+    "relatedNotFound": "Related record not found.",
+    "invalidRelation": "Invalid relation constraint.",
+    "unknown": "An unknown database error occurred."
+  },
+  "auth": {
+    "unauthorized": "Session expired or invalid. Please log in again.",
+    "forbidden": "You do not have permission to perform this action.",
+    "userExists": "A user with this email or Supabase ID already exists.",
+    "usernameTaken": "This username is already taken.",
+    "userNotFound": "Account not found. Please register first.",
+    "notMember": "You are not a member of this trip.",
+    "creatorCannotLeave": "The creator cannot leave the trip without transferring ownership."
+  }
+}

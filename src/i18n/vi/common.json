@@ -1,0 +1,23 @@
+{
+  "common": {
+    "success": "Thành công",
+    "error": "Lỗi",
+    "not_found": "Không tìm thấy",
+    "unauthorized": "Không có quyền truy cập",
+    "forbidden": "Truy cập bị từ chối"
+  },
+  "auth": {
+    "invalid_credentials": "Email hoặc mật khẩu không đúng",
+    "user_exists": "Email đã được sử dụng",
+    "register_success": "Đăng ký thành công"
+  },
+  "trips": {
+    "not_found": "Không tìm thấy chuyến đi",
+    "not_member": "Bạn không phải thành viên của chuyến đi này",
+    "create_success": "Tạo chuyến đi thành công"
+  },
+  "expenses": {
+    "not_found": "Không tìm thấy chi phí",
+    "create_success": "Thêm chi phí thành công"
+  }
+}

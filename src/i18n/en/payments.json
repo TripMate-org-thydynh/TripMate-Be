@@ -1,0 +1,14 @@
+{
+  "errors": {
+    "invalidSplitRatio": "Invalid split ratio. Total parts must equal the total expense amount.",
+    "invalidMemberSplit": "Each participating member must have a defined expense share.",
+    "expenseNotFound": "Requested expense not found.",
+    "splitAlreadySettled": "This debt share has already been settled.",
+    "cannotSettleSelf": "You cannot settle a debt with yourself."
+  },
+  "status": {
+    "pending": "Pending",
+    "settled": "Settled",
+    "partially_settled": "Partially Settled"
+  }
+}

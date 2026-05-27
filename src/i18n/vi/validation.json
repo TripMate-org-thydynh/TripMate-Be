@@ -1,0 +1,10 @@
+{
+  "isNotEmpty": "Trường {property} không được để trống.",
+  "isEmail": "Trường {property} phải là địa chỉ email hợp lệ.",
+  "isString": "Trường {property} phải là một chuỗi ký tự.",
+  "minLength": "Trường {property} phải có ít nhất {constraints.0} ký tự.",
+  "isDateString": "Trường {property} phải là định dạng ngày hợp lệ (ISO 8601).",
+  "isBoolean": "Trường {property} phải là kiểu đúng/sai (boolean).",
+  "isArray": "Trường {property} phải là một mảng.",
+  "length": "Trường {property} phải dài đúng {constraints.0} ký tự."
+}

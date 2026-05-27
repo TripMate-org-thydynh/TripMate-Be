@@ -1,0 +1,38 @@
+{
+  "CHAT_MESSAGE": {
+    "title": "New message from {senderName}",
+    "body": "{messageText}"
+  },
+  "NEW_MOMENT": {
+    "title": "New moment in the trip!",
+    "body": "{senderName} posted a new moment."
+  },
+  "NEW_COMMENT": {
+    "title": "New comment",
+    "body": "{senderName} commented on your moment."
+  },
+  "MOMENT_REACTION": {
+    "title": "New reaction",
+    "body": "{senderName} reacted to your moment."
+  },
+  "EXPENSE_BILL": {
+    "title": "New group expense",
+    "body": "{senderName} logged an expense of {amount} {currency} for: {description}."
+  },
+  "EXPENSE_SETTLE": {
+    "title": "Debt settled",
+    "body": "{senderName} marked their debt of {amount} {currency} to you as settled."
+  },
+  "NEW_POLL": {
+    "title": "New group poll",
+    "body": "{senderName} created a poll: {pollTitle}."
+  },
+  "GAME_INVITE": {
+    "title": "Game invitation",
+    "body": "{senderName} invited you to play: {gameName}."
+  },
+  "SYSTEM": {
+    "title": "System notification",
+    "body": "{message}"
+  }
+}

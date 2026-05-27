@@ -1,0 +1,14 @@
+{
+  "errors": {
+    "invalidSplitRatio": "Tỷ lệ chia tiền không hợp lệ. Tổng các phần phải khớp với số tiền thực tế.",
+    "invalidMemberSplit": "Mỗi thành viên tham gia phải được gán một phần chi phí cụ thể.",
+    "expenseNotFound": "Không tìm thấy khoản chi tiêu yêu cầu.",
+    "splitAlreadySettled": "Khoản nợ này đã được thanh toán rồi.",
+    "cannotSettleSelf": "Bạn không thể tự thanh toán nợ cho chính mình."
+  },
+  "status": {
+    "pending": "Đang chờ thanh toán",
+    "settled": "Đã thanh toán",
+    "partially_settled": "Đã thanh toán một phần"
+  }
+}

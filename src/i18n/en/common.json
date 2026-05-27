@@ -1,0 +1,23 @@
+{
+  "common": {
+    "success": "Success",
+    "error": "Error",
+    "not_found": "Not found",
+    "unauthorized": "Unauthorized",
+    "forbidden": "Forbidden"
+  },
+  "auth": {
+    "invalid_credentials": "Invalid email or password",
+    "user_exists": "Email already in use",
+    "register_success": "Registration successful"
+  },
+  "trips": {
+    "not_found": "Trip not found",
+    "not_member": "You are not a member of this trip",
+    "create_success": "Trip created successfully"
+  },
+  "expenses": {
+    "not_found": "Expense not found",
+    "create_success": "Expense added successfully"
+  }
+}

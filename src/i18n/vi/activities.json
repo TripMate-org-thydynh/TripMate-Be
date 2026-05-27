@@ -1,0 +1,10 @@
+{
+  "TRIP_CREATE": "{userName} đã tạo chuyến đi: {tripName}.",
+  "TRIP_JOIN": "{userName} đã tham gia chuyến đi bằng mã mời.",
+  "ITINERARY_ADD": "{userName} đã thêm địa điểm mới: {itemName}.",
+  "ITINERARY_UPDATE": "{userName} đã cập nhật lịch trình cho {itemName}.",
+  "EXPENSE_ADD": "{userName} đã thêm chi tiêu: {description} với số tiền {amount} {currency}.",
+  "MOMENT_ADD": "{userName} đã chia sẻ một kỷ niệm mới: {title}.",
+  "POLL_CREATE": "{userName} đã tạo bình chọn: {pollTitle}.",
+  "GAME_START": "{userName} đã bắt đầu chơi game: {gameType}."
+}

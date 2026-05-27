@@ -1,0 +1,18 @@
+{
+  "database": {
+    "duplicate": "Dữ liệu bị trùng lặp: {target} đã tồn tại trong hệ thống.",
+    "notFound": "Không tìm thấy dữ liệu yêu cầu.",
+    "relatedNotFound": "Không tìm thấy dữ liệu liên quan.",
+    "invalidRelation": "Liên kết dữ liệu không hợp lệ.",
+    "unknown": "Lỗi cơ sở dữ liệu không xác định."
+  },
+  "auth": {
+    "unauthorized": "Phiên làm việc hết hạn hoặc không hợp lệ. Vui lòng đăng nhập lại.",
+    "forbidden": "Bạn không có quyền thực hiện hành động này.",
+    "userExists": "Email hoặc mã Supabase ID đã được sử dụng.",
+    "usernameTaken": "Tên đăng nhập đã tồn tại.",
+    "userNotFound": "Không tìm thấy tài khoản. Vui lòng đăng ký trước.",
+    "notMember": "Bạn không phải thành viên của chuyến đi này.",
+    "creatorCannotLeave": "Người tạo chuyến đi không thể rời chuyến đi mà không chuyển quyền sở hữu."
+  }
+}

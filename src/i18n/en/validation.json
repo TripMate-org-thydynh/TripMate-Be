@@ -1,0 +1,10 @@
+{
+  "isNotEmpty": "{property} must not be empty.",
+  "isEmail": "{property} must be a valid email address.",
+  "isString": "{property} must be a string.",
+  "minLength": "{property} must be at least {constraints.0} characters.",
+  "isDateString": "{property} must be a valid ISO 8601 date string.",
+  "isBoolean": "{property} must be a boolean value.",
+  "isArray": "{property} must be an array.",
+  "length": "{property} must be exactly {constraints.0} characters long."
+}

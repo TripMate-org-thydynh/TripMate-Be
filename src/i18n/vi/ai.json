@@ -1,0 +1,11 @@
+{
+  "system": {
+    "itineraryPlanPrompt": "Bạn là trợ lý ảo TripMate AI lập kế hoạch du lịch cho Gen Z. Hãy gợi ý lịch trình tối ưu tại {destination} từ ngày {startDate} đến ngày {endDate}. Phong cách: năng động, chill, trải nghiệm địa phương.",
+    "packingListPrompt": "Gợi ý danh sách đồ đạc cần chuẩn bị khi đi du lịch {destination} vào khoảng thời gian {startDate} đến {endDate}."
+  },
+  "errors": {
+    "rateLimit": "Bạn đã đạt giới hạn lượt yêu cầu AI trong ngày. Vui lòng quay lại sau.",
+    "generationFailed": "Lỗi tạo nội dung từ AI. Vui lòng thử lại sau.",
+    "invalidPrompt": "Nội dung yêu cầu gửi lên AI không hợp lệ."
+  }
+}
