@@ -11,6 +11,9 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ExpensesService } from './expenses.service';
 import { CreateExpenseDto } from './dto/create-expense.dto';
+import { LinkBankDto } from './dto/link-bank.dto';
+import { AddCardDto } from './dto/add-card.dto';
+import { UpdateBudgetGoalDto } from './dto/update-budget-goal.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -45,14 +48,19 @@ export class ExpensesController {
   markPaid(
     @Param('expenseId') expenseId: string,
     @Param('userId') userId: string,
+    @CurrentUser() requester: any,
   ) {
-    return this.expensesService.markSplitPaid(expenseId, userId);
+    return this.expensesService.markSplitPaid(expenseId, userId, requester.id);
   }
 
   @Delete(':expenseId')
   @ApiOperation({ summary: 'Xóa chi phí (soft delete)' })
-  delete(@Param('expenseId') expenseId: string) {
-    return this.expensesService.delete(expenseId);
+  delete(
+    @Param('tripId') tripId: string,
+    @Param('expenseId') expenseId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.expensesService.delete(expenseId, user.id, tripId);
   }
 
   // --- MODULE 7 ADDITIONAL CONTROLLERS ---
@@ -74,9 +82,9 @@ export class ExpensesController {
   linkBank(
     @Param('tripId') tripId: string,
     @CurrentUser() user: any,
-    @Body() body: any,
+    @Body() dto: LinkBankDto,
   ) {
-    return this.expensesService.linkBank(user.id, body);
+    return this.expensesService.linkBank(user.id, dto);
   }
 
   @Get('cards')
@@ -90,9 +98,9 @@ export class ExpensesController {
   addCard(
     @Param('tripId') tripId: string,
     @CurrentUser() user: any,
-    @Body() body: any,
+    @Body() dto: AddCardDto,
   ) {
-    return this.expensesService.addPaymentMethod(user.id, body);
+    return this.expensesService.addPaymentMethod(user.id, dto);
   }
 
   @Post('ocr')
@@ -112,8 +120,11 @@ export class ExpensesController {
 
   @Post('budget-goal')
   @ApiOperation({ summary: 'Thiết lập/cập nhật hạn mức ngân sách' })
-  updateBudgetGoal(@Param('tripId') tripId: string, @Body() body: any) {
-    return this.expensesService.updateBudgetGoal(tripId, body);
+  updateBudgetGoal(
+    @Param('tripId') tripId: string,
+    @Body() dto: UpdateBudgetGoalDto,
+  ) {
+    return this.expensesService.updateBudgetGoal(tripId, dto);
   }
 
   @Get('splitter-game')

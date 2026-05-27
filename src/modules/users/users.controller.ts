@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdatePresenceDto } from './dto/update-presence.dto';
+import { UpdateSocialsDto } from './dto/update-socials.dto';
 
 @ApiTags('Users')
 @UseGuards(JwtAuthGuard)
@@ -83,8 +84,8 @@ export class UsersController {
 
   @Patch('me/social-links')
   @ApiOperation({ summary: 'Cập nhật liên kết mạng xã hội' })
-  updateSocials(@CurrentUser() user: any, @Body() body: any) {
-    return this.usersService.updateSocialLinks(user.id, body);
+  updateSocials(@CurrentUser() user: any, @Body() dto: UpdateSocialsDto) {
+    return this.usersService.updateSocialLinks(user.id, dto);
   }
 
   @Get('me/stats')

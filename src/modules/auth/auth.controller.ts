@@ -3,6 +3,9 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { SendOtpDto } from './dto/send-otp.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { GoogleLoginDto } from './dto/google-login.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
@@ -21,6 +24,28 @@ export class AuthController {
   @ApiOperation({ summary: 'Đăng nhập bằng Supabase ID - nhận JWT' })
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
+  }
+
+  @Post('send-otp')
+  @ApiOperation({ summary: 'Gửi mã OTP đăng nhập qua SMS Twilio' })
+  sendOtp(@Body() dto: SendOtpDto) {
+    return this.authService.sendOtp(dto.phoneNumber);
+  }
+
+  @Post('verify-otp')
+  @ApiOperation({
+    summary: 'Xác minh mã OTP đăng nhập SMS - nhận JWT hoặc supabaseId',
+  })
+  verifyOtp(@Body() dto: VerifyOtpDto) {
+    return this.authService.verifyOtp(dto.phoneNumber, dto.code);
+  }
+
+  @Post('google')
+  @ApiOperation({
+    summary: 'Đăng nhập Google - nhận JWT hoặc thông tin đăng ký',
+  })
+  googleLogin(@Body() dto: GoogleLoginDto) {
+    return this.authService.googleLogin(dto);
   }
 
   @Get('me')

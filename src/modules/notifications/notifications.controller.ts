@@ -25,8 +25,8 @@ export class NotificationsController {
 
   @Patch(':id/read')
   @ApiOperation({ summary: 'Đánh dấu đã đọc' })
-  markRead(@Param('id') id: string) {
-    return this.notificationsService.markRead(id);
+  markRead(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.notificationsService.markRead(id, user.id);
   }
 
   @Patch('read-all')

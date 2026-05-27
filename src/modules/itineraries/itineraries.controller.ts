@@ -36,19 +36,23 @@ export class ItinerariesController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Xem chi tiết điểm dừng' })
-  findOne(@Param('id') id: string) {
-    return this.itinerariesService.findOne(id);
+  findOne(@Param('tripId') tripId: string, @Param('id') id: string) {
+    return this.itinerariesService.findOne(id, tripId);
   }
 
   @Patch(':id')
   @ApiOperation({ summary: 'Cập nhật điểm dừng' })
-  update(@Param('id') id: string, @Body() dto: UpdateItineraryItemDto) {
-    return this.itinerariesService.update(id, dto);
+  update(
+    @Param('tripId') tripId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateItineraryItemDto,
+  ) {
+    return this.itinerariesService.update(id, tripId, dto);
   }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Xóa điểm dừng' })
-  remove(@Param('id') id: string) {
-    return this.itinerariesService.remove(id);
+  remove(@Param('tripId') tripId: string, @Param('id') id: string) {
+    return this.itinerariesService.remove(id, tripId);
   }
 }

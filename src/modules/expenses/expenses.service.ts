@@ -1,21 +1,22 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
+  Inject,
 } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 
 @Injectable()
 export class ExpensesService {
-  constructor(private prisma: PrismaService) {}
-
-  // Mock in-memory store for budget goals & wallets
-  private budgetGoals: Record<string, any> = {};
-  private wallets: Record<string, any> = {};
-  private bankAccounts: Record<string, any[]> = {};
-  private cardMethods: Record<string, any[]> = {};
+  constructor(
+    private prisma: PrismaService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
+  ) {}
 
   async create(tripId: string, dto: CreateExpenseDto) {
     // Get trip members for EQUAL split
@@ -58,7 +59,7 @@ export class ExpensesService {
       splits = [];
     }
 
-    return this.prisma.expense.create({
+    const expense = await this.prisma.expense.create({
       data: {
         tripId,
         paidById: dto.paidById,
@@ -85,10 +86,21 @@ export class ExpensesService {
         },
       },
     });
+
+    await this.evictCache(tripId);
+    return expense;
   }
 
   async findAll(tripId: string) {
-    return this.prisma.expense.findMany({
+    const cacheKey = `trip:${tripId}:expenses`;
+    try {
+      const cached = await this.cacheManager.get<any[]>(cacheKey);
+      if (cached) return cached;
+    } catch (e) {
+      console.error('Redis cache get error:', e.message);
+    }
+
+    const expenses = await this.prisma.expense.findMany({
       where: { tripId, deletedAt: null },
       include: {
         paidBy: { select: { id: true, name: true, avatarUrl: true } },
@@ -100,10 +112,25 @@ export class ExpensesService {
       },
       orderBy: { createdAt: 'desc' },
     });
+
+    try {
+      await this.cacheManager.set(cacheKey, expenses, 300000);
+    } catch (e) {
+      console.error('Redis cache set error:', e.message);
+    }
+
+    return expenses;
   }
 
   async getBalances(tripId: string) {
-    // Calculate net balances: positive = owed to user, negative = user owes
+    const cacheKey = `trip:${tripId}:balances`;
+    try {
+      const cached = await this.cacheManager.get<any>(cacheKey);
+      if (cached) return cached;
+    } catch (e) {
+      console.error('Redis cache get error:', e.message);
+    }
+
     const expenses = await this.prisma.expense.findMany({
       where: { tripId, deletedAt: null },
       include: { splits: true },
@@ -155,7 +182,7 @@ export class ExpensesService {
       if (creditor.balance.eq(0)) j++;
     }
 
-    return {
+    const result = {
       balances: Object.entries(balances).map(([userId, balance]) => {
         const member = members.find((m) => m.userId === userId);
         return { user: member?.user, balance: balance.toNumber() };
@@ -166,57 +193,106 @@ export class ExpensesService {
         amount: s.amount.toNumber(),
       })),
     };
+
+    try {
+      await this.cacheManager.set(cacheKey, result, 300000);
+    } catch (e) {
+      console.error('Redis cache set error:', e.message);
+    }
+
+    return result;
   }
 
-  async markSplitPaid(expenseId: string, userId: string) {
-    const split = await this.prisma.expenseSplit.findUnique({
-      where: { expenseId_userId: { expenseId, userId } },
-    });
-    if (!split) throw new NotFoundException('Split not found');
-    return this.prisma.expenseSplit.update({
-      where: { expenseId_userId: { expenseId, userId } },
-      data: { isPaid: true, paidAt: new Date() },
-    });
-  }
-
-  async delete(expenseId: string) {
+  async markSplitPaid(expenseId: string, userId: string, requesterId: string) {
     const expense = await this.prisma.expense.findUnique({
       where: { id: expenseId },
     });
     if (!expense) throw new NotFoundException('Expense not found');
-    return this.prisma.expense.update({
+    
+    // Only the person who paid for the expense can mark split bills as paid
+    if (expense.paidById !== requesterId) {
+      throw new ForbiddenException('Only the expense payer can mark split bills as paid');
+    }
+
+    const split = await this.prisma.expenseSplit.findUnique({
+      where: { expenseId_userId: { expenseId, userId } },
+    });
+    if (!split) throw new NotFoundException('Split not found');
+    
+    const updatedSplit = await this.prisma.expenseSplit.update({
+      where: { expenseId_userId: { expenseId, userId } },
+      data: { isPaid: true, paidAt: new Date() },
+    });
+
+    await this.evictCache(expense.tripId);
+    return updatedSplit;
+  }
+
+  async delete(expenseId: string, userId: string, tripId: string) {
+    const expense = await this.prisma.expense.findUnique({
+      where: { id: expenseId },
+      include: { trip: { select: { createdBy: true } } },
+    });
+    if (!expense || expense.deletedAt) throw new NotFoundException('Expense not found');
+
+    // Only the expense creator/payer or the trip creator can delete the expense
+    if (expense.paidById !== userId && expense.trip.createdBy !== userId) {
+      throw new ForbiddenException('You do not have permission to delete this expense');
+    }
+
+    const updatedExpense = await this.prisma.expense.update({
       where: { id: expenseId },
       data: { deletedAt: new Date() },
     });
+
+    await this.evictCache(tripId);
+    return updatedExpense;
+  }
+
+  private async evictCache(tripId: string) {
+    try {
+      await this.cacheManager.del(`trip:${tripId}:expenses`);
+      await this.cacheManager.del(`trip:${tripId}:balances`);
+    } catch (e) {
+      console.error('Redis cache eviction error:', e.message);
+    }
   }
 
   // --- EXTENSION FOR MODULE 7 (FINANCE FLOW) ---
 
   async getWallet(tripId: string, userId: string) {
-    if (!this.wallets[userId]) {
-      this.wallets[userId] = {
-        userId,
-        balanceMomo: 2500000.0,
-        balanceZalo: 1200000.0,
-        balanceCash: 500000.0,
-        linkedBanksCount: 2,
-        creditCardsCount: 1,
-      };
+    let wallet = await this.prisma.userWallet.findUnique({
+      where: { userId },
+    });
+    if (!wallet) {
+      wallet = await this.prisma.userWallet.create({
+        data: { userId },
+      });
     }
     const banks = await this.getLinkedBanks(userId);
     const cards = await this.getPaymentMethods(userId);
     return {
-      ...this.wallets[userId],
+      userId,
+      balanceMomo: Number(wallet.balanceMomo),
+      balanceZalo: Number(wallet.balanceZalo),
+      balanceCash: Number(wallet.balanceCash),
+      linkedBanksCount: banks.length,
+      creditCardsCount: cards.length,
       banks,
       cards,
     };
   }
 
   async getLinkedBanks(userId: string) {
-    if (!this.bankAccounts[userId]) {
-      this.bankAccounts[userId] = [
+    const banks = await this.prisma.linkedBank.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'asc' },
+    });
+    
+    // Seed default mock banks if user has none, to maintain initial premium features
+    if (banks.length === 0) {
+      const defaultBanks = [
         {
-          id: 'bank-1',
           bankName: 'Vietcombank',
           accountNumber: '******8901',
           accountHolder: 'NGUYEN VAN A',
@@ -224,7 +300,6 @@ export class ExpensesService {
           logoUrl: 'assets/images/banks/vcb.png',
         },
         {
-          id: 'bank-2',
           bankName: 'Techcombank',
           accountNumber: '******3456',
           accountHolder: 'NGUYEN VAN A',
@@ -232,61 +307,105 @@ export class ExpensesService {
           logoUrl: 'assets/images/banks/tcb.png',
         },
       ];
+      
+      const createdBanks = [];
+      for (const bank of defaultBanks) {
+        const cb = await this.prisma.linkedBank.create({
+          data: { userId, ...bank },
+        });
+        createdBanks.push(cb);
+      }
+      return createdBanks;
     }
-    return this.bankAccounts[userId];
+    
+    return banks;
   }
 
   async linkBank(userId: string, data: any) {
     if (!data.bankName || !data.accountNumber || !data.accountHolder) {
       throw new BadRequestException('Missing bank account parameters');
     }
-    const newBank = {
-      id: `bank-${Date.now()}`,
-      bankName: data.bankName,
-      accountNumber: `******${data.accountNumber.slice(-4)}`,
-      accountHolder: data.accountHolder.toUpperCase(),
-      isVerified: true,
-      logoUrl: 'assets/images/banks/generic.png',
-    };
-    if (!this.bankAccounts[userId]) {
-      this.bankAccounts[userId] = [];
-    }
-    this.bankAccounts[userId].push(newBank);
+    
+    const accountNumberMasked = data.accountNumber.length > 4 
+      ? `******${data.accountNumber.slice(-4)}` 
+      : data.accountNumber;
+      
+    const newBank = await this.prisma.linkedBank.create({
+      data: {
+        userId,
+        bankName: data.bankName,
+        accountNumber: accountNumberMasked,
+        accountHolder: data.accountHolder.toUpperCase(),
+        isVerified: true,
+        logoUrl: 'assets/images/banks/generic.png',
+      },
+    });
+    
+    // Update linkedBanksCount in wallet
+    const banks = await this.prisma.linkedBank.findMany({ where: { userId } });
+    await this.prisma.userWallet.upsert({
+      where: { userId },
+      create: { userId, linkedBanksCount: banks.length },
+      update: { linkedBanksCount: banks.length },
+    });
+    
     return newBank;
   }
 
   async getPaymentMethods(userId: string) {
-    if (!this.cardMethods[userId]) {
-      this.cardMethods[userId] = [
-        {
-          id: 'card-1',
+    const cards = await this.prisma.paymentCard.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'asc' },
+    });
+    
+    // Seed default mock card if none exist
+    if (cards.length === 0) {
+      const defaultCard = await this.prisma.paymentCard.create({
+        data: {
+          userId,
           type: 'VISA',
           lastFour: '4242',
           expiry: '12/28',
           cardHolder: 'NGUYEN VAN A',
           colorIndex: 0,
         },
-      ];
+      });
+      return [defaultCard];
     }
-    return this.cardMethods[userId];
+    
+    return cards;
   }
 
   async addPaymentMethod(userId: string, data: any) {
     if (!data.cardNumber || !data.expiry || !data.cardHolder || !data.cvv) {
       throw new BadRequestException('Missing payment method parameters');
     }
-    const newCard = {
-      id: `card-${Date.now()}`,
-      type: data.cardNumber.startsWith('4') ? 'VISA' : 'MASTERCARD',
-      lastFour: data.cardNumber.slice(-4),
-      expiry: data.expiry,
-      cardHolder: data.cardHolder.toUpperCase(),
-      colorIndex: Math.floor(Math.random() * 4),
-    };
-    if (!this.cardMethods[userId]) {
-      this.cardMethods[userId] = [];
-    }
-    this.cardMethods[userId].push(newCard);
+    
+    const lastFour = data.cardNumber.length > 4 
+      ? data.cardNumber.slice(-4) 
+      : data.cardNumber;
+      
+    const type = data.cardNumber.startsWith('4') ? 'VISA' : 'MASTERCARD';
+    
+    const newCard = await this.prisma.paymentCard.create({
+      data: {
+        userId,
+        type,
+        lastFour,
+        expiry: data.expiry,
+        cardHolder: data.cardHolder.toUpperCase(),
+        colorIndex: Math.floor(Math.random() * 4),
+      },
+    });
+    
+    // Update creditCardsCount in wallet
+    const cards = await this.prisma.paymentCard.findMany({ where: { userId } });
+    await this.prisma.userWallet.upsert({
+      where: { userId },
+      create: { userId, creditCardsCount: cards.length },
+      update: { creditCardsCount: cards.length },
+    });
+    
     return newCard;
   }
 
@@ -311,32 +430,58 @@ export class ExpensesService {
   }
 
   async getBudgetGoal(tripId: string) {
-    if (!this.budgetGoals[tripId]) {
-      this.budgetGoals[tripId] = {
-        tripId,
-        limitAmount: 15000000.0, // 15M VND
-        warningPercentage: 80, // Warn at 80%
-        categoryLimits: [
-          { category: 'FOOD', amount: 4000000.0 },
-          { category: 'ACCOMMODATION', amount: 5000000.0 },
-          { category: 'TRANSPORT', amount: 3000000.0 },
-          { category: 'ACTIVITIES', amount: 2000000.0 },
-          { category: 'OTHER', amount: 1000000.0 },
-        ],
-      };
+    let budget = await this.prisma.budgetGoal.findUnique({
+      where: { tripId },
+    });
+    if (!budget) {
+      // Create a default BudgetGoal in DB for the trip
+      budget = await this.prisma.budgetGoal.create({
+        data: {
+          tripId,
+          limitAmount: 15000000.0, // 15M VND
+          warningPercentage: 80,
+          categoryLimits: [
+            { category: 'FOOD', amount: 4000000.0 },
+            { category: 'ACCOMMODATION', amount: 5000000.0 },
+            { category: 'TRANSPORT', amount: 3000000.0 },
+            { category: 'ACTIVITIES', amount: 2000000.0 },
+            { category: 'OTHER', amount: 1000000.0 },
+          ],
+        },
+      });
     }
-    return this.budgetGoals[tripId];
+    return {
+      tripId,
+      limitAmount: Number(budget.limitAmount),
+      warningPercentage: budget.warningPercentage,
+      categoryLimits: budget.categoryLimits,
+    };
   }
 
   async updateBudgetGoal(tripId: string, data: any) {
     const current = await this.getBudgetGoal(tripId);
-    this.budgetGoals[tripId] = {
-      ...current,
-      limitAmount: data.limitAmount ?? current.limitAmount,
-      warningPercentage: data.warningPercentage ?? current.warningPercentage,
-      categoryLimits: data.categoryLimits ?? current.categoryLimits,
+    
+    const updated = await this.prisma.budgetGoal.upsert({
+      where: { tripId },
+      create: {
+        tripId,
+        limitAmount: data.limitAmount ?? current.limitAmount,
+        warningPercentage: data.warningPercentage ?? current.warningPercentage,
+        categoryLimits: data.categoryLimits ?? current.categoryLimits,
+      },
+      update: {
+        limitAmount: data.limitAmount ?? current.limitAmount,
+        warningPercentage: data.warningPercentage ?? current.warningPercentage,
+        categoryLimits: data.categoryLimits ?? current.categoryLimits,
+      },
+    });
+    
+    return {
+      tripId,
+      limitAmount: Number(updated.limitAmount),
+      warningPercentage: updated.warningPercentage,
+      categoryLimits: updated.categoryLimits,
     };
-    return this.budgetGoals[tripId];
   }
 
   async getSplitterGame(tripId: string) {

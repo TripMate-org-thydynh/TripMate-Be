@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { CacheModule } from '@nestjs/cache-manager';
+import { redisStore } from 'cache-manager-redis-yet';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
@@ -21,6 +23,8 @@ import {
   QueryResolver,
   HeaderResolver,
 } from 'nestjs-i18n';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 import * as path from 'path';
 
 @Module({
@@ -29,6 +33,19 @@ import * as path from 'path';
       isGlobal: true,
       envFilePath: ['.env.local', '.env'],
     }),
+    CacheModule.registerAsync({
+      isGlobal: true,
+      useFactory: async () => ({
+        store: await redisStore({
+          url: process.env.REDIS_URL,
+          ttl: 300000, // 5 minutes default
+        }),
+      }),
+    }),
+    ThrottlerModule.forRoot([{
+      ttl: 60000,
+      limit: 100,
+    }]),
     I18nModule.forRoot({
       fallbackLanguage: 'vi',
       loaderOptions: {
@@ -56,6 +73,12 @@ import * as path from 'path';
     ActivitiesModule,
     PremiumModule,
     DashboardModule,
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
   ],
 })
 export class AppModule {}

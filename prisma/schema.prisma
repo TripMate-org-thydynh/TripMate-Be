@@ -175,6 +175,9 @@ model User {
   pollsCreated       Poll[]
   pollVotes          PollVote[]
   media              Media[]
+  linkedBanks        LinkedBank[]
+  paymentCards       PaymentCard[]
+  wallet             UserWallet?
 
   @@map("users")
 }
@@ -225,6 +228,7 @@ model Trip {
   activities       Activity[]
   aiRequests       AIRequest[]
   notifications    Notification[]
+  budgetGoal       BudgetGoal?
 
   @@map("trips")
 }
@@ -586,4 +590,68 @@ model Activity {
   @@index([tripId, createdAt])
   @@index([userId])
   @@map("activities")
+}
+
+// ============================================================
+// EXTENSIONS (MODULE 7 & PERSISTENCE)
+// ============================================================
+
+model LinkedBank {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  bankName      String   @map("bank_name")
+  accountNumber String   @map("account_number")
+  accountHolder String   @map("account_holder")
+  isVerified    Boolean  @default(true) @map("is_verified")
+  logoUrl       String?  @map("logo_url")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("linked_banks")
+}
+
+model PaymentCard {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  type        String   // VISA, MASTERCARD, etc.
+  lastFour    String   @map("last_four")
+  expiry      String
+  cardHolder  String   @map("card_holder")
+  colorIndex  Int      @default(0) @map("color_index")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("payment_cards")
+}
+
+model UserWallet {
+  userId           String   @id @map("user_id") @db.Uuid
+  balanceMomo      Decimal  @default(2500000.0) @map("balance_momo") @db.Decimal(12, 2)
+  balanceZalo      Decimal  @default(1200000.0) @map("balance_zalo") @db.Decimal(12, 2)
+  balanceCash      Decimal  @default(500000.0) @map("balance_cash") @db.Decimal(12, 2)
+  linkedBanksCount Int      @default(2) @map("linked_banks_count")
+  creditCardsCount Int      @default(1) @map("credit_cards_count")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_wallets")
+}
+
+model BudgetGoal {
+  id                String         @id @default(uuid()) @db.Uuid
+  tripId            String         @unique @map("trip_id") @db.Uuid
+  limitAmount       Decimal        @default(15000000.0) @map("limit_amount") @db.Decimal(12, 2)
+  warningPercentage Int            @default(80) @map("warning_percentage")
+  categoryLimits    Json           @map("category_limits")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@map("budget_goals")
 }

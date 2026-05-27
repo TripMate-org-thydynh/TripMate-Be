@@ -13,8 +13,13 @@ async function bootstrap() {
   app.setGlobalPrefix('api/v1');
 
   // CORS
+  const isProd = process.env.NODE_ENV === 'production';
+  const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',')
+    : ['http://localhost:3000', 'http://localhost:5173'];
+
   app.enableCors({
-    origin: '*',
+    origin: isProd ? allowedOrigins : '*',
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
@@ -43,35 +48,37 @@ async function bootstrap() {
     new I18nValidationExceptionFilter(),
   );
 
-  // Swagger OpenAPI
-  const config = new DocumentBuilder()
-    .setTitle('TripMate API')
-    .setDescription(
-      '🌏 TripMate - Super App Du Lịch Nhóm Gen Z | Plan chill. Chia tiền ez. Lưu moment.',
-    )
-    .setVersion('1.0')
-    .addBearerAuth(
-      { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
-      'JWT',
-    )
-    .addTag('Auth', 'Đăng ký & đăng nhập')
-    .addTag('Users', 'Quản lý hồ sơ người dùng')
-    .addTag('Trips', 'Tạo và quản lý chuyến đi')
-    .addTag('Itineraries', 'Lịch trình chi tiết')
-    .addTag('Expenses', 'Theo dõi chi tiêu nhóm')
-    .addTag('Moments', 'Ảnh & kỷ niệm chuyến đi')
-    .addTag('Chat', 'Trò chuyện nhóm realtime')
-    .addTag('Polls', 'Bình chọn & quyết định nhóm')
-    .addTag('Games', 'Mini games vui vẻ')
-    .addTag('Notifications', 'Thông báo')
-    .addTag('AI', 'Trợ lý AI thông minh')
-    .addTag('Activities', 'Nhật ký hoạt động chuyến đi')
-    .build();
+  // Swagger OpenAPI only in development
+  if (process.env.NODE_ENV !== 'production') {
+    const config = new DocumentBuilder()
+      .setTitle('TripMate API')
+      .setDescription(
+        '🌏 TripMate - Super App Du Lịch Nhóm Gen Z | Plan chill. Chia tiền ez. Lưu moment.',
+      )
+      .setVersion('1.0')
+      .addBearerAuth(
+        { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+        'JWT',
+      )
+      .addTag('Auth', 'Đăng ký & đăng nhập')
+      .addTag('Users', 'Quản lý hồ sơ người dùng')
+      .addTag('Trips', 'Tạo và quản lý chuyến đi')
+      .addTag('Itineraries', 'Lịch trình chi tiết')
+      .addTag('Expenses', 'Theo dõi chi tiêu nhóm')
+      .addTag('Moments', 'Ảnh & kỷ niệm chuyến đi')
+      .addTag('Chat', 'Trò chuyện nhóm realtime')
+      .addTag('Polls', 'Bình chọn & quyết định nhóm')
+      .addTag('Games', 'Mini games vui vẻ')
+      .addTag('Notifications', 'Thông báo')
+      .addTag('AI', 'Trợ lý AI thông minh')
+      .addTag('Activities', 'Nhật ký hoạt động chuyến đi')
+      .build();
 
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('docs', app, document, {
-    swaggerOptions: { persistAuthorization: true },
-  });
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('docs', app, document, {
+      swaggerOptions: { persistAuthorization: true },
+    });
+  }
 
   const port = process.env.PORT ?? 3000;
   await app.listen(port);
