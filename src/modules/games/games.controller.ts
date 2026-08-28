@@ -52,6 +52,12 @@ export class GamesController {
     return this.gamesService.getSeasonalEvents(tripId);
   }
 
+  @Get('daily')
+  @ApiOperation({ summary: 'Nhiệm vụ trong ngày, tiến độ tính từ hôm nay' })
+  getDailyMissions(@Param('tripId') tripId: string) {
+    return this.gamesService.getDailyMissions(tripId);
+  }
+
   @Get('weekly')
   @ApiOperation({ summary: 'Danh sách nhiệm vụ thử thách tuần' })
   getWeekly(@Param('tripId') tripId: string) {

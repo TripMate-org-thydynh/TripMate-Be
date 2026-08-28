@@ -357,6 +357,49 @@ check('Thử thách không còn placeholder chưa thay',
   !dareText.includes('{member}'), `text=${dareText}`);
 
 // ─────────────────────────────────────────────────────────────────────────────
+const daily0 = await call('GET', `/trips/${tripId}/games/daily`, { token: tokenA });
+check('Nhiệm vụ hôm nay trả tiến độ tính từ hôm nay',
+  daily0.status === 200 && Array.isArray(daily0.data) && daily0.data.length > 0,
+  `status=${daily0.status}`);
+
+const gameSess = await call('POST', `/trips/${tripId}/games`, {
+  token: tokenA,
+  body: { gameType: 'TRUTH_OR_DARE', initialState: { dare: 'e2e', xpReward: 80 } },
+});
+check('Ghi được ván chơi (gameType hợp lệ với enum)',
+  gameSess.status === 201 || gameSess.status === 200,
+  `status=${gameSess.status} ${JSON.stringify(gameSess.data)?.slice(0, 150)}`);
+
+const daily1 = await call('GET', `/trips/${tripId}/games/daily`, { token: tokenA });
+const dayGames = (daily1.data ?? []).find((d) => d.id === 'day-games');
+check('Chơi 1 ván xong thì nhiệm vụ ngày nhích lên thật',
+  dayGames?.current >= 1,
+  JSON.stringify(dayGames));
+
+const chaosDare = await call('GET', `/trips/${tripId}/games/dare/random`, { token: tokenA });
+check('Thử thách chaos trả về kèm XP và độ căng',
+  chaosDare.status === 200 &&
+    typeof chaosDare.data?.dareText === 'string' &&
+    chaosDare.data.xpReward > 0,
+  JSON.stringify(chaosDare.data)?.slice(0, 150));
+
+const bingo = await call('POST', `/trips/${tripId}/games`, {
+  token: tokenA,
+  body: { gameType: 'CARD_MATCH', initialState: { game: 'BINGO', marked: [] } },
+});
+const bingoSave = await call('PATCH', `/trips/${tripId}/games/${bingo.data?.id}/state`, {
+  token: tokenA,
+  body: { stateJson: { game: 'BINGO', marked: [0, 4, 8] } },
+});
+check('Bảng bingo lưu được ô đã tick', bingoSave.status === 200,
+  `status=${bingoSave.status}`);
+
+const bingoList = await call('GET', `/trips/${tripId}/games`, { token: tokenA });
+const savedBingo = (bingoList.data ?? []).find((g) => g.id === bingo.data?.id);
+check('Vào lại vẫn còn ô đã tick',
+  JSON.stringify(savedBingo?.stateJson?.marked) === '[0,4,8]',
+  JSON.stringify(savedBingo?.stateJson));
+
 section('7f. Tổng kết chuyến & bạn đồng hành');
 
 const recap = await call('GET', `/trips/${tripId}/recap`, { token: tokenA });

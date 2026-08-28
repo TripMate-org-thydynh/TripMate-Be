@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { GameType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -49,16 +49,66 @@ export class GamesService {
     chaos: string;
     needsMember: boolean;
   }> = [
-    { text: 'Uống hết ly nước này trong 5 giây! 🍺', xp: 100, chaos: 'Nhẹ 😌', needsMember: false },
-    { text: 'Hát một bài thiếu nhi bằng giọng em bé! 🎤', xp: 120, chaos: 'Vừa 😄', needsMember: false },
-    { text: 'Chụp một tấm dìm hàng {member} rồi đăng lên Moments! 📸', xp: 200, chaos: 'Căng 🔥', needsMember: true },
-    { text: 'Để {member} chọn món cho bạn ở bữa tiếp theo! 🍜', xp: 150, chaos: 'Vừa 😄', needsMember: true },
-    { text: 'Nhắn cho {member} một lời khen thật lòng 💛', xp: 80, chaos: 'Nhẹ 😌', needsMember: true },
-    { text: 'Kể một bí mật chưa ai trong nhóm biết! 🤫', xp: 250, chaos: 'Cực căng 💥', needsMember: false },
-    { text: 'Trả tiền món tiếp theo cho cả nhóm! 💸', xp: 300, chaos: 'Cực căng 💥', needsMember: false },
-    { text: 'Đổi chỗ ngồi với {member} trong 30 phút! 🔄', xp: 90, chaos: 'Nhẹ 😌', needsMember: true },
-    { text: 'Làm MC giới thiệu địa điểm tiếp theo như hướng dẫn viên! 🎥', xp: 180, chaos: 'Căng 🔥' , needsMember: false },
-    { text: 'Cho {member} đăng 1 story bằng điện thoại của bạn! 📱', xp: 280, chaos: 'Cực căng 💥', needsMember: true },
+    {
+      text: 'Uống hết ly nước này trong 5 giây! 🍺',
+      xp: 100,
+      chaos: 'Nhẹ 😌',
+      needsMember: false,
+    },
+    {
+      text: 'Hát một bài thiếu nhi bằng giọng em bé! 🎤',
+      xp: 120,
+      chaos: 'Vừa 😄',
+      needsMember: false,
+    },
+    {
+      text: 'Chụp một tấm dìm hàng {member} rồi đăng lên Moments! 📸',
+      xp: 200,
+      chaos: 'Căng 🔥',
+      needsMember: true,
+    },
+    {
+      text: 'Để {member} chọn món cho bạn ở bữa tiếp theo! 🍜',
+      xp: 150,
+      chaos: 'Vừa 😄',
+      needsMember: true,
+    },
+    {
+      text: 'Nhắn cho {member} một lời khen thật lòng 💛',
+      xp: 80,
+      chaos: 'Nhẹ 😌',
+      needsMember: true,
+    },
+    {
+      text: 'Kể một bí mật chưa ai trong nhóm biết! 🤫',
+      xp: 250,
+      chaos: 'Cực căng 💥',
+      needsMember: false,
+    },
+    {
+      text: 'Trả tiền món tiếp theo cho cả nhóm! 💸',
+      xp: 300,
+      chaos: 'Cực căng 💥',
+      needsMember: false,
+    },
+    {
+      text: 'Đổi chỗ ngồi với {member} trong 30 phút! 🔄',
+      xp: 90,
+      chaos: 'Nhẹ 😌',
+      needsMember: true,
+    },
+    {
+      text: 'Làm MC giới thiệu địa điểm tiếp theo như hướng dẫn viên! 🎥',
+      xp: 180,
+      chaos: 'Căng 🔥',
+      needsMember: false,
+    },
+    {
+      text: 'Cho {member} đăng 1 story bằng điện thoại của bạn! 📱',
+      xp: 280,
+      chaos: 'Cực căng 💥',
+      needsMember: true,
+    },
   ];
 
   /// Thử thách ngẫu nhiên. Có `tripId` thì boốc tên một thành viên thật
@@ -127,11 +177,9 @@ export class GamesService {
       }),
     ]);
 
-    const countOf = (
-      rows: Array<Record<string, any>>,
-      key: string,
-      id: string,
-    ) => rows.find((r) => r[key] === id)?._count?._all ?? 0;
+    type GroupRow = { _count: { _all: number } } & Record<string, unknown>;
+    const countOf = (rows: GroupRow[], key: string, id: string) =>
+      rows.find((r) => r[key] === id)?._count._all ?? 0;
 
     const rows = members.map((m) => {
       const nMoments = countOf(moments, 'userId', m.userId);
@@ -211,11 +259,15 @@ export class GamesService {
       this.prisma.moment.count({
         where: { tripId, deletedAt: null, createdAt: { gte: since } },
       }),
-      this.prisma.expense.count({ where: { tripId, createdAt: { gte: since } } }),
+      this.prisma.expense.count({
+        where: { tripId, createdAt: { gte: since } },
+      }),
       this.prisma.itineraryItem.count({
         where: { tripId, createdAt: { gte: since } },
       }),
-      this.prisma.tripNote.count({ where: { tripId, createdAt: { gte: since } } }),
+      this.prisma.tripNote.count({
+        where: { tripId, createdAt: { gte: since } },
+      }),
     ]);
 
     // `titleKey`/`descKey` — client dịch. Mục tiêu do BE quyđịnh, tiến độ tính thật.
@@ -224,6 +276,46 @@ export class GamesService {
       { id: 'week-expenses', current: expenses, target: 5, rewardXP: 300 },
       { id: 'week-plan', current: itineraries, target: 4, rewardXP: 350 },
       { id: 'week-notes', current: notes, target: 2, rewardXP: 200 },
+    ];
+
+    return defs.map((d) => ({
+      ...d,
+      completed: d.current >= d.target,
+      percent: Math.min(100, Math.round((d.current / d.target) * 100)),
+    }));
+  }
+
+  /**
+   * Nhiệm vụ trong NGÀY của squad — tiến độ đếm thật từ hôm nay.
+   *
+   * Màn Daily Squad Missions trước đây in cứng "Upload 5 memories 3/5",
+   * "Visit 3 cafes 1/3"... nên ai mở ra cũng thấy mình đang dở dang những việc
+   * chưa từng làm.
+   */
+  async getDailyMissions(tripId: string) {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const [moments, expenses, itineraries, games] = await Promise.all([
+      this.prisma.moment.count({
+        where: { tripId, deletedAt: null, createdAt: { gte: startOfDay } },
+      }),
+      this.prisma.expense.count({
+        where: { tripId, createdAt: { gte: startOfDay } },
+      }),
+      this.prisma.itineraryItem.count({
+        where: { tripId, createdAt: { gte: startOfDay } },
+      }),
+      this.prisma.gameSession.count({
+        where: { tripId, createdAt: { gte: startOfDay } },
+      }),
+    ]);
+
+    const defs = [
+      { id: 'day-moments', current: moments, target: 2, rewardXP: 150 },
+      { id: 'day-expenses', current: expenses, target: 1, rewardXP: 100 },
+      { id: 'day-plan', current: itineraries, target: 1, rewardXP: 120 },
+      { id: 'day-games', current: games, target: 1, rewardXP: 180 },
     ];
 
     return defs.map((d) => ({
