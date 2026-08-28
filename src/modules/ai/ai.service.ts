@@ -448,7 +448,30 @@ export class AiService {
     }
   }
 
+  /**
+   * Tạo một yêu cầu AI và lưu lại kết quả.
+   *
+   * Lời gọi Gemini nay ném 503 khi hỏng thay vì trả dữ liệu bịa. Bắt lại ở đây
+   * để vẫn ghi được bản ghi FAILED — nếu không, hàng chờ AI sẽ không bao giờ
+   * thấy các yêu cầu thất bại và người dùng tưởng mình chưa từng gửi gì.
+   */
   async createRequest(
+    userId: string,
+    tripId: string | undefined,
+    type: AIRequestType,
+    prompt: string,
+  ) {
+    try {
+      return await this.runRequest(userId, tripId, type, prompt);
+    } catch (e) {
+      await this.prisma.aIRequest.create({
+        data: { userId, tripId, type, prompt, status: 'FAILED' },
+      });
+      throw e;
+    }
+  }
+
+  private async runRequest(
     userId: string,
     tripId: string | undefined,
     type: AIRequestType,
