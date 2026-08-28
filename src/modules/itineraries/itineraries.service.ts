@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, Inject } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ActivitiesService } from '../activities/activities.service';
 import { CreateItineraryItemDto } from './dto/create-itinerary-item.dto';
 import { UpdateItineraryItemDto } from './dto/update-itinerary-item.dto';
 
@@ -10,9 +11,14 @@ export class ItinerariesService {
   constructor(
     private prisma: PrismaService,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
+    private readonly activities: ActivitiesService,
   ) {}
 
-  async create(tripId: string, dto: CreateItineraryItemDto) {
+  async create(
+    tripId: string,
+    dto: CreateItineraryItemDto,
+    userId?: string,
+  ) {
     const item = await this.prisma.itineraryItem.create({
       data: {
         tripId,
@@ -28,6 +34,14 @@ export class ItinerariesService {
         category: dto.category,
       },
     });
+    // Ghi nhật ký hoạt động để feed squad (marquee, Live Updates, Daily Recap)
+    // có dữ liệu. Trước đây ActivitiesService.log() không nơi nào gọi.
+    if (userId) {
+      await this.activities.log(tripId, userId, 'ITINERARY_ADDED', {
+        placeName: item.placeName,
+        day: item.day,
+      });
+    }
     await this.evictCache(tripId);
     return item;
   }

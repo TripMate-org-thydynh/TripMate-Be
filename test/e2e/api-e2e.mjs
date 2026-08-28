@@ -295,9 +295,21 @@ check('Tổng hợp chi tiêu có dữ liệu thật sau khi ghi khoản chi',
   `status=${sumA.status} ${JSON.stringify(sumA.data)?.slice(0, 200)}`);
 
 const actA = await call('GET', '/users/me/activities/recent', { token: tokenA });
+const actTypes = Array.isArray(actA.data) ? actA.data.map((a) => a.type) : [];
 check('Hoạt động gần đây có bản ghi sau các thao tác trên',
-  actA.status === 200 && Array.isArray(actA.data),
-  `status=${actA.status} n=${actA.data?.length}`);
+  actA.status === 200 && actTypes.length > 0,
+  `status=${actA.status} n=${actTypes.length} — rỗng nghĩa là ActivitiesService.log() không được gọi`);
+
+// Ba thao tác ở trên (thêm điểm lịch trình, ghi chi tiêu, thêm ghi chú) phải
+// sinh ra đúng 3 loại bản ghi tương ứng.
+for (const t of ['ITINERARY_ADDED', 'EXPENSE_ADDED', 'NOTE_ADDED']) {
+  check(`Feed hoạt động ghi nhận ${t}`, actTypes.includes(t),
+    `các loại ghi được: ${JSON.stringify(actTypes)}`);
+}
+
+check('Mỗi hoạt động có tên người thực hiện và tên chuyến',
+  Array.isArray(actA.data) && actA.data.every((a) => a.actorName && a.tripName),
+  `${JSON.stringify(actA.data?.[0])?.slice(0, 200)}`);
 
 // ─────────────────────────────────────────────────────────────────────────────
 section('7e. Mini games');

@@ -9,6 +9,7 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ActivitiesService } from '../activities/activities.service';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { AiService } from '../ai/ai.service';
 
@@ -18,6 +19,7 @@ export class ExpensesService {
     private prisma: PrismaService,
     private aiService: AiService,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
+    private readonly activities: ActivitiesService,
   ) {}
 
   async create(tripId: string, dto: CreateExpenseDto) {
@@ -90,6 +92,12 @@ export class ExpensesService {
     });
 
     await this.evictCache(tripId);
+    // Ghi nhật ký hoạt động để feed squad có dữ liệu — trước đây
+    // ActivitiesService.log() không được gọi ở bất kỳ đâu.
+    await this.activities.log(tripId, dto.paidById, 'EXPENSE_ADDED', {
+      amount: Number(dto.amount),
+      description: dto.description ?? null,
+    });
     return expense;
   }
 

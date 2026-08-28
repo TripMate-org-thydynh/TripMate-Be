@@ -1,9 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ActivitiesService } from '../activities/activities.service';
 
 @Injectable()
 export class PollsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly activities: ActivitiesService,
+  ) {}
 
   async create(
     tripId: string,
@@ -15,7 +19,7 @@ export class PollsService {
       closesAt?: string;
     },
   ) {
-    return this.prisma.poll.create({
+    const row = await this.prisma.poll.create({
       data: {
         tripId,
         createdBy,
@@ -30,6 +34,10 @@ export class PollsService {
         options: { include: { _count: { select: { votes: true } } } },
       },
     });
+    // Ghi nhật ký hoạt động để feed squad có dữ liệu — trước đây
+    // ActivitiesService.log() không được gọi ở bất kỳ đâu.
+    await this.activities.log(tripId, createdBy, 'POLL_CREATED', { question: row.question });
+    return row;
   }
 
   async findAll(tripId: string) {

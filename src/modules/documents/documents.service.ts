@@ -1,10 +1,14 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ActivitiesService } from '../activities/activities.service';
 import { CreateDocumentDto } from './dto/create-document.dto';
 
 @Injectable()
 export class DocumentsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly activities: ActivitiesService,
+  ) {}
 
   async getAll(tripId: string) {
     return this.prisma.tripDocument.findMany({
@@ -17,7 +21,7 @@ export class DocumentsService {
   }
 
   async create(tripId: string, userId: string, dto: CreateDocumentDto) {
-    return this.prisma.tripDocument.create({
+    const row = await this.prisma.tripDocument.create({
       data: {
         tripId,
         uploadedBy: userId,
@@ -32,6 +36,10 @@ export class DocumentsService {
         uploader: { select: { id: true, name: true, avatarUrl: true } },
       },
     });
+    // Ghi nhật ký hoạt động để feed squad có dữ liệu — trước đây
+    // ActivitiesService.log() không được gọi ở bất kỳ đâu.
+    await this.activities.log(tripId, userId, 'DOCUMENT_UPLOADED', { name: row.name });
+    return row;
   }
 
   /** DELETE is protected by ResourceOwnerGuard at controller level. */

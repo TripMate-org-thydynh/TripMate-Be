@@ -1,10 +1,14 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ActivitiesService } from '../activities/activities.service';
 import { CreateNoteDto, UpdateNoteDto } from './dto/note.dto';
 
 @Injectable()
 export class NotesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly activities: ActivitiesService,
+  ) {}
 
   async getAll(tripId: string) {
     return this.prisma.tripNote.findMany({
@@ -17,7 +21,7 @@ export class NotesService {
   }
 
   async create(tripId: string, userId: string, dto: CreateNoteDto) {
-    return this.prisma.tripNote.create({
+    const row = await this.prisma.tripNote.create({
       data: {
         tripId,
         authorId: userId,
@@ -29,6 +33,10 @@ export class NotesService {
         author: { select: { id: true, name: true, avatarUrl: true } },
       },
     });
+    // Ghi nhật ký hoạt động để feed squad có dữ liệu — trước đây
+    // ActivitiesService.log() không được gọi ở bất kỳ đâu.
+    await this.activities.log(tripId, userId, 'NOTE_ADDED', { title: row.title ?? '' });
+    return row;
   }
 
   /**

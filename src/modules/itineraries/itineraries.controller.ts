@@ -9,6 +9,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import type { User } from '@prisma/client';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ItinerariesService } from './itineraries.service';
 import { CreateItineraryItemDto } from './dto/create-itinerary-item.dto';
 import { UpdateItineraryItemDto } from './dto/update-itinerary-item.dto';
@@ -24,8 +26,10 @@ export class ItinerariesController {
 
   @Post()
   @ApiOperation({ summary: 'Thêm điểm dừng vào lịch trình' })
-  create(@Param('tripId') tripId: string, @Body() dto: CreateItineraryItemDto) {
-    return this.itinerariesService.create(tripId, dto);
+  create(@Param('tripId') tripId: string, @Body() dto: CreateItineraryItemDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.itinerariesService.create(tripId, dto, user.id);
   }
 
   @Get()

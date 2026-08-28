@@ -1,13 +1,17 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ActivitiesService } from '../activities/activities.service';
 import { CreateMomentDto } from './dto/create-moment.dto';
 
 @Injectable()
 export class MomentsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly activities: ActivitiesService,
+  ) {}
 
   async create(tripId: string, userId: string, dto: CreateMomentDto) {
-    return this.prisma.moment.create({
+    const row = await this.prisma.moment.create({
       data: {
         tripId,
         userId,
@@ -24,6 +28,10 @@ export class MomentsService {
         _count: { select: { reactions: true, comments: true } },
       },
     });
+    // Ghi nhật ký hoạt động để feed squad có dữ liệu — trước đây
+    // ActivitiesService.log() không được gọi ở bất kỳ đâu.
+    await this.activities.log(tripId, userId, 'MOMENT_SHARED', { caption: row.caption ?? '' });
+    return row;
   }
 
   async findAll(tripId: string) {
