@@ -1,9 +1,19 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { AIRequestType, AIStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as exifr from 'exifr';
+
+/** Lấy message an toàn từ giá trị `catch` (kiểu `unknown`). */
+function toMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
 
 export interface ParsedReservation {
   type:
@@ -139,7 +149,7 @@ export class AiService {
       );
     } else {
       this.logger.warn(
-        'GEMINI_API_KEY not found in configuration. AI features will fallback to mock data.',
+        'Thiếu GEMINI_API_KEY — các tính năng AI sẽ trả lỗi 503.',
       );
     }
   }
@@ -172,13 +182,24 @@ export class AiService {
     },
   ];
 
-  private async callGeminiJSON<T extends object>(
-    prompt: string,
-    fallback: T,
-  ): Promise<T> {
+  /** Lỗi chuẩn khi AI không dùng được — client hiện thông báo, không đoán. */
+  private aiUnavailable(): never {
+    throw new ServiceUnavailableException('errors.ai.unavailable');
+  }
+
+  /**
+   * Gọi Gemini và ép kết quả về JSON.
+   *
+   * Trước đây khi thiếu `GEMINI_API_KEY` hoặc lời gọi hỏng, hàm này trả về một
+   * object `fallback` dựng sẵn — kèm tên người không tồn tại ("Alex Nguyễn",
+   * "Trần Bình"), phần trăm và số tiền bịa — và client hiển thị y như kết quả
+   * AI thật. Hết quota hay rớt mạng là người dùng bị đọc phân tích về những
+   * người không có trong chuyến. Nay báo 503 để client nói rõ AI đang bận.
+   */
+  private async callGeminiJSON<T extends object>(prompt: string): Promise<T> {
     if (!this.genAI) {
-      this.logger.warn('Gemini API key is not set, using fallback mock data.');
-      return fallback;
+      this.logger.warn('Chưa cấu hình GEMINI_API_KEY — từ chối yêu cầu AI.');
+      this.aiUnavailable();
     }
     try {
       const model = this.genAI.getGenerativeModel({
@@ -189,12 +210,10 @@ export class AiService {
       });
 
       const response = await model.generateContent(prompt);
-      const text = response.response.text();
-      this.logger.log(`Gemini response: ${text}`);
-      return JSON.parse(text) as T;
+      return JSON.parse(response.response.text()) as T;
     } catch (error) {
-      this.logger.error('Error calling Gemini API:', error);
-      return fallback;
+      this.logger.error('Lỗi gọi Gemini API:', error);
+      this.aiUnavailable();
     }
   }
 
@@ -228,7 +247,7 @@ export class AiService {
         };
       }
     } catch (e) {
-      this.logger.warn(`EXIF parse failed: ${e.message}`);
+      this.logger.warn(`EXIF parse failed: ${toMessage(e)}`);
     }
 
     // ── 2. Gemini vision fallback ──────────────────────────────────────────
@@ -276,7 +295,7 @@ export class AiService {
         message: 'Không nhận ra địa điểm từ ảnh.',
       };
     } catch (e) {
-      this.logger.error(`Gemini vision failed: ${e.message}`);
+      this.logger.error(`Gemini vision failed: ${toMessage(e)}`);
       return {
         source: 'error',
         found: false,
@@ -307,7 +326,7 @@ export class AiService {
 
     const result = await this.callGeminiJSON<{
       reservations: ParsedReservation[];
-    }>(prompt, { reservations: [] });
+    }>(prompt);
 
     if (!Array.isArray(result.reservations)) return [];
     const allowed = new Set([
@@ -407,7 +426,7 @@ export class AiService {
           price: typeof r.price === 'number' ? r.price : null,
         }));
     } catch (e) {
-      this.logger.error(`Gemini booking-image parse failed: ${e.message}`);
+      this.logger.error(`Gemini booking-image parse failed: ${toMessage(e)}`);
       return [];
     }
   }
@@ -454,15 +473,7 @@ export class AiService {
     let status: AIStatus = 'COMPLETED';
 
     if (type === 'VIBE_MATCH') {
-      const fallback: VibeMatchResponse = {
-        matchPercentage: 87,
-        vibeTags: ['aesthetic hidden gem', 'chill coffee squad'],
-        analysis:
-          'This is giving: main character Đà Lạt episode. Your squad would absolutely romanticize this cafe. ✨',
-        locationName: 'The Hill Station',
-        locationAddress: 'Old Town, Hội An',
-      };
-      if (this.genAI) {
+      {
         const promptText = `
           You are TripMate AI, a trendy, cool Gen Z travel vibe matcher.
           Analyze the vibe match between the following prompt/location and a squad's travel vibe.
@@ -484,12 +495,7 @@ export class AiService {
             "locationAddress": string
           }
         `;
-        response = await this.callGeminiJSON<VibeMatchResponse>(
-          promptText,
-          fallback,
-        );
-      } else {
-        response = fallback;
+        response = await this.callGeminiJSON<VibeMatchResponse>(promptText);
       }
     } else if (type === 'EXPENSE_ROAST') {
       let totalExpensesAmount = 0;
@@ -513,13 +519,7 @@ export class AiService {
         }
       }
 
-      const fallback: ExpenseRoastResponse = {
-        roastText: 'Phú Khang: main character energy nhưng chưa trả 420k 😭',
-        progressPercent: 80,
-        totalExpenses: totalExpensesAmount || 500000,
-      };
-
-      if (this.genAI) {
+      {
         const promptText = `
           You are TripMate AI, an extremely sassy, sarcastic, and funny Gen Z financial advisor.
           Roast the squad's spendings or the following prompt: "${prompt}".
@@ -540,32 +540,10 @@ export class AiService {
             "totalExpenses": number
           }
         `;
-        response = await this.callGeminiJSON<ExpenseRoastResponse>(
-          promptText,
-          fallback,
-        );
-      } else {
-        response = fallback;
+        response = await this.callGeminiJSON<ExpenseRoastResponse>(promptText);
       }
     } else if (type === 'ITINERARY_PLAN') {
-      const fallback: ItineraryPlanResponse = {
-        days: [
-          {
-            day: 1,
-            title: 'Chill Coffee & Sunset Vibe',
-            activities: [
-              {
-                time: '08:00 AM',
-                location: 'The Hill Station Cafe',
-                reason:
-                  'Start the day with aesthetic coffee & light breakfast.',
-              },
-            ],
-          },
-        ],
-      };
-
-      if (this.genAI) {
+      {
         const promptText = `
           You are TripMate AI, a professional local tour guide who loves finding hidden gems and aesthetic spots.
           Create a detailed, beautiful travel itinerary based on this prompt: "${prompt}".
@@ -589,22 +567,10 @@ export class AiService {
           
           Make all titles and reasons in Vietnamese, extremely engaging, and personalized. Provide 1 to 2 days of detailed plan, with 2 to 3 activities per day.
         `;
-        response = await this.callGeminiJSON<ItineraryPlanResponse>(
-          promptText,
-          fallback,
-        );
-      } else {
-        response = fallback;
+        response = await this.callGeminiJSON<ItineraryPlanResponse>(promptText);
       }
     } else if (type === 'CAPTION_GEN') {
-      const fallback: CaptionGenResponse = {
-        captions: [
-          'Chuyến đi gom trọn bình yên ✨',
-          'Đưa tay lên check-in nhưng nợ chưa trả hết 😭',
-        ],
-      };
-
-      if (this.genAI) {
+      {
         const promptText = `
           You are TripMate AI, a social media influencer guru.
           Generate 3-5 creative, trendy, and funny Instagram/TikTok captions in Vietnamese (some with English hybrid/slang, emojis) based on this prompt/photos vibe: "${prompt}".
@@ -614,21 +580,10 @@ export class AiService {
             "captions": string[]
           }
         `;
-        response = await this.callGeminiJSON<CaptionGenResponse>(
-          promptText,
-          fallback,
-        );
-      } else {
-        response = fallback;
+        response = await this.callGeminiJSON<CaptionGenResponse>(promptText);
       }
     } else if (type === 'WEATHER_ADVICE') {
-      const fallback: WeatherAdviceResponse = {
-        advice: 'Thời tiết siêu đẹp để chill nha!',
-        warning: 'Nắng gắt 12h trưa nên mang kem chống nắng.',
-        recommendedItems: ['Kem chống nắng', 'Mũ rộng vành', 'Kính râm'],
-      };
-
-      if (this.genAI) {
+      {
         const promptText = `
           You are TripMate AI, a smart weather bot that is both practical and funny.
           Provide weather advice and packing tips based on the destination/time in this prompt: "${prompt}".
@@ -640,25 +595,10 @@ export class AiService {
             "recommendedItems": string[]
           }
         `;
-        response = await this.callGeminiJSON<WeatherAdviceResponse>(
-          promptText,
-          fallback,
-        );
-      } else {
-        response = fallback;
+        response = await this.callGeminiJSON<WeatherAdviceResponse>(promptText);
       }
     } else if (type === 'DESTINATION_SUGGEST') {
-      const fallback: DestinationSuggestResponse = {
-        suggestions: [
-          {
-            name: 'Đà Lạt',
-            description: 'Thành phố mộng mơ nhiều quán cafe chill.',
-            tags: ['chill vibe', 'cloud hunting'],
-          },
-        ],
-      };
-
-      if (this.genAI) {
+      {
         const promptText = `
           You are TripMate AI, an expert travel matcher.
           Suggest 3 beautiful travel destinations matching this vibe/prompt: "${prompt}".
@@ -674,12 +614,8 @@ export class AiService {
             ]
           }
         `;
-        response = await this.callGeminiJSON<DestinationSuggestResponse>(
-          promptText,
-          fallback,
-        );
-      } else {
-        response = fallback;
+        response =
+          await this.callGeminiJSON<DestinationSuggestResponse>(promptText);
       }
     } else if (type === 'BUDGET_OPTIMIZE') {
       let totalExpensesAmount = 0;
@@ -703,17 +639,7 @@ export class AiService {
         }
       }
 
-      const fallback: BudgetOptimizeResponse = {
-        tips: [
-          'Giảm bớt trà sữa lại để trả nợ nhóm nha.',
-          'Gom hóa đơn ăn uống lại thanh toán 1 lần cho tiện.',
-        ],
-        potentialSavings: 150000,
-        breakdownAnalysis:
-          'Squad này ăn chơi là chính, chi phí ăn uống chiếm 80%!',
-      };
-
-      if (this.genAI) {
+      {
         const promptText = `
           You are TripMate AI, a smart budget optimizer.
           Analyze the following trip expenses and provide tips to optimize spending or save money.
@@ -730,22 +656,11 @@ export class AiService {
             "breakdownAnalysis": string
           }
         `;
-        response = await this.callGeminiJSON<BudgetOptimizeResponse>(
-          promptText,
-          fallback,
-        );
-      } else {
-        response = fallback;
+        response =
+          await this.callGeminiJSON<BudgetOptimizeResponse>(promptText);
       }
     } else if (type === 'RECAP_VIDEO') {
-      const fallback: RecapVideoResponse = {
-        videoUrl: 'https://assets.tripmate.live/recaps/recap-vibe.mp4',
-        recapScript:
-          'Chuyến đi tuyệt vời của chúng ta đã khép lại với thật nhiều tiếng cười...',
-        generatedAudioUrl: 'https://assets.tripmate.live/recaps/audio.mp3',
-      };
-
-      if (this.genAI) {
+      {
         const promptText = `
           You are TripMate AI. Generate a funny script and outline for a recap video of the trip.
           Prompt: "${prompt}"
@@ -757,12 +672,7 @@ export class AiService {
             "generatedAudioUrl": string
           }
         `;
-        response = await this.callGeminiJSON<RecapVideoResponse>(
-          promptText,
-          fallback,
-        );
-      } else {
-        response = fallback;
+        response = await this.callGeminiJSON<RecapVideoResponse>(promptText);
       }
     } else {
       status = 'FAILED';
@@ -809,9 +719,9 @@ export class AiService {
         },
       },
     });
+    if (!trip) throw new NotFoundException('errors.trips.notFound');
 
-    const membersList =
-      trip?.members.map((m) => m.user.name).join(', ') || 'No members';
+    const membersList = trip.members.map((m) => m.user.name).join(', ');
     let expensesSummary = 'No expenses recorded yet.';
     if (trip && trip.expenses.length > 0) {
       expensesSummary = trip.expenses
@@ -822,27 +732,7 @@ export class AiService {
         .join('\n');
     }
 
-    const fallback: PersonalityRoastResponse = {
-      squadAnalysis: [
-        {
-          name: 'Alex Nguyễn',
-          type: 'Chúa Tể Hỗn Loạn 👑',
-          roast: 'Thích tiêu tiền nhóm và chia nợ bằng vòng quay roulette!',
-        },
-        {
-          name: 'Trần Bình',
-          type: 'Thần Tài Săn Deal 💸',
-          roast: 'Checkin chậm nhất nhưng đòi hóa đơn chi tiết nhất nhóm!',
-        },
-        {
-          name: 'Minh Nhật',
-          type: 'Phượt Thủ Selfie 🤳',
-          roast: 'Gom 90% bộ nhớ album chung chỉ để up ảnh của mình!',
-        },
-      ],
-    };
-
-    if (this.genAI && trip) {
+    {
       const promptText = `
         You are TripMate AI, the ultimate travel crew personality analyst and roaster.
         Roast the personalities of this travel squad based on their names and their actual spending behaviors.
@@ -870,20 +760,10 @@ export class AiService {
           ]
         }
       `;
-      const result = await this.callGeminiJSON<PersonalityRoastResponse>(
-        promptText,
-        fallback,
-      );
-      return {
-        tripId,
-        squadAnalysis: result.squadAnalysis || fallback.squadAnalysis,
-      };
+      const result =
+        await this.callGeminiJSON<PersonalityRoastResponse>(promptText);
+      return { tripId, squadAnalysis: result.squadAnalysis ?? [] };
     }
-
-    return {
-      tripId,
-      squadAnalysis: fallback.squadAnalysis,
-    };
   }
 
   async getSquadMood(tripId: string) {
@@ -896,21 +776,18 @@ export class AiService {
       },
     });
 
-    const membersCount = trip?.members.length || 0;
-    const totalSpent =
-      trip?.expenses.reduce((sum, e) => sum + Number(e.amount), 0) || 0;
-    const budgetLimit = trip?.budgetGoal?.limitAmount
+    if (!trip) throw new NotFoundException('errors.trips.notFound');
+
+    const membersCount = trip.members.length;
+    const totalSpent = trip.expenses.reduce(
+      (sum, e) => sum + Number(e.amount),
+      0,
+    );
+    const budgetLimit = trip.budgetGoal?.limitAmount
       ? Number(trip.budgetGoal.limitAmount)
       : 15000000;
 
-    const fallback: SquadMoodResponse = {
-      overallMood: 'Chill & Hơi Hỗn Loạn 🎢',
-      tensionLevel: 2,
-      moodAnalysis:
-        'Tình trạng ổn định. Có một chút tranh cãi nhẹ về hóa đơn lẩu gà nhưng đã được khôi phục 100% tình hữu nghị qua MoMo!',
-    };
-
-    if (this.genAI && trip) {
+    {
       const promptText = `
         You are TripMate AI, the mood and tension analyzer for the travel crew.
         Evaluate the squad's current mood, general vibe, and tension level based on their travel details and expenses.
@@ -933,10 +810,7 @@ export class AiService {
           "moodAnalysis": string
         }
       `;
-      const result = await this.callGeminiJSON<SquadMoodResponse>(
-        promptText,
-        fallback,
-      );
+      const result = await this.callGeminiJSON<SquadMoodResponse>(promptText);
       return {
         tripId,
         overallMood: result.overallMood,
@@ -944,34 +818,15 @@ export class AiService {
         moodAnalysis: result.moodAnalysis,
       };
     }
-
-    return {
-      tripId,
-      overallMood: fallback.overallMood,
-      tensionLevel: fallback.tensionLevel,
-      moodAnalysis: fallback.moodAnalysis,
-    };
   }
 
   async getRecommendationTimeline(tripId: string) {
     const trip = await this.prisma.trip.findUnique({
       where: { id: tripId },
     });
+    if (!trip) throw new NotFoundException('errors.trips.notFound');
 
-    const fallback: RecommendedActivity[] = [
-      {
-        time: '08:00 AM',
-        location: 'Cafe The Hill Station ☕',
-        reason: 'AI Vibe Match đạt 92% với tính cách chill của cả nhóm.',
-      },
-      {
-        time: '02:00 PM',
-        location: 'Đền Fushimi Inari ⛩️',
-        reason: 'Thời tiết mát mẻ nhất trong ngày, tránh nắng gắt.',
-      },
-    ];
-
-    if (this.genAI && trip) {
+    {
       const promptText = `
         You are TripMate AI, the squad's personalized smart itinerary planner.
         Generate a recommended 2-item timeline for a day of their trip based on the trip details.
@@ -993,14 +848,8 @@ export class AiService {
         
         Ensure the output is exactly a valid JSON array matching the schema!
       `;
-      const result = await this.callGeminiJSON<RecommendedActivity[]>(
-        promptText,
-        fallback,
-      );
-      return result;
+      return await this.callGeminiJSON<RecommendedActivity[]>(promptText);
     }
-
-    return fallback;
   }
 
   getSavedPrompts() {
@@ -1012,26 +861,12 @@ export class AiService {
   }
 
   async scanReceiptImage(receiptUrlOrBase64: string) {
-    const fallback = {
-      merchant: 'Lẩu gà lá é Tao Ngộ',
-      date: new Date().toLocaleDateString('vi-VN'),
-      items: [
-        { name: 'Lẩu gà lá é lớn', quantity: 1, price: 350000, selected: true },
-        { name: 'Nước ngọt lon', quantity: 4, price: 60000, selected: true },
-        { name: 'Mì gói thêm', quantity: 2, price: 20000, selected: true },
-        { name: 'Khăn lạnh', quantity: 4, price: 10000, selected: false },
-      ],
-      subtotal: 440000,
-      tax: 44000,
-      total: 484000,
-      suggestedCategory: 'FOOD',
-      confidenceScore: 0.96,
-    };
-
-    if (!this.genAI) return fallback;
+    if (!this.genAI) this.aiUnavailable();
 
     try {
-      const model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+      const model = this.genAI.getGenerativeModel({
+        model: 'gemini-1.5-flash',
+      });
       const promptText = `
         You are an expert OCR receipt parser for TripMate. Extract merchant name, total price, currency, category (FOOD, ACCOMMODATION, TRANSPORT, ACTIVITIES, SHOPPING, OTHER), and list of items with their names and prices.
         Return JSON matching this schema:
@@ -1047,9 +882,15 @@ export class AiService {
         }
       `;
 
-      if (receiptUrlOrBase64.startsWith('data:image/') || receiptUrlOrBase64.length > 500) {
+      if (
+        receiptUrlOrBase64.startsWith('data:image/') ||
+        receiptUrlOrBase64.length > 500
+      ) {
         // Base64 Vision call
-        const base64Data = receiptUrlOrBase64.replace(/^data:image\/\w+;base64,/, '');
+        const base64Data = receiptUrlOrBase64.replace(
+          /^data:image\/\w+;base64,/,
+          '',
+        );
         const imagePart = {
           inlineData: {
             data: base64Data,
@@ -1060,13 +901,16 @@ export class AiService {
         const text = res.response.text();
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-          return JSON.parse(jsonMatch[0]);
+          return JSON.parse(jsonMatch[0]) as Record<string, unknown>;
         }
       }
 
-      return await this.callGeminiJSON(promptText + ` Input: ${receiptUrlOrBase64.substring(0, 100)}`, fallback);
+      return await this.callGeminiJSON(
+        promptText + ` Input: ${receiptUrlOrBase64.substring(0, 100)}`,
+      );
     } catch {
-      return fallback;
+      // Ảnh mờ / Gemini hỏng: báo lỗi để người dùng chụp lại, không bịa hoá đơn.
+      this.aiUnavailable();
     }
   }
 }

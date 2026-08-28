@@ -121,8 +121,7 @@ export class TripsService {
     const existing = await this.prisma.tripMember.findUnique({
       where: { tripId_userId: { tripId: trip.id, userId } },
     });
-    if (existing)
-      throw new ConflictException('errors.trips.alreadyMember');
+    if (existing) throw new ConflictException('errors.trips.alreadyMember');
 
     await this.prisma.tripMember.create({
       data: { tripId: trip.id, userId, role: 'MEMBER' },
@@ -134,8 +133,7 @@ export class TripsService {
     const member = await this.prisma.tripMember.findUnique({
       where: { tripId_userId: { tripId, userId } },
     });
-    if (!member)
-      throw new NotFoundException('errors.auth.notMember');
+    if (!member) throw new NotFoundException('errors.auth.notMember');
     if (member.role === 'CREATOR') {
       throw new ForbiddenException('errors.auth.creatorCannotLeave');
     }
@@ -196,5 +194,105 @@ export class TripsService {
     if (member.role !== 'CREATOR') {
       throw new ForbiddenException('errors.trips.onlyCreator');
     }
+  }
+
+  /**
+   * Số liệu tổng kết chuyến (Trip Wrapped).
+   *
+   * Màn Trip Wrapped và AI Trip Summary trước đây in cứng "7 địa điểm",
+   * "142 khoảnh khắc", "186 km", MVP "Thảo Ly" — giống hệt nhau ở mọi chuyến,
+   * mọi tài khoản. Đây là số đếm thật từ DB; MVP tính theo cùng công thức đóng
+   * góp với bảng xếp hạng (khoảnh khắc 40đ, chi 20đ, điểm lịch trình 30đ,
+   * ghi chú 15đ).
+   */
+  async getRecap(tripId: string) {
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, deletedAt: null },
+      include: {
+        members: {
+          include: {
+            user: { select: { id: true, name: true, avatarUrl: true } },
+          },
+        },
+      },
+    });
+    if (!trip) throw new NotFoundException('errors.trips.notFound');
+
+    const userIds = trip.members.map((m) => m.userId);
+    const [places, momentCount, expenses, moments, expenseRows, plans, notes] =
+      await Promise.all([
+        this.prisma.itineraryItem.count({ where: { tripId } }),
+        this.prisma.moment.count({ where: { tripId, deletedAt: null } }),
+        this.prisma.expense.aggregate({
+          where: { tripId },
+          _sum: { amount: true },
+          _count: { _all: true },
+        }),
+        this.prisma.moment.groupBy({
+          by: ['userId'],
+          where: { tripId, deletedAt: null, userId: { in: userIds } },
+          _count: { _all: true },
+        }),
+        this.prisma.expense.groupBy({
+          by: ['paidById'],
+          where: { tripId, paidById: { in: userIds } },
+          _count: { _all: true },
+        }),
+        this.prisma.activity.groupBy({
+          by: ['userId'],
+          where: { tripId, type: 'ITINERARY_ADDED', userId: { in: userIds } },
+          _count: { _all: true },
+        }),
+        this.prisma.tripNote.groupBy({
+          by: ['authorId'],
+          where: { tripId, authorId: { in: userIds } },
+          _count: { _all: true },
+        }),
+      ]);
+
+    type GroupRow = { _count: { _all: number } } & Record<string, unknown>;
+    const countOf = (rows: GroupRow[], key: string, id: string) =>
+      rows.find((r) => r[key] === id)?._count._all ?? 0;
+
+    const ranked = trip.members
+      .map((m) => ({
+        userId: m.userId,
+        name: m.user.name,
+        avatarUrl: m.user.avatarUrl,
+        moments: countOf(moments, 'userId', m.userId),
+        expenses: countOf(expenseRows, 'paidById', m.userId),
+        xp:
+          countOf(moments, 'userId', m.userId) * 40 +
+          countOf(expenseRows, 'paidById', m.userId) * 20 +
+          countOf(plans, 'userId', m.userId) * 30 +
+          countOf(notes, 'authorId', m.userId) * 15,
+      }))
+      .sort((a, b) => b.xp - a.xp || a.name.localeCompare(b.name));
+
+    // Số ngày tính cả ngày đầu và ngày cuối.
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const days =
+      Math.floor(
+        (trip.endDate.getTime() - trip.startDate.getTime()) / msPerDay,
+      ) + 1;
+
+    const mvp = ranked[0];
+    return {
+      tripId,
+      tripName: trip.name,
+      destination: trip.destination,
+      startDate: trip.startDate,
+      endDate: trip.endDate,
+      days: days > 0 ? days : 1,
+      memberCount: trip.members.length,
+      placeCount: places,
+      momentCount,
+      expenseCount: expenses._count._all,
+      totalSpent: Number(expenses._sum.amount ?? 0),
+      currency: trip.currency,
+      // null khi cả nhóm chưa đóng góp gì — client hiện trạng thái rỗng.
+      mvp: mvp && mvp.xp > 0 ? mvp : null,
+      hasData: places + momentCount + expenses._count._all > 0,
+    };
   }
 }

@@ -660,6 +660,66 @@ export class UsersService {
     }));
   }
 
+  /**
+   * Những người đã đi chung chuyến với tôi — "bạn bè" theo nghĩa thật của app.
+   *
+   * App không có tính năng kết bạn riêng, nên màn Danh sách bạn bè trước đây
+   * hiển thị 3 người bịa. Nguồn thật duy nhất là đồng đội trong các chuyến:
+   * gộp theo user, đếm số chuyến chung và giữ chuyến gần nhất.
+   */
+  async getTravelBuddies(userId: string) {
+    const memberships = await this.prisma.tripMember.findMany({
+      where: { userId, trip: { deletedAt: null } },
+      select: { tripId: true },
+    });
+    const tripIds = memberships.map((m) => m.tripId);
+    if (tripIds.length === 0) return [];
+
+    const others = await this.prisma.tripMember.findMany({
+      where: { tripId: { in: tripIds }, userId: { not: userId } },
+      include: {
+        user: { select: { id: true, name: true, avatarUrl: true } },
+        trip: { select: { id: true, name: true, startDate: true } },
+      },
+    });
+
+    const byUser = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        avatarUrl: string | null;
+        sharedTrips: number;
+        lastTripName: string;
+        lastTripAt: Date | null;
+      }
+    >();
+    for (const m of others) {
+      if (!m.user) continue;
+      const cur = byUser.get(m.user.id);
+      const startedAt = m.trip?.startDate ?? null;
+      if (!cur) {
+        byUser.set(m.user.id, {
+          id: m.user.id,
+          name: m.user.name,
+          avatarUrl: m.user.avatarUrl,
+          sharedTrips: 1,
+          lastTripName: m.trip?.name ?? '',
+          lastTripAt: startedAt,
+        });
+        continue;
+      }
+      cur.sharedTrips++;
+      // Giữ chuyến mới nhất để hiển thị dòng phụ.
+      if (startedAt && (!cur.lastTripAt || startedAt > cur.lastTripAt)) {
+        cur.lastTripAt = startedAt;
+        cur.lastTripName = m.trip?.name ?? cur.lastTripName;
+      }
+    }
+
+    return [...byUser.values()].sort((a, b) => b.sharedTrips - a.sharedTrips);
+  }
+
   /** Số tháng liên tiếp (tính tới tháng hiện tại) có ít nhất 1 chuyến. */
   private computeMonthStreak(dates: Date[]): number {
     if (dates.length === 0) return 0;

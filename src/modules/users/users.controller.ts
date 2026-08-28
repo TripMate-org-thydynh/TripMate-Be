@@ -36,6 +36,14 @@ export class UsersController {
     return this.usersService.getMyTrips(user.id);
   }
 
+  @Get('me/buddies')
+  @ApiOperation({
+    summary: 'Những người đã đi chung chuyến với tôi (màn Danh sách bạn bè)',
+  })
+  getTravelBuddies(@CurrentUser() user: User) {
+    return this.usersService.getTravelBuddies(user.id);
+  }
+
   @Get('me/moments/recent')
   @ApiOperation({
     summary: 'Kỷ niệm mới nhất trên mọi chuyến của tôi (scrapbook ở màn Home)',

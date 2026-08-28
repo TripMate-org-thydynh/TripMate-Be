@@ -32,5 +32,8 @@
     "couponInvalid": "Mã giảm giá đã hết hạn hoặc không tồn tại! 😢",
     "checkoutNotAvailable": "Thanh toán Premium hiện chưa mở. Bọn mình đang hoàn tất tích hợp cổng thanh toán, quay lại sau ít hôm nha! 🙏",
     "verifyNotConfigured": "Xác thực thanh toán Google Play chưa được cấu hình. Vui lòng thử lại sau."
+  },
+  "ai": {
+    "unavailable": "AI đang bận hoặc chưa sẵn sàng. Thử lại sau ít phút nha! 🤖"
   }
 }

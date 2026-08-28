@@ -65,6 +65,13 @@ export class TripsController {
     return this.tripsService.delete(tripId, user.id);
   }
 
+  @Get(':tripId/recap')
+  @UseGuards(TripMemberGuard)
+  @ApiOperation({ summary: 'Số liệu tổng kết chuyến (Trip Wrapped)' })
+  getRecap(@Param('tripId') tripId: string) {
+    return this.tripsService.getRecap(tripId);
+  }
+
   @Get(':tripId/members')
   @UseGuards(TripMemberGuard)
   @ApiOperation({ summary: 'Danh sách thành viên' })

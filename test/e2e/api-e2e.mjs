@@ -357,6 +357,38 @@ check('Thử thách không còn placeholder chưa thay',
   !dareText.includes('{member}'), `text=${dareText}`);
 
 // ─────────────────────────────────────────────────────────────────────────────
+section('7f. Tổng kết chuyến & bạn đồng hành');
+
+const recap = await call('GET', `/trips/${tripId}/recap`, { token: tokenA });
+check('Recap chuyến trả số liệu thật',
+  recap.status === 200 && typeof recap.data?.placeCount === 'number',
+  `status=${recap.status} ${JSON.stringify(recap.data)?.slice(0, 200)}`);
+
+check('Recap không còn số cứng 7 địa điểm / 142 khoảnh khắc / 186km',
+  !(recap.data?.placeCount === 7 && recap.data?.momentCount === 142),
+  JSON.stringify(recap.data)?.slice(0, 200));
+
+check('Recap đếm đúng thành viên thật của chuyến',
+  recap.data?.memberCount >= 1,
+  `memberCount=${recap.data?.memberCount}`);
+
+check('Recap không bịa MVP khi chưa ai đóng góp',
+  recap.data?.mvp === null || typeof recap.data?.mvp?.name === 'string',
+  JSON.stringify(recap.data?.mvp)?.slice(0, 120));
+
+const buddies = await call('GET', '/users/me/buddies', { token: tokenA });
+check('Danh sách bạn đồng hành trả về mảng',
+  buddies.status === 200 && Array.isArray(buddies.data),
+  `status=${buddies.status}`);
+
+check('Bạn đồng hành không còn bịa Alex Nguyễn / Trần Bình / Lê Minh',
+  !JSON.stringify(buddies.data ?? []).match(/Alex Nguyễn|Trần Bình|Lê Minh/),
+  JSON.stringify(buddies.data)?.slice(0, 200));
+
+check('Bạn đồng hành đều là người đi chung THẬT (có số chuyến chung)',
+  (buddies.data ?? []).every((b) => typeof b.sharedTrips === 'number' && b.sharedTrips > 0),
+  JSON.stringify(buddies.data)?.slice(0, 200));
+
 section('8. Dọn dẹp');
 
 const del = await call('DELETE', `/trips/${tripId}`, { token: tokenA });

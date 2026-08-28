@@ -32,5 +32,8 @@
     "couponInvalid": "Coupon code has expired or does not exist! 😢",
     "checkoutNotAvailable": "Premium checkout isn't open yet. We're finishing the payment integration — check back soon! 🙏",
     "verifyNotConfigured": "Google Play purchase verification is not configured yet. Please try again later."
+  },
+  "ai": {
+    "unavailable": "AI is busy or unavailable right now. Please try again in a few minutes. 🤖"
   }
 }
