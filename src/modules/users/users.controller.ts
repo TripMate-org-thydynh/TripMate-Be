@@ -44,6 +44,30 @@ export class UsersController {
     return this.usersService.getRecentMoments(user.id);
   }
 
+  @Get('me/activities/recent')
+  @ApiOperation({
+    summary: 'Hoạt động mới nhất trên mọi chuyến của tôi (marquee màn Home)',
+  })
+  getRecentActivities(@CurrentUser() user: User) {
+    return this.usersService.getRecentActivities(user.id);
+  }
+
+  @Get('me/up-next')
+  @ApiOperation({
+    summary: 'Điểm lịch trình kế tiếp của tôi (thẻ "Up Next" màn Home)',
+  })
+  getUpNext(@CurrentUser() user: User) {
+    return this.usersService.getUpNext(user.id);
+  }
+
+  @Get('me/expense-summary')
+  @ApiOperation({
+    summary: 'Tổng hợp chi tiêu trên mọi chuyến (khối "The Roast" màn Home)',
+  })
+  getExpenseSummary(@CurrentUser() user: User) {
+    return this.usersService.getExpenseSummary(user.id);
+  }
+
   @Delete('me')
   @ApiOperation({ summary: 'Xoá tài khoản (PDPD - quyền được xoá dữ liệu)' })
   deleteAccount(@CurrentUser() user: User) {

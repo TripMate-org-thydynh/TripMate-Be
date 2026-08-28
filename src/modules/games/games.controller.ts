@@ -36,8 +36,8 @@ export class GamesController {
 
   @Get('dare/random')
   @ApiOperation({ summary: 'Tạo thử thách Dare ngẫu nhiên' })
-  getRandomDare() {
-    return this.gamesService.getRandomDare();
+  getRandomDare(@Param('tripId') tripId: string) {
+    return this.gamesService.getRandomDare(tripId);
   }
 
   @Get('xp')
@@ -48,14 +48,20 @@ export class GamesController {
 
   @Get('seasonal')
   @ApiOperation({ summary: 'Danh sách sự kiện mùa giải du lịch' })
-  getSeasonal() {
-    return this.gamesService.getSeasonalEvents();
+  getSeasonal(@Param('tripId') tripId: string) {
+    return this.gamesService.getSeasonalEvents(tripId);
   }
 
   @Get('weekly')
   @ApiOperation({ summary: 'Danh sách nhiệm vụ thử thách tuần' })
-  getWeekly() {
-    return this.gamesService.getWeeklyChallenges();
+  getWeekly(@Param('tripId') tripId: string) {
+    return this.gamesService.getWeeklyChallenges(tripId);
+  }
+
+  @Get('leaderboard')
+  @ApiOperation({ summary: 'Bảng xếp hạng đóng góp của từng thành viên' })
+  getLeaderboard(@Param('tripId') tripId: string) {
+    return this.gamesService.getLeaderboard(tripId);
   }
 
   @Get(':id')

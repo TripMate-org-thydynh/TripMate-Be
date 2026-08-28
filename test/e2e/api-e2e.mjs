@@ -265,6 +265,86 @@ check('Huy hiệu của user mới CHƯA mở khoá cái nào',
   `status=${badges.status} unlocked=${unlocked} ${JSON.stringify(badges.data)?.slice(0, 200)}`);
 
 // ─────────────────────────────────────────────────────────────────────────────
+section('7d. Các khối tổng hợp màn Home');
+
+// User C vẫn chưa có chuyến nào → mọi khối phải trả "rỗng", không bịa dữ liệu.
+const actEmpty = await call('GET', '/users/me/activities/recent', { token: tokenC });
+check('Hoạt động gần đây rỗng khi chưa có chuyến',
+  actEmpty.status === 200 && Array.isArray(actEmpty.data) && actEmpty.data.length === 0,
+  `status=${actEmpty.status} n=${actEmpty.data?.length}`);
+
+const upNextEmpty = await call('GET', '/users/me/up-next', { token: tokenC });
+check('Up Next trả rỗng khi chưa có lịch trình',
+  upNextEmpty.status === 200 && (upNextEmpty.data === null || upNextEmpty.data === undefined),
+  `status=${upNextEmpty.status} data=${JSON.stringify(upNextEmpty.data)}`);
+
+const sumEmpty = await call('GET', '/users/me/expense-summary', { token: tokenC });
+check('Tổng hợp chi tiêu báo hasData=false khi chưa chi gì',
+  sumEmpty.status === 200 && sumEmpty.data?.hasData === false,
+  `status=${sumEmpty.status} ${JSON.stringify(sumEmpty.data)?.slice(0, 160)}`);
+
+// User A có chuyến + lịch trình + chi tiêu → các khối phải có dữ liệu thật.
+const upNextA = await call('GET', '/users/me/up-next', { token: tokenA });
+check('Up Next trả điểm lịch trình thật cho user có chuyến',
+  upNextA.status === 200 && upNextA.data?.placeName === 'Hồ Xuân Hương',
+  `status=${upNextA.status} ${JSON.stringify(upNextA.data)?.slice(0, 200)}`);
+
+const sumA = await call('GET', '/users/me/expense-summary', { token: tokenA });
+check('Tổng hợp chi tiêu có dữ liệu thật sau khi ghi khoản chi',
+  sumA.status === 200 && sumA.data?.hasData === true && sumA.data?.totalCount > 0,
+  `status=${sumA.status} ${JSON.stringify(sumA.data)?.slice(0, 200)}`);
+
+const actA = await call('GET', '/users/me/activities/recent', { token: tokenA });
+check('Hoạt động gần đây có bản ghi sau các thao tác trên',
+  actA.status === 200 && Array.isArray(actA.data),
+  `status=${actA.status} n=${actA.data?.length}`);
+
+// ─────────────────────────────────────────────────────────────────────────────
+section('7e. Mini games');
+
+const xp = await call('GET', `/trips/${tripId}/games/xp`, { token: tokenA });
+check('XP squad tính từ dữ liệu thật (không còn cứng 1420)',
+  xp.status === 200 && typeof xp.data?.currentXP === 'number' && xp.data.currentXP !== 1420,
+  `status=${xp.status} ${JSON.stringify(xp.data)?.slice(0, 200)}`);
+
+check('XP có breakdown theo từng loại hoạt động',
+  Array.isArray(xp.data?.breakdown) && xp.data.breakdown.length > 0,
+  `breakdown=${JSON.stringify(xp.data?.breakdown)?.slice(0, 160)}`);
+
+check('XP > 0 vì chuyến đã có lịch trình + chi tiêu + thành viên',
+  (xp.data?.currentXP ?? 0) > 0, `currentXP=${xp.data?.currentXP}`);
+
+const lb = await call('GET', `/trips/${tripId}/games/leaderboard`, { token: tokenA });
+const lbNames = Array.isArray(lb.data) ? lb.data.map((r) => r.name) : [];
+check('Bảng xếp hạng trả thành viên THẬT của chuyến',
+  lb.status === 200 && lbNames.length === 2,
+  `status=${lb.status} names=${JSON.stringify(lbNames)}`);
+check('Không còn người chơi bịa (Sam/Alex/Jordan/Taylor/Casey)',
+  !lbNames.some((n) => ['Sam', 'Alex', 'Jordan', 'Taylor', 'Casey'].includes(n)),
+  `names=${JSON.stringify(lbNames)}`);
+
+const weekly = await call('GET', `/trips/${tripId}/games/weekly`, { token: tokenA });
+check('Nhiệm vụ tuần có tiến độ tính từ dữ liệu thật',
+  weekly.status === 200 && Array.isArray(weekly.data) &&
+  weekly.data.every((c) => typeof c.current === 'number' && typeof c.percent === 'number'),
+  `status=${weekly.status} ${JSON.stringify(weekly.data)?.slice(0, 200)}`);
+
+const seasonal = await call('GET', `/trips/${tripId}/games/seasonal`, { token: tokenA });
+check('Sự kiện mùa có tiến độ thật',
+  seasonal.status === 200 && Array.isArray(seasonal.data) &&
+  seasonal.data.every((c) => typeof c.percent === 'number'),
+  `status=${seasonal.status} ${JSON.stringify(seasonal.data)?.slice(0, 200)}`);
+
+const dare = await call('GET', `/trips/${tripId}/games/dare/random`, { token: tokenA });
+const dareText = dare.data?.dareText ?? '';
+check('Thử thách trả về có nội dung',
+  dare.status === 200 && dareText.length > 0, `status=${dare.status} text=${dareText}`);
+check('Thử thách không còn bịa tên "Lê Minh" / "Alex Nguyễn"',
+  !/Lê Minh|Alex Nguyễn/.test(dareText), `text=${dareText}`);
+check('Thử thách không còn placeholder chưa thay',
+  !dareText.includes('{member}'), `text=${dareText}`);
+
+// ─────────────────────────────────────────────────────────────────────────────
 section('8. Dọn dẹp');
 
 const del = await call('DELETE', `/trips/${tripId}`, { token: tokenA });

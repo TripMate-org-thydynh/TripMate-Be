@@ -336,6 +336,140 @@ export class UsersService {
    * Dữ liệu THẬT cho màn Travel Atlas: số chuyến, số địa điểm, streak tháng,
    * và các marker (từ itinerary có toạ độ + moment có GPS).
    */
+  /// Tổng hợp chi tiêu trên mọi chuyến của user — nguồn cho khối "The Roast".
+  ///
+  /// Trước đây khối này hiển thị cứng "TỔNG: 500K", "80% PAID" và một câu
+  /// roast bịa tên người. Nay tính từ `expense_splits` thật; không có khoản
+  /// chi nào thì `hasData: false` để client ẩn khối đi.
+  async getExpenseSummary(userId: string) {
+    const memberships = await this.prisma.tripMember.findMany({
+      where: { userId },
+      select: { tripId: true },
+    });
+    const tripIds = memberships.map((m) => m.tripId);
+    const empty = {
+      hasData: false,
+      totalAmount: 0,
+      paidCount: 0,
+      totalCount: 0,
+      paidPercent: 0,
+      topDebtorName: null as string | null,
+      topDebtorAmount: 0,
+    };
+    if (tripIds.length === 0) return empty;
+
+    const splits = await this.prisma.expenseSplit.findMany({
+      where: { expense: { tripId: { in: tripIds } } },
+      include: {
+        user: { select: { id: true, name: true } },
+        expense: { select: { amount: true } },
+      },
+    });
+    if (splits.length === 0) return empty;
+
+    const totalAmount = splits.reduce((sum, s) => sum + Number(s.shareAmount), 0);
+    const paidCount = splits.filter((s) => s.isPaid).length;
+
+    // Ai đang nợ nhiều nhất (tổng phần chưa trả).
+    const debtByUser = new Map<string, { name: string; amount: number }>();
+    for (const s of splits) {
+      if (s.isPaid) continue;
+      const cur = debtByUser.get(s.userId) ?? { name: s.user.name, amount: 0 };
+      cur.amount += Number(s.shareAmount);
+      debtByUser.set(s.userId, cur);
+    }
+    let top: { name: string; amount: number } | null = null;
+    for (const entry of debtByUser.values()) {
+      if (!top || entry.amount > top.amount) top = entry;
+    }
+
+    return {
+      hasData: true,
+      totalAmount,
+      paidCount,
+      totalCount: splits.length,
+      paidPercent: Math.round((paidCount / splits.length) * 100),
+      topDebtorName: top?.name ?? null,
+      topDebtorAmount: top?.amount ?? 0,
+    };
+  }
+
+  /// Hoạt động mới nhất trên mọi chuyến của user — nguồn cho marquee màn Home.
+  ///
+  /// Trước đây marquee chạy một mảng câu cứng ("Phú Khang owes 420k"...) nên
+  /// tài khoản nào cũng thấy y hệt nhau.
+  async getRecentActivities(userId: string, limit = 12) {
+    const memberships = await this.prisma.tripMember.findMany({
+      where: { userId },
+      select: { tripId: true },
+    });
+    const tripIds = memberships.map((m) => m.tripId);
+    if (tripIds.length === 0) return [];
+
+    const rows = await this.prisma.activity.findMany({
+      where: { tripId: { in: tripIds } },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        user: { select: { id: true, name: true } },
+        trip: { select: { id: true, name: true } },
+      },
+    });
+
+    return rows.map((a) => ({
+      id: a.id,
+      type: a.type,
+      tripId: a.tripId,
+      tripName: a.trip.name,
+      actorName: a.user.name,
+      data: a.data,
+      createdAt: a.createdAt,
+    }));
+  }
+
+  /// Điểm lịch trình kế tiếp của user — nguồn cho thẻ "Up Next" màn Home.
+  ///
+  /// Lấy chuyến gần nhất chưa kết thúc, rồi điểm đầu tiên của ngày hiện tại
+  /// (hoặc ngày 1 nếu chuyến chưa bắt đầu). Trả `null` khi không có gì —
+  /// client ẩn thẻ thay vì bịa "Night Market Chaos".
+  async getUpNext(userId: string) {
+    const now = new Date();
+    const membership = await this.prisma.tripMember.findFirst({
+      where: {
+        userId,
+        trip: { deletedAt: null, endDate: { gte: now } },
+      },
+      orderBy: { trip: { startDate: 'asc' } },
+      select: { trip: { select: { id: true, name: true, startDate: true } } },
+    });
+    if (!membership?.trip) return null;
+
+    const trip = membership.trip;
+    // Ngày thứ mấy của chuyến (1-based); chuyến chưa bắt đầu → ngày 1.
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const diffDays = Math.floor(
+      (now.getTime() - trip.startDate.getTime()) / msPerDay,
+    );
+    const currentDay = diffDays < 0 ? 1 : diffDays + 1;
+
+    const item = await this.prisma.itineraryItem.findFirst({
+      where: { tripId: trip.id, day: { gte: currentDay } },
+      orderBy: [{ day: 'asc' }, { startTime: 'asc' }],
+    });
+    if (!item) return null;
+
+    return {
+      tripId: trip.id,
+      tripName: trip.name,
+      day: item.day,
+      startTime: item.startTime,
+      placeName: item.placeName,
+      placeAddress: item.placeAddress,
+      category: item.category,
+      durationMinutes: item.durationMinutes,
+    };
+  }
+
   /// Kỷ niệm mới nhất trên tất cả chuyến mà user là thành viên.
   ///
   /// Dùng cho khối "scrapbook" ở màn Home — trước đây khối này hiển thị 2 tấm
