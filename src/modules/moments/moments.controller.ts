@@ -1,3 +1,5 @@
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import type { User } from '@prisma/client';
 import {
   Body,
   Controller,
@@ -12,7 +14,8 @@ import { MomentsService } from './moments.service';
 import { CreateMomentDto } from './dto/create-moment.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { ResourceOwnerGuard } from '../../common/guards/resource-owner.guard';
+import { OwnedResource } from '../../common/decorators/resource-owner.decorator';
 import { IsNotEmpty, IsString } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -34,7 +37,7 @@ export class MomentsController {
   @ApiOperation({ summary: 'Chia sẻ khoảnh khắc mới' })
   create(
     @Param('tripId') tripId: string,
-    @CurrentUser() user: any,
+    @CurrentUser() user: User,
     @Body() dto: CreateMomentDto,
   ) {
     return this.momentsService.create(tripId, user.id, dto);
@@ -52,9 +55,11 @@ export class MomentsController {
     return this.momentsService.findOne(id);
   }
 
+  @UseGuards(ResourceOwnerGuard)
+  @OwnedResource('moment', 'id')
   @Delete(':id')
   @ApiOperation({ summary: 'Xóa khoảnh khắc' })
-  delete(@Param('id') id: string, @CurrentUser() user: any) {
+  delete(@Param('id') id: string, @CurrentUser() user: User) {
     return this.momentsService.delete(id, user.id);
   }
 
@@ -62,7 +67,7 @@ export class MomentsController {
   @ApiOperation({ summary: 'Bình luận khoảnh khắc' })
   addComment(
     @Param('id') id: string,
-    @CurrentUser() user: any,
+    @CurrentUser() user: User,
     @Body() dto: CommentDto,
   ) {
     return this.momentsService.addComment(id, user.id, dto.content);
@@ -72,7 +77,7 @@ export class MomentsController {
   @ApiOperation({ summary: 'Thả cảm xúc (toggle)' })
   toggleReaction(
     @Param('id') id: string,
-    @CurrentUser() user: any,
+    @CurrentUser() user: User,
     @Body() dto: ReactionDto,
   ) {
     return this.momentsService.toggleReaction(id, user.id, dto.emoji);

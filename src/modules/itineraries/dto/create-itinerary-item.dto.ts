@@ -53,4 +53,9 @@ export class CreateItineraryItemDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @ApiPropertyOptional({ example: 'FOOD' })
+  @IsOptional()
+  @IsString()
+  category?: string;
 }

@@ -6,6 +6,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { TwilioService } from './twilio.service';
+import { MailService } from './mail.service';
 
 @Module({
   imports: [
@@ -22,7 +23,7 @@ import { TwilioService } from './twilio.service';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, TwilioService],
-  exports: [JwtModule, TwilioService],
+  providers: [AuthService, JwtStrategy, TwilioService, MailService],
+  exports: [JwtModule, TwilioService, MailService],
 })
 export class AuthModule {}

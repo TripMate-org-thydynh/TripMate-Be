@@ -25,6 +25,7 @@ export class ItinerariesService {
         longitude: dto.longitude,
         durationMinutes: dto.durationMinutes,
         notes: dto.notes,
+        category: dto.category,
       },
     });
     await this.evictCache(tripId);
@@ -78,6 +79,7 @@ export class ItinerariesService {
         longitude: dto.longitude,
         durationMinutes: dto.durationMinutes,
         notes: dto.notes,
+        category: dto.category,
       },
     });
     await this.evictCache(tripId);

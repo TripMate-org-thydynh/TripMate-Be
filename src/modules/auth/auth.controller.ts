@@ -1,3 +1,4 @@
+import type { User } from '@prisma/client';
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
@@ -6,9 +7,10 @@ import { LoginDto } from './dto/login.dto';
 import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { GoogleLoginDto } from './dto/google-login.dto';
+import { RegisterPasswordDto } from './dto/register-password.dto';
+import { LoginPasswordDto } from './dto/login-password.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
@@ -40,6 +42,20 @@ export class AuthController {
     return this.authService.verifyOtp(dto.phoneNumber, dto.code);
   }
 
+  @Post('register-password')
+  @ApiOperation({
+    summary: 'Đăng ký nhanh bằng username + mật khẩu (+ xác nhận) - nhận JWT',
+  })
+  registerPassword(@Body() dto: RegisterPasswordDto) {
+    return this.authService.registerWithPassword(dto);
+  }
+
+  @Post('login-password')
+  @ApiOperation({ summary: 'Đăng nhập bằng username + mật khẩu - nhận JWT' })
+  loginPassword(@Body() dto: LoginPasswordDto) {
+    return this.authService.loginWithPassword(dto);
+  }
+
   @Post('google')
   @ApiOperation({
     summary: 'Đăng nhập Google - nhận JWT hoặc thông tin đăng ký',
@@ -52,7 +68,7 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('JWT')
   @ApiOperation({ summary: 'Lấy thông tin user hiện tại từ JWT' })
-  me(@CurrentUser() user: any) {
+  me(@CurrentUser() user: User) {
     return user;
   }
 }

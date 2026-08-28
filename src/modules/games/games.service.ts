@@ -8,11 +8,27 @@ export class GamesService {
 
   private squadXP: Record<string, any> = {};
   private seasonalMissions: any[] = [
-    { id: 'season-1', title: 'Kyoto Matsuri Vibe 🌸', desc: 'Chụp hình với Kimono và up Scrapbook', rewardXP: 1000, deadline: '2026-06-30' },
+    {
+      id: 'season-1',
+      title: 'Kyoto Matsuri Vibe 🌸',
+      desc: 'Chụp hình với Kimono và up Scrapbook',
+      rewardXP: 1000,
+      deadline: '2026-06-30',
+    },
   ];
   private weeklyMissions: any[] = [
-    { id: 'week-1', title: 'Kẻ Bắn Tỉa Ghost Cam 📸', desc: 'Săn 3 bức hình dìm hàng của đồng đội bằng Ghost Cam', rewardXP: 400 },
-    { id: 'week-2', title: 'Vua Tiết Kiệm 💸', desc: 'Tổng chi tiêu tuần dưới hạn mức 80%', rewardXP: 300 },
+    {
+      id: 'week-1',
+      title: 'Kẻ Bắn Tỉa Ghost Cam 📸',
+      desc: 'Săn 3 bức hình dìm hàng của đồng đội bằng Ghost Cam',
+      rewardXP: 400,
+    },
+    {
+      id: 'week-2',
+      title: 'Vua Tiết Kiệm 💸',
+      desc: 'Tổng chi tiêu tuần dưới hạn mức 80%',
+      rewardXP: 300,
+    },
   ];
 
   async create(tripId: string, gameType: GameType, initialState: object) {
@@ -71,10 +87,7 @@ export class GamesService {
         squadLevel: 4,
         currentXP: 1420,
         nextLevelXP: 2500,
-        unlockedPerks: [
-          'Voucher Kyoto Ryokan 10%',
-          'Theme App Độc Quyền',
-        ],
+        unlockedPerks: ['Voucher Kyoto Ryokan 10%', 'Theme App Độc Quyền'],
       };
     }
     return this.squadXP[tripId];

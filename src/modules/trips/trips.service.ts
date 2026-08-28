@@ -33,10 +33,13 @@ export class TripsService {
       data: {
         name: dto.name,
         description: dto.description,
+        destination: dto.destination,
         startDate: new Date(dto.startDate),
         endDate: new Date(dto.endDate),
         coverImage: dto.coverImage,
         currency: dto.currency ?? 'VND',
+        budget: dto.budget,
+        vibe: dto.vibe,
         theme: dto.theme,
         isPublic: dto.isPublic ?? false,
         inviteCode,
@@ -77,7 +80,7 @@ export class TripsService {
         },
       },
     });
-    if (!trip) throw new NotFoundException('Trip not found');
+    if (!trip) throw new NotFoundException('errors.trips.notFound');
     return trip;
   }
 
@@ -88,10 +91,13 @@ export class TripsService {
       data: {
         name: dto.name,
         description: dto.description,
+        destination: dto.destination,
         startDate: dto.startDate ? new Date(dto.startDate) : undefined,
         endDate: dto.endDate ? new Date(dto.endDate) : undefined,
         coverImage: dto.coverImage,
         currency: dto.currency,
+        budget: dto.budget,
+        vibe: dto.vibe,
         theme: dto.theme,
         isPublic: dto.isPublic,
       },
@@ -110,13 +116,13 @@ export class TripsService {
     const trip = await this.prisma.trip.findUnique({
       where: { inviteCode: dto.inviteCode, deletedAt: null },
     });
-    if (!trip) throw new NotFoundException('Invalid invite code');
+    if (!trip) throw new NotFoundException('errors.trips.invalidInviteCode');
 
     const existing = await this.prisma.tripMember.findUnique({
       where: { tripId_userId: { tripId: trip.id, userId } },
     });
     if (existing)
-      throw new ConflictException('You are already a member of this trip');
+      throw new ConflictException('errors.trips.alreadyMember');
 
     await this.prisma.tripMember.create({
       data: { tripId: trip.id, userId, role: 'MEMBER' },
@@ -129,11 +135,9 @@ export class TripsService {
       where: { tripId_userId: { tripId, userId } },
     });
     if (!member)
-      throw new NotFoundException('You are not a member of this trip');
+      throw new NotFoundException('errors.auth.notMember');
     if (member.role === 'CREATOR') {
-      throw new ForbiddenException(
-        'Creator cannot leave. Transfer ownership first.',
-      );
+      throw new ForbiddenException('errors.auth.creatorCannotLeave');
     }
     return this.prisma.tripMember.delete({
       where: { tripId_userId: { tripId, userId } },
@@ -165,7 +169,7 @@ export class TripsService {
   ) {
     await this.ensureCreator(tripId, requesterId);
     if (requesterId === targetUserId) {
-      throw new ForbiddenException('Cannot remove yourself as creator');
+      throw new ForbiddenException('errors.trips.creatorCannotLeave');
     }
     return this.prisma.tripMember.delete({
       where: { tripId_userId: { tripId, userId: targetUserId } },
@@ -188,9 +192,9 @@ export class TripsService {
     const member = await this.prisma.tripMember.findUnique({
       where: { tripId_userId: { tripId, userId } },
     });
-    if (!member) throw new NotFoundException('Trip not found');
+    if (!member) throw new NotFoundException('errors.trips.notFound');
     if (member.role !== 'CREATOR') {
-      throw new ForbiddenException('Only creator can perform this action');
+      throw new ForbiddenException('errors.trips.onlyCreator');
     }
   }
 }

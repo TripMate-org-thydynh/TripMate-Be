@@ -1,3 +1,4 @@
+import type { User } from '@prisma/client';
 import {
   Body,
   Controller,
@@ -19,7 +20,6 @@ import { SendMessageDto, ReactionDto } from './dto/chat.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-
 @ApiTags('Chat')
 @UseGuards(JwtAuthGuard, TripMemberGuard)
 @ApiBearerAuth('JWT')
@@ -31,7 +31,7 @@ export class ChatController {
   @ApiOperation({ summary: 'Gửi tin nhắn vào squad chat' })
   send(
     @Param('tripId') tripId: string,
-    @CurrentUser() user: any,
+    @CurrentUser() user: User,
     @Body() dto: SendMessageDto,
   ) {
     return this.chatService.sendMessage(tripId, user.id, dto);
@@ -40,10 +40,7 @@ export class ChatController {
   @Get('search')
   @ApiOperation({ summary: 'Tìm kiếm tin nhắn trong squad chat' })
   @ApiQuery({ name: 'q', required: true, type: String })
-  search(
-    @Param('tripId') tripId: string,
-    @Query('q') query: string,
-  ) {
+  search(@Param('tripId') tripId: string, @Query('q') query: string) {
     return this.chatService.searchMessages(tripId, query);
   }
 
@@ -63,7 +60,7 @@ export class ChatController {
   @ApiOperation({ summary: 'Thả cảm xúc tin nhắn (toggle)' })
   toggleReaction(
     @Param('messageId') messageId: string,
-    @CurrentUser() user: any,
+    @CurrentUser() user: User,
     @Body() dto: ReactionDto,
   ) {
     return this.chatService.toggleReaction(messageId, user.id, dto.emoji);
@@ -71,7 +68,7 @@ export class ChatController {
 
   @Delete(':messageId')
   @ApiOperation({ summary: 'Xóa tin nhắn (soft delete)' })
-  delete(@Param('messageId') messageId: string, @CurrentUser() user: any) {
+  delete(@Param('messageId') messageId: string, @CurrentUser() user: User) {
     return this.chatService.deleteMessage(messageId, user.id);
   }
 }

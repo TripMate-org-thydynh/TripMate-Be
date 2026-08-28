@@ -1,4 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { MessageType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -70,6 +74,19 @@ export class ChatService {
   }
 
   async deleteMessage(id: string, userId: string) {
+    const message = await this.prisma.chatMessage.findUnique({
+      where: { id },
+      include: { trip: { select: { createdBy: true } } },
+    });
+
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+
+    if (message.senderId !== userId && message.trip.createdBy !== userId) {
+      throw new ForbiddenException("You cannot delete someone else's message");
+    }
+
     return this.prisma.chatMessage.update({
       where: { id },
       data: { deletedAt: new Date(), content: null },

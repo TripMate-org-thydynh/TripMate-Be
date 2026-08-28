@@ -10,11 +10,13 @@ import type { Cache } from 'cache-manager';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateExpenseDto } from './dto/create-expense.dto';
+import { AiService } from '../ai/ai.service';
 
 @Injectable()
 export class ExpensesService {
   constructor(
     private prisma: PrismaService,
+    private aiService: AiService,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {}
 
@@ -122,6 +124,37 @@ export class ExpensesService {
     return expenses;
   }
 
+  async findAllPaginated(tripId: string, page = 1, limit = 50) {
+    const skip = (page - 1) * limit;
+    const where = { tripId, deletedAt: null } as const;
+
+    const [total, items] = await Promise.all([
+      this.prisma.expense.count({ where }),
+      this.prisma.expense.findMany({
+        where,
+        include: {
+          paidBy: { select: { id: true, name: true, avatarUrl: true } },
+          splits: {
+            include: {
+              user: { select: { id: true, name: true, avatarUrl: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+    ]);
+
+    return {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      items,
+    };
+  }
+
   async getBalances(tripId: string) {
     const cacheKey = `trip:${tripId}:balances`;
     try {
@@ -208,17 +241,19 @@ export class ExpensesService {
       where: { id: expenseId },
     });
     if (!expense) throw new NotFoundException('Expense not found');
-    
+
     // Only the person who paid for the expense can mark split bills as paid
     if (expense.paidById !== requesterId) {
-      throw new ForbiddenException('Only the expense payer can mark split bills as paid');
+      throw new ForbiddenException(
+        'Only the expense payer can mark split bills as paid',
+      );
     }
 
     const split = await this.prisma.expenseSplit.findUnique({
       where: { expenseId_userId: { expenseId, userId } },
     });
     if (!split) throw new NotFoundException('Split not found');
-    
+
     const updatedSplit = await this.prisma.expenseSplit.update({
       where: { expenseId_userId: { expenseId, userId } },
       data: { isPaid: true, paidAt: new Date() },
@@ -233,11 +268,12 @@ export class ExpensesService {
       where: { id: expenseId },
       include: { trip: { select: { createdBy: true } } },
     });
-    if (!expense || expense.deletedAt) throw new NotFoundException('Expense not found');
+    if (!expense || expense.deletedAt)
+      throw new NotFoundException('Expense not found');
 
     // Only the expense creator/payer or the trip creator can delete the expense
     if (expense.paidById !== userId && expense.trip.createdBy !== userId) {
-      throw new ForbiddenException('You do not have permission to delete this expense');
+      throw new ForbiddenException('errors.auth.notOwner');
     }
 
     const updatedExpense = await this.prisma.expense.update({
@@ -288,7 +324,7 @@ export class ExpensesService {
       where: { userId },
       orderBy: { createdAt: 'asc' },
     });
-    
+
     // Seed default mock banks if user has none, to maintain initial premium features
     if (banks.length === 0) {
       const defaultBanks = [
@@ -307,7 +343,7 @@ export class ExpensesService {
           logoUrl: 'assets/images/banks/tcb.png',
         },
       ];
-      
+
       const createdBanks = [];
       for (const bank of defaultBanks) {
         const cb = await this.prisma.linkedBank.create({
@@ -317,7 +353,7 @@ export class ExpensesService {
       }
       return createdBanks;
     }
-    
+
     return banks;
   }
 
@@ -325,11 +361,12 @@ export class ExpensesService {
     if (!data.bankName || !data.accountNumber || !data.accountHolder) {
       throw new BadRequestException('Missing bank account parameters');
     }
-    
-    const accountNumberMasked = data.accountNumber.length > 4 
-      ? `******${data.accountNumber.slice(-4)}` 
-      : data.accountNumber;
-      
+
+    const accountNumberMasked =
+      data.accountNumber.length > 4
+        ? `******${data.accountNumber.slice(-4)}`
+        : data.accountNumber;
+
     const newBank = await this.prisma.linkedBank.create({
       data: {
         userId,
@@ -340,7 +377,7 @@ export class ExpensesService {
         logoUrl: 'assets/images/banks/generic.png',
       },
     });
-    
+
     // Update linkedBanksCount in wallet
     const banks = await this.prisma.linkedBank.findMany({ where: { userId } });
     await this.prisma.userWallet.upsert({
@@ -348,7 +385,7 @@ export class ExpensesService {
       create: { userId, linkedBanksCount: banks.length },
       update: { linkedBanksCount: banks.length },
     });
-    
+
     return newBank;
   }
 
@@ -357,7 +394,7 @@ export class ExpensesService {
       where: { userId },
       orderBy: { createdAt: 'asc' },
     });
-    
+
     // Seed default mock card if none exist
     if (cards.length === 0) {
       const defaultCard = await this.prisma.paymentCard.create({
@@ -372,21 +409,23 @@ export class ExpensesService {
       });
       return [defaultCard];
     }
-    
+
     return cards;
   }
 
-  async addPaymentMethod(userId: string, data: any) {
-    if (!data.cardNumber || !data.expiry || !data.cardHolder || !data.cvv) {
+  async addPaymentMethod(
+    userId: string,
+    data: { cardNumber?: string; expiry?: string; cardHolder?: string },
+  ) {
+    if (!data.cardNumber || !data.expiry || !data.cardHolder) {
       throw new BadRequestException('Missing payment method parameters');
     }
-    
-    const lastFour = data.cardNumber.length > 4 
-      ? data.cardNumber.slice(-4) 
-      : data.cardNumber;
-      
+
+    const lastFour =
+      data.cardNumber.length > 4 ? data.cardNumber.slice(-4) : data.cardNumber;
+
     const type = data.cardNumber.startsWith('4') ? 'VISA' : 'MASTERCARD';
-    
+
     const newCard = await this.prisma.paymentCard.create({
       data: {
         userId,
@@ -397,7 +436,7 @@ export class ExpensesService {
         colorIndex: Math.floor(Math.random() * 4),
       },
     });
-    
+
     // Update creditCardsCount in wallet
     const cards = await this.prisma.paymentCard.findMany({ where: { userId } });
     await this.prisma.userWallet.upsert({
@@ -405,28 +444,12 @@ export class ExpensesService {
       create: { userId, creditCardsCount: cards.length },
       update: { creditCardsCount: cards.length },
     });
-    
+
     return newCard;
   }
 
   async scanReceipt(receiptUrl: string) {
-    // Return a mocked mock parse result of a Kyoto or Dalat restaurant
-    return {
-      success: true,
-      merchant: 'Lẩu gà lá é Tao Ngộ',
-      date: new Date().toLocaleDateString('vi-VN'),
-      items: [
-        { name: 'Lẩu gà lá é lớn', quantity: 1, price: 350000.0, selected: true },
-        { name: 'Nước ngọt lon', quantity: 4, price: 60000.0, selected: true },
-        { name: 'Mì gói thêm', quantity: 2, price: 20000.0, selected: true },
-        { name: 'Khăn lạnh', quantity: 4, price: 10000.0, selected: false },
-      ],
-      subtotal: 440000.0,
-      tax: 44000.0,
-      total: 484000.0,
-      confidenceScore: 0.96,
-      suggestedCategory: 'FOOD',
-    };
+    return this.aiService.scanReceiptImage(receiptUrl);
   }
 
   async getBudgetGoal(tripId: string) {
@@ -460,7 +483,7 @@ export class ExpensesService {
 
   async updateBudgetGoal(tripId: string, data: any) {
     const current = await this.getBudgetGoal(tripId);
-    
+
     const updated = await this.prisma.budgetGoal.upsert({
       where: { tripId },
       create: {
@@ -475,7 +498,7 @@ export class ExpensesService {
         categoryLimits: data.categoryLimits ?? current.categoryLimits,
       },
     });
-    
+
     return {
       tripId,
       limitAmount: Number(updated.limitAmount),
@@ -487,10 +510,22 @@ export class ExpensesService {
   async getSplitterGame(tripId: string) {
     // Generate a funny status for our spin-the-wheel squad picker
     const participants = [
-      { name: 'Alex Nguyễn', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alex' },
-      { name: 'Trần Bình', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Binh' },
-      { name: 'Lê Minh', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Minh' },
-      { name: 'Hoàng Yến', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Yen' },
+      {
+        name: 'Alex Nguyễn',
+        avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alex',
+      },
+      {
+        name: 'Trần Bình',
+        avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Binh',
+      },
+      {
+        name: 'Lê Minh',
+        avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Minh',
+      },
+      {
+        name: 'Hoàng Yến',
+        avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Yen',
+      },
     ];
     const randomIndex = Math.floor(Math.random() * participants.length);
     return {

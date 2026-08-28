@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { PremiumService } from './premium.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -13,29 +13,48 @@ export class PremiumController {
 
   @Get('subscriptions')
   @ApiOperation({ summary: 'Lấy trạng thái gói Premium hiện tại' })
-  getSubscriptions(@CurrentUser() user: any) {
+  getSubscriptions(@CurrentUser() user: { id: string }) {
     return this.premiumService.getSubscriptions(user.id);
   }
 
   @Post('checkout')
   @ApiOperation({ summary: 'Thực hiện thanh toán nâng cấp Premium' })
   checkout(
-    @CurrentUser() user: any,
+    @CurrentUser() user: { id: string },
     @Body('tier') tier: string,
     @Body('paymentMethod') paymentMethod: string,
   ) {
     return this.premiumService.checkout(user.id, tier, paymentMethod);
   }
 
+  @Post('verify-google-play')
+  @ApiOperation({
+    summary: 'Xác thực biên lai thanh toán từ Google Play (CH Play)',
+  })
+  verifyGooglePlay(
+    @CurrentUser() user: { id: string },
+    @Body('token') token: string,
+    @Body('productId') productId: string,
+  ) {
+    return this.premiumService.verifyGooglePlayPurchase(
+      user.id,
+      token,
+      productId,
+    );
+  }
+
   @Get('billing-history')
   @ApiOperation({ summary: 'Lấy lịch sử thanh toán hóa đơn' })
-  getBillingHistory(@CurrentUser() user: any) {
+  getBillingHistory(@CurrentUser() user: { id: string }) {
     return this.premiumService.getBillingHistory(user.id);
   }
 
   @Post('referrals')
   @ApiOperation({ summary: 'Nhập mã giới thiệu bạn bè nhận XP' })
-  submitReferral(@CurrentUser() user: any, @Body('code') code: string) {
+  submitReferral(
+    @CurrentUser() user: { id: string },
+    @Body('code') code: string,
+  ) {
     return this.premiumService.submitReferral(user.id, code);
   }
 
@@ -46,8 +65,10 @@ export class PremiumController {
   }
 
   @Get('creator-revenue')
-  @ApiOperation({ summary: 'Lấy doanh thu chia sẻ của nhà sáng tạo theme/sticker' })
-  getCreatorRevenue(@CurrentUser() user: any) {
+  @ApiOperation({
+    summary: 'Lấy doanh thu chia sẻ của nhà sáng tạo theme/sticker',
+  })
+  getCreatorRevenue(@CurrentUser() user: { id: string }) {
     return this.premiumService.getCreatorRevenue(user.id);
   }
 }

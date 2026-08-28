@@ -58,11 +58,10 @@ export class MomentsService {
     return moment;
   }
 
+  /** DELETE is protected by ResourceOwnerGuard at controller level. */
   async delete(id: string, userId: string) {
     const moment = await this.prisma.moment.findUnique({ where: { id } });
-    if (!moment) throw new NotFoundException('Moment not found');
-    if (moment.userId !== userId)
-      throw new NotFoundException('Not your moment');
+    if (!moment) throw new NotFoundException('errors.database.notFound');
     return this.prisma.moment.update({
       where: { id },
       data: { deletedAt: new Date() },

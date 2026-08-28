@@ -13,6 +13,24 @@
     "usernameTaken": "This username is already taken.",
     "userNotFound": "Account not found. Please register first.",
     "notMember": "You are not a member of this trip.",
+    "notOwner": "Only the creator of this item or the trip organizer can modify it.",
     "creatorCannotLeave": "The creator cannot leave the trip without transferring ownership."
+  },
+  "resource": {
+    "conflict": "Someone just changed this item. Please reload and try again."
+  },
+  "trips": {
+    "notFound": "Trip not found.",
+    "alreadyMember": "You are already a member of this trip.",
+    "creatorCannotLeave": "Cannot remove yourself as creator without transferring ownership.",
+    "invalidInviteCode": "Invalid invite code.",
+    "onlyCreator": "Only the trip creator can perform this action."
+  },
+  "premium": {
+    "tokenRequired": "Token and product ID are required! 🤪",
+    "selfReferral": "You cannot use your own referral code! 🤪",
+    "couponInvalid": "Coupon code has expired or does not exist! 😢",
+    "checkoutNotAvailable": "Premium checkout isn't open yet. We're finishing the payment integration — check back soon! 🙏",
+    "verifyNotConfigured": "Google Play purchase verification is not configured yet. Please try again later."
   }
 }

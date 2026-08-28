@@ -14,10 +14,32 @@
   "trips": {
     "not_found": "Trip not found",
     "not_member": "You are not a member of this trip",
-    "create_success": "Trip created successfully"
+    "create_success": "Trip created successfully",
+    "mock_trip_name": "🏖️ Party in Phu Quoc",
+    "mock_trip_desc": "5 days 4 nights trip to Phu Quoc with close friends, filled with laughter and memories!",
+    "mock_flight": "✈️ Flight to Phu Quoc",
+    "mock_flight_notes": "Assemble at Tan Son Nhat airport domestic terminal",
+    "mock_lunch": "🍜 Lunch Bun Quay Thanh Hung",
+    "mock_lunch_notes": "Enjoy the famous Phu Quoc specialty bun quay",
+    "mock_beach": "🏖️ Swim & Sunset at Sao Beach",
+    "mock_beach_notes": "White sand beach with crystal clear water",
+    "mock_expense_desc": "Goat hotpot night 1"
   },
   "expenses": {
     "not_found": "Expense not found",
     "create_success": "Expense added successfully"
+  },
+  "badges": {
+    "b1_title": "Ultimate Backpacker 🏆",
+    "b1_desc": "Go on more than 5 trips with TripMate",
+    "b2_title": "Paymaster General 💸",
+    "b2_desc": "Selected to pay in the wheel splitter game",
+    "b3_title": "Shinkansen Rider 🚄",
+    "b3_desc": "Have checked in on a Shinkansen train"
+  },
+  "themes": {
+    "theme1": "Kyoto Neon Vaporwave 🌌",
+    "theme2": "Dalat Pine Minimalist 🌲",
+    "theme3": "Cyberpunk Chaos ⚡"
   }
 }

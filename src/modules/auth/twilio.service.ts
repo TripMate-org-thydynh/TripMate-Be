@@ -48,7 +48,9 @@ export class TwilioService {
 
       if (!response.ok) {
         const errText = await response.text();
-        this.logger.error(`Twilio API failed with status ${response.status}: ${errText}`);
+        this.logger.error(
+          `Twilio API failed with status ${response.status}: ${errText}`,
+        );
         return false;
       }
 

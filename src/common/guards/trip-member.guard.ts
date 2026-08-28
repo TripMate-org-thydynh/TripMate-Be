@@ -34,11 +34,11 @@ export class TripMemberGuard implements CanActivate {
     });
 
     if (!member) {
-      throw new NotFoundException('You are not a member of this trip');
+      throw new NotFoundException('errors.auth.notMember');
     }
 
     if (requiredRoles && !requiredRoles.includes(member.role)) {
-      throw new ForbiddenException('Insufficient permissions for this action');
+      throw new ForbiddenException('errors.auth.forbidden');
     }
 
     request.tripMember = member;
