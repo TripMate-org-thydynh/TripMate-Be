@@ -62,15 +62,15 @@ export class AiController {
   }
 
   @Get('saved-prompts')
-  @ApiOperation({ summary: 'Danh sách các câu lệnh mẫu ưa thích' })
-  getSavedPrompts() {
-    return this.aiService.getSavedPrompts();
+  @ApiOperation({ summary: 'Câu lệnh AI gợi ý sẵn (danh mục do team soạn)' })
+  getSuggestedPrompts() {
+    return this.aiService.getSuggestedPrompts();
   }
 
   @Get('generation-queue')
   @ApiOperation({ summary: 'Hàng chờ xử lý/render background bằng AI' })
-  getQueue() {
-    return this.aiService.getGenerationQueue();
+  getQueue(@CurrentUser() user: User) {
+    return this.aiService.getGenerationQueue(user.id);
   }
 
   @Get('trips/:tripId')

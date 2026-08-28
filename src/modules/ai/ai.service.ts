@@ -154,21 +154,6 @@ export class AiService {
     }
   }
 
-  private queueItems: QueueItem[] = [
-    {
-      id: 'q-1',
-      task: 'Tổng hợp video kỷ niệm Kyoto Matsuri 🎥',
-      progress: 65,
-      status: 'PROCESSING',
-    },
-    {
-      id: 'q-2',
-      task: 'Phân tích hóa đơn lẩu gà lá é 💸',
-      progress: 100,
-      status: 'COMPLETED',
-    },
-  ];
-
   private savedPromptsList: SavedPrompt[] = [
     {
       id: 'p-1',
@@ -852,12 +837,46 @@ export class AiService {
     }
   }
 
-  getSavedPrompts() {
+  /**
+   * Câu lệnh gợi ý sẵn để người dùng bấm dùng nhanh.
+   *
+   * App chưa có chỗ lưu prompt riêng của từng người, nên đây là danh mục do
+   * team soạn — không phải "prompt tôi đã lưu" như tên cũ khiến người dùng hiểu
+   * nhầm là mình từng lưu chúng.
+   */
+  getSuggestedPrompts() {
     return this.savedPromptsList;
   }
 
-  getGenerationQueue() {
-    return this.queueItems;
+  /**
+   * Hàng chờ xử lý AI của chính user.
+   *
+   * Trước đây trả về 2 dòng in cứng ("Tổng hợp video kỷ niệm Kyoto Matsuri"
+   * 65%, "Phân tích hóa đơn lẩu gà lá é" 100%) — giống nhau cho mọi tài khoản,
+   * kể cả người chưa từng gọi AI. Nay đọc bảng `ai_requests` thật.
+   */
+  async getGenerationQueue(userId: string) {
+    const rows = await this.prisma.aIRequest.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      select: {
+        id: true,
+        type: true,
+        prompt: true,
+        status: true,
+        createdAt: true,
+      },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      task: r.prompt,
+      type: r.type,
+      status: r.status,
+      // Chỉ có 3 trạng thái thật, không bịa phần trăm dở dang.
+      progress: r.status === 'COMPLETED' ? 100 : r.status === 'FAILED' ? 0 : 50,
+      createdAt: r.createdAt,
+    }));
   }
 
   async scanReceiptImage(receiptUrlOrBase64: string) {
