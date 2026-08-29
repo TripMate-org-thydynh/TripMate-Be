@@ -48,6 +48,14 @@ export class UsersController {
     return this.usersService.getTravelBuddies(user.id);
   }
 
+  @Get('me/widget-feed')
+  @ApiOperation({
+    summary: 'Dữ liệu gọn cho widget màn hình chính (ảnh mới nhất của squad)',
+  })
+  getWidgetFeed(@CurrentUser() user: User) {
+    return this.usersService.getWidgetFeed(user.id);
+  }
+
   @Get('me/moments/recent')
   @ApiOperation({
     summary: 'Kỷ niệm mới nhất trên mọi chuyến của tôi (scrapbook ở màn Home)',

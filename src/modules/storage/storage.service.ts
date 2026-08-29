@@ -162,6 +162,20 @@ export class StorageService {
    * 50×50 trên bản đồ lẫn ảnh xem toàn màn hình. `f_auto,q_auto` cho Cloudinary
    * tự chọn định dạng (WebP/AVIF) và mức nén; thêm `w_` để lấy đúng cỡ cần.
    */
+  /**
+   * Ảnh để hiển thị cho một media bất kỳ.
+   *
+   * Video không vẽ được trong widget, nên lấy khung hình đầu làm ảnh bìa:
+   * Cloudinary trả poster khi đổi đuôi file sang `.jpg`. Ảnh thì chỉ tối ưu.
+   */
+  static posterFor(url: string, type: string, width?: number): string {
+    if (type === 'VIDEO' || type === 'BOOMERANG') {
+      const poster = url.replace(/\.(mp4|mov|webm)$/i, '.jpg');
+      return StorageService.optimized(poster, width);
+    }
+    return StorageService.optimized(url, width);
+  }
+
   static optimized(url: string, width?: number): string {
     if (!url.includes('/upload/')) return url;
     const t = ['f_auto', 'q_auto'];

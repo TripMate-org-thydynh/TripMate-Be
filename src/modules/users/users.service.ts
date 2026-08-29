@@ -4,6 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { I18nContext } from 'nestjs-i18n';
 
@@ -391,6 +392,50 @@ export class UsersService {
   ///
   /// Dùng cho khối "scrapbook" ở màn Home — trước đây khối này hiển thị 2 tấm
   /// polaroid cứng (ảnh Unsplash, tên người bịa) cho mọi tài khoản.
+  /**
+   * Dữ liệu cho widget màn hình chính (kiểu Locket).
+   *
+   * Khác `getRecentMoments` ở ba điểm, vì widget chạy ngoài app và rất hạn chế:
+   *   1. Trả URL **đã tối ưu sẵn** theo cỡ widget — widget native không nên
+   *      phải tự ghép chuỗi biến đổi Cloudinary.
+   *   2. Video trả kèm ảnh bìa (poster) vì widget không phát được video.
+   *   3. Payload gọn hết mức: widget chỉ vẽ ảnh + tên người + tên chuyến.
+   */
+  async getWidgetFeed(userId: string, limit = 5) {
+    const memberships = await this.prisma.tripMember.findMany({
+      where: { userId, trip: { deletedAt: null } },
+      select: { tripId: true },
+    });
+    const tripIds = memberships.map((m) => m.tripId);
+    if (tripIds.length === 0) return { items: [], updatedAt: new Date() };
+
+    const moments = await this.prisma.moment.findMany({
+      where: { tripId: { in: tripIds }, deletedAt: null, isGhost: false },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        user: { select: { id: true, name: true, avatarUrl: true } },
+        trip: { select: { id: true, name: true } },
+      },
+    });
+
+    return {
+      items: moments.map((m) => ({
+        id: m.id,
+        tripId: m.tripId,
+        tripName: m.trip.name,
+        authorName: m.user.name,
+        isMine: m.userId === userId,
+        type: m.type,
+        caption: m.caption,
+        // Widget hiển thị nhỏ nên 600px là đủ; tiết kiệm data cho người dùng.
+        imageUrl: StorageService.posterFor(m.mediaUrl, m.type, 600),
+        createdAt: m.createdAt,
+      })),
+      updatedAt: new Date(),
+    };
+  }
+
   async getRecentMoments(userId: string, limit = 6) {
     const memberships = await this.prisma.tripMember.findMany({
       where: { userId },

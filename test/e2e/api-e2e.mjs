@@ -667,6 +667,47 @@ if (uploadedUrl) {
     thumb.ok, `status=${thumb.status}`);
 }
 
+section('7j. Widget màn hình chính');
+
+const wf = await call('GET', '/users/me/widget-feed', { token: tokenA });
+check('Widget feed trả items + updatedAt',
+  wf.status === 200 && Array.isArray(wf.data?.items) && !!wf.data?.updatedAt,
+  `status=${wf.status}`);
+
+check('Widget feed KHÔNG bịa dữ liệu cho user chưa có chuyến',
+  (await call('GET', '/users/me/widget-feed', { token: tokenC })).data?.items
+    ?.length === 0,
+  'user C chua co chuyen');
+
+const wfItem = (wf.data?.items ?? [])[0];
+check('Mỗi mục có đủ người gửi và tên chuyến để widget hiện ngữ cảnh',
+  !wfItem ||
+    (typeof wfItem.authorName === 'string' &&
+      typeof wfItem.tripName === 'string'),
+  JSON.stringify(wfItem)?.slice(0, 140));
+
+check('URL đã tối ưu sẵn cho widget (không bắt widget tự ghép biến đổi)',
+  !wfItem || wfItem.imageUrl.includes('f_auto'),
+  wfItem?.imageUrl?.slice(-70));
+
+// Video không vẽ được trong widget → phải trả ảnh bìa.
+const vidMoment = await call('POST', `/trips/${tripId}/moments`, {
+  token: tokenA,
+  body: {
+    mediaUrl: 'https://res.cloudinary.com/demo/video/upload/v1/clip.mp4',
+    type: 'VIDEO',
+  },
+});
+check('Tạo được khoảnh khắc dạng VIDEO',
+  vidMoment.status === 201 || vidMoment.status === 200,
+  `status=${vidMoment.status}`);
+
+const wf2 = await call('GET', '/users/me/widget-feed', { token: tokenA });
+const vidItem = (wf2.data?.items ?? []).find((i) => i.type === 'VIDEO');
+check('Video trả ảnh bìa .jpg thay vì file .mp4',
+  !!vidItem && vidItem.imageUrl.endsWith('.jpg'),
+  vidItem?.imageUrl?.slice(-60));
+
 section('8. Dọn dẹp');
 
 const del = await call('DELETE', `/trips/${tripId}`, { token: tokenA });
