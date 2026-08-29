@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ActivitiesService } from '../activities/activities.service';
 import { CreateMomentDto } from './dto/create-moment.dto';
@@ -30,7 +34,9 @@ export class MomentsService {
     });
     // Ghi nhật ký hoạt động để feed squad có dữ liệu — trước đây
     // ActivitiesService.log() không được gọi ở bất kỳ đâu.
-    await this.activities.log(tripId, userId, 'MOMENT_SHARED', { caption: row.caption ?? '' });
+    await this.activities.log(tripId, userId, 'MOMENT_SHARED', {
+      caption: row.caption ?? '',
+    });
     return row;
   }
 
@@ -67,9 +73,47 @@ export class MomentsService {
   }
 
   /** DELETE is protected by ResourceOwnerGuard at controller level. */
+  /**
+   * Sửa caption của khoảnh khắc — chỉ tác giả được sửa.
+   *
+   * Màn AI Memory Sorting trước đây có nút "Approve Sorting" chỉ lật một cờ
+   * trong bộ nhớ rồi hiện snackbar; không có endpoint nào để lưu nên caption
+   * AI gợi ý biến mất ngay khi thoát màn.
+   */
+  async updateCaption(id: string, userId: string, caption: string) {
+    const moment = await this.prisma.moment.findFirst({
+      where: { id, deletedAt: null },
+    });
+    if (!moment) throw new NotFoundException('errors.database.notFound');
+    if (moment.userId !== userId) {
+      throw new ForbiddenException('errors.moments.notAuthor');
+    }
+    return this.prisma.moment.update({
+      where: { id },
+      data: { caption },
+    });
+  }
+
+  /**
+   * Xoá mềm khoảnh khắc.
+   *
+   * `userId` trước đây được nhận nhưng không dùng — nghĩa là bất kỳ thành viên
+   * nào trong chuyến cũng xoá được ảnh của người khác. Nay chỉ tác giả, hoặc
+   * người tạo chuyến (để kiểm duyệt), mới xoá được.
+   */
   async delete(id: string, userId: string) {
     const moment = await this.prisma.moment.findUnique({ where: { id } });
     if (!moment) throw new NotFoundException('errors.database.notFound');
+
+    if (moment.userId !== userId) {
+      const membership = await this.prisma.tripMember.findFirst({
+        where: { tripId: moment.tripId, userId, role: 'CREATOR' },
+      });
+      if (!membership) {
+        throw new ForbiddenException('errors.moments.cannotDelete');
+      }
+    }
+
     return this.prisma.moment.update({
       where: { id },
       data: { deletedAt: new Date() },

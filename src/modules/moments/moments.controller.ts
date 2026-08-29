@@ -6,6 +6,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -57,6 +58,16 @@ export class MomentsController {
 
   @UseGuards(ResourceOwnerGuard)
   @OwnedResource('moment', 'id')
+  @Patch(':id')
+  @ApiOperation({ summary: 'Sửa caption khoảnh khắc (chỉ tác giả)' })
+  updateCaption(
+    @Param('id') id: string,
+    @CurrentUser() user: User,
+    @Body('caption') caption: string,
+  ) {
+    return this.momentsService.updateCaption(id, user.id, caption);
+  }
+
   @Delete(':id')
   @ApiOperation({ summary: 'Xóa khoảnh khắc' })
   delete(@Param('id') id: string, @CurrentUser() user: User) {

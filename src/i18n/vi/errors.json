@@ -35,5 +35,9 @@
   },
   "ai": {
     "unavailable": "AI đang bận hoặc chưa sẵn sàng. Thử lại sau ít phút nha! 🤖"
+  },
+  "moments": {
+    "notAuthor": "Chỉ người đăng mới sửa được khoảnh khắc này.",
+    "cannotDelete": "Chỉ người đăng hoặc người tạo chuyến mới xoá được khoảnh khắc này."
   }
 }

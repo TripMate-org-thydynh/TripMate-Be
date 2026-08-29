@@ -400,6 +400,37 @@ check('Vào lại vẫn còn ô đã tick',
   JSON.stringify(savedBingo?.stateJson?.marked) === '[0,4,8]',
   JSON.stringify(savedBingo?.stateJson));
 
+section('7g. Caption khoảnh khắc');
+
+const capMoment = await call('POST', `/trips/${tripId}/moments`, {
+  token: tokenA,
+  body: { mediaUrl: 'https://example.test/e2e.jpg', type: 'PHOTO' },
+});
+check('Tạo khoảnh khắc để thử caption',
+  capMoment.status === 201 || capMoment.status === 200,
+  `status=${capMoment.status}`);
+
+const capOk = await call('PATCH', `/trips/${tripId}/moments/${capMoment.data?.id}`, {
+  token: tokenA,
+  body: { caption: 'Caption do AI đặt' },
+});
+check('Tác giả sửa được caption', capOk.status === 200, `status=${capOk.status}`);
+check('Caption đã lưu thật', capOk.data?.caption === 'Caption do AI đặt',
+  JSON.stringify(capOk.data?.caption));
+
+const capDenied = await call('PATCH', `/trips/${tripId}/moments/${capMoment.data?.id}`, {
+  token: tokenB,
+  body: { caption: 'Người khác sửa' },
+});
+check('Người khác KHÔNG sửa được caption', capDenied.status === 403,
+  `status=${capDenied.status}`);
+
+const delDenied = await call('DELETE', `/trips/${tripId}/moments/${capMoment.data?.id}`, {
+  token: tokenB,
+});
+check('Người khác KHÔNG xoá được khoảnh khắc', delDenied.status === 403,
+  `status=${delDenied.status}`);
+
 section('7f. Tổng kết chuyến & bạn đồng hành');
 
 const recap = await call('GET', `/trips/${tripId}/recap`, { token: tokenA });
