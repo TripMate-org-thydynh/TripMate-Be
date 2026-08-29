@@ -60,7 +60,13 @@ export class JournalService {
     });
     // Ghi nhật ký hoạt động để feed squad có dữ liệu — trước đây
     // ActivitiesService.log() không được gọi ở bất kỳ đâu.
-    await this.activities.log(tripId, userId, 'JOURNAL_WRITTEN', { title: row.title ?? '' });
+    await this.activities.log(
+      tripId,
+      userId,
+      'JOURNAL_WRITTEN',
+      { title: row.title ?? '' },
+      row.id,
+    );
     return row;
   }
 

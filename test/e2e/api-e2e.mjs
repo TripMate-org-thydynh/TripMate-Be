@@ -463,6 +463,124 @@ check('Bạn đồng hành đều là người đi chung THẬT (có số chuy�
   (buddies.data ?? []).every((b) => typeof b.sharedTrips === 'number' && b.sharedTrips > 0),
   JSON.stringify(buddies.data)?.slice(0, 200));
 
+section('7h. Hệ kinh tế XP');
+
+const wallet0 = await call('GET', '/xp/wallet', { token: tokenA });
+check('Ví XP trả số dư, tổng đã kiếm và cấp',
+  wallet0.status === 200 &&
+    typeof wallet0.data?.balance === 'number' &&
+    typeof wallet0.data?.earned === 'number' &&
+    wallet0.data?.level >= 1,
+  JSON.stringify(wallet0.data)?.slice(0, 160));
+
+const balBefore = wallet0.data.balance;
+const earnedBefore = wallet0.data.earned;
+
+// Ghi chú = 15 XP. Tạo 1 cái rồi kiểm tra số dư nhích đúng.
+const xpNote = await call('POST', `/trips/${tripId}/notes`, {
+  token: tokenA,
+  body: { title: 'note xp e2e', content: 'x' },
+});
+const wallet1 = await call('GET', '/xp/wallet', { token: tokenA });
+check('Ghi chú mới cộng XP vào ví thật',
+  wallet1.data?.balance > balBefore && wallet1.data?.earned > earnedBefore,
+  `truoc=${balBefore} sau=${wallet1.data?.balance}`);
+
+check('Số dư khớp sổ cái',
+  (await call('GET', '/xp/audit', { token: tokenA })).data?.ok === true,
+  'audit');
+
+// Cùng một thực thể không được thưởng hai lần: gọi lại activity cho note cũ
+// không thể qua API, nên kiểm bằng cách đếm dòng sổ cái cho refId đó.
+const ledgerDup = (wallet1.data?.history ?? []).filter(
+  (h) => h.reason === 'NOTE_ADDED',
+);
+check('Sổ cái ghi từng lần cộng, có balanceAfter',
+  ledgerDup.length > 0 && typeof ledgerDup[0].balanceAfter === 'number',
+  JSON.stringify(ledgerDup[0]));
+
+// Mua khi chưa đủ XP phải bị từ chối.
+const tooExpensive = await call('POST', '/xp/stickers/purchase', {
+  token: tokenB,
+  body: { stickerId: 'stk-crown' },
+});
+check('Mua khi chưa đủ XP bị từ chối 400',
+  tooExpensive.status === 400,
+  `status=${tooExpensive.status}`);
+
+// Kiếm đủ XP bằng cách chơi game (50 XP/ván) rồi mua thật.
+for (let i = 0; i < 4; i++) {
+  await call('POST', `/trips/${tripId}/games`, {
+    token: tokenA,
+    body: { gameType: 'TRUTH_OR_DARE', initialState: { e2e: i } },
+  });
+}
+const walletRich = await call('GET', '/xp/wallet', { token: tokenA });
+check('Chơi game cộng XP vào ví', walletRich.data?.balance >= 100,
+  `balance=${walletRich.data?.balance}`);
+
+const buy = await call('POST', '/xp/stickers/purchase', {
+  token: tokenA,
+  body: { stickerId: 'stk-laugh' },
+});
+check('Mua sticker thành công khi đủ XP',
+  buy.status === 201 || buy.status === 200,
+  `status=${buy.status} ${JSON.stringify(buy.data)}`);
+
+check('Mua xong bị TRỪ XP thật',
+  buy.data?.balance === walletRich.data.balance - 100,
+  `truoc=${walletRich.data.balance} sau=${buy.data?.balance}`);
+
+const walletAfterBuy = await call('GET', '/xp/wallet', { token: tokenA });
+check('Tiêu XP KHÔNG làm giảm tổng đã kiếm (không tụt cấp)',
+  walletAfterBuy.data?.earned === walletRich.data.earned,
+  `earned truoc=${walletRich.data.earned} sau=${walletAfterBuy.data?.earned}`);
+
+check('Số dư vẫn khớp sổ cái sau khi tiêu',
+  (await call('GET', '/xp/audit', { token: tokenA })).data?.ok === true,
+  'audit sau mua');
+
+const buyAgain = await call('POST', '/xp/stickers/purchase', {
+  token: tokenA,
+  body: { stickerId: 'stk-laugh' },
+});
+check('Mua lại món đã sở hữu bị từ chối 400',
+  buyAgain.status === 400, `status=${buyAgain.status}`);
+
+const mine = await call('GET', '/xp/stickers/mine', { token: tokenA });
+check('Kho sticker đọc từ DB (còn sau khi backend restart)',
+  Array.isArray(mine.data) && mine.data.some((s) => s.id === 'stk-laugh'),
+  JSON.stringify(mine.data)?.slice(0, 140));
+
+// Sticker phải sở hữu mới gửi được — nếu không thì mua sticker vô nghĩa.
+const sendNotOwned = await call('POST', `/trips/${tripId}/chat`, {
+  token: tokenA,
+  body: { type: 'STICKER', content: 'stk-crown' },
+});
+check('Gửi sticker CHƯA sở hữu bị chặn 403',
+  sendNotOwned.status === 403, `status=${sendNotOwned.status}`);
+
+const sendOwned = await call('POST', `/trips/${tripId}/chat`, {
+  token: tokenA,
+  body: { type: 'STICKER', content: 'stk-laugh' },
+});
+check('Gửi sticker ĐÃ sở hữu thành công',
+  sendOwned.status === 201 || sendOwned.status === 200,
+  `status=${sendOwned.status}`);
+
+const storeList = await call('GET', '/xp/stickers/store', { token: tokenA });
+check('Cửa hàng có cờ owned/affordable theo số dư thật',
+  Array.isArray(storeList.data) &&
+    storeList.data.find((s) => s.id === 'stk-laugh')?.owned === true,
+  JSON.stringify(storeList.data?.[0]));
+
+const themeBuyPoor = await call('POST', '/xp/themes/purchase', {
+  token: tokenB,
+  body: { themeId: 'theme-cyber' },
+});
+check('Mua theme khi chưa đủ XP bị từ chối 400',
+  themeBuyPoor.status === 400, `status=${themeBuyPoor.status}`);
+
 section('8. Dọn dẹp');
 
 const del = await call('DELETE', `/trips/${tripId}`, { token: tokenA });

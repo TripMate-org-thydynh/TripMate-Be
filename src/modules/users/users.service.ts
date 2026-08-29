@@ -13,7 +13,6 @@ export class UsersService {
 
   // Mock databases
   private userBadges: Record<string, any[]> = {};
-  private stickerInventory: Record<string, any[]> = {};
   private socialLinks: Record<string, any> = {};
   private userFollowers: Record<string, string[]> = {};
 
@@ -183,95 +182,10 @@ export class UsersService {
     ];
 
     // Giữ nguyên khoá `unlockedAt` để client cũ không vỡ; null = chưa đạt.
-    return badges.map((b) => ({ ...b, unlockedAt: b.unlocked ? new Date() : null }));
-  }
-
-  async getThemeMarketplace() {
-    const i18n = I18nContext.current();
-    return [
-      {
-        id: 'theme-1',
-        name: i18n ? i18n.t('common.themes.theme1') : 'Kyoto Neon Vaporwave 🌌',
-        priceXP: 500,
-        previewUrl: 'assets/themes/kyoto.jpg',
-      },
-      {
-        id: 'theme-2',
-        name: i18n
-          ? i18n.t('common.themes.theme2')
-          : 'Dalat Pine Minimalist 🌲',
-        priceXP: 300,
-        previewUrl: 'assets/themes/dalat.jpg',
-      },
-      {
-        id: 'theme-3',
-        name: i18n ? i18n.t('common.themes.theme3') : 'Cyberpunk Chaos ⚡',
-        priceXP: 1000,
-        previewUrl: 'assets/themes/cyber.jpg',
-      },
-    ];
-  }
-
-  async getStickerStore() {
-    return [
-      {
-        id: 'stk-1',
-        label: 'Cười ra nước mắt 😂',
-        costXP: 100,
-        assetUrl: 'assets/stickers/laugh.png',
-      },
-      {
-        id: 'stk-2',
-        label: 'Cà khịa hết nấc 😜',
-        costXP: 200,
-        assetUrl: 'assets/stickers/roast.png',
-      },
-      {
-        id: 'stk-3',
-        label: 'Mệt mỏi vì tiền 💸',
-        costXP: 150,
-        assetUrl: 'assets/stickers/poor.png',
-      },
-      {
-        id: 'stk-4',
-        label: 'Đang bay lắc 🚀',
-        costXP: 180,
-        assetUrl: 'assets/stickers/party.png',
-      },
-    ];
-  }
-
-  async getStickersInventory(userId: string) {
-    if (!this.stickerInventory[userId]) {
-      this.stickerInventory[userId] = [
-        { id: 'stk-1', label: 'Cười ra nước mắt 😂', count: 5 },
-      ];
-    }
-    return this.stickerInventory[userId];
-  }
-
-  async purchaseSticker(userId: string, stickerId: string) {
-    const store = await this.getStickerStore();
-    const item = store.find((s) => s.id === stickerId);
-    if (!item) throw new NotFoundException('Sticker not found in store');
-
-    if (!this.stickerInventory[userId]) {
-      this.stickerInventory[userId] = [];
-    }
-
-    const current = this.stickerInventory[userId].find(
-      (s) => s.id === stickerId,
-    );
-    if (current) {
-      current.count += 1;
-    } else {
-      this.stickerInventory[userId].push({
-        id: stickerId,
-        label: item.label,
-        count: 1,
-      });
-    }
-    return { success: true, inventory: this.stickerInventory[userId] };
+    return badges.map((b) => ({
+      ...b,
+      unlockedAt: b.unlocked ? new Date() : null,
+    }));
   }
 
   async getFollowers(userId: string) {
@@ -367,7 +281,10 @@ export class UsersService {
     });
     if (splits.length === 0) return empty;
 
-    const totalAmount = splits.reduce((sum, s) => sum + Number(s.shareAmount), 0);
+    const totalAmount = splits.reduce(
+      (sum, s) => sum + Number(s.shareAmount),
+      0,
+    );
     const paidCount = splits.filter((s) => s.isPaid).length;
 
     // Ai đang nợ nhiều nhất (tổng phần chưa trả).

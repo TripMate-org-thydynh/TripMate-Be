@@ -94,10 +94,16 @@ export class ExpensesService {
     await this.evictCache(tripId);
     // Ghi nhật ký hoạt động để feed squad có dữ liệu — trước đây
     // ActivitiesService.log() không được gọi ở bất kỳ đâu.
-    await this.activities.log(tripId, dto.paidById, 'EXPENSE_ADDED', {
-      amount: Number(dto.amount),
-      description: dto.description ?? null,
-    });
+    await this.activities.log(
+      tripId,
+      dto.paidById,
+      'EXPENSE_ADDED',
+      {
+        amount: Number(dto.amount),
+        description: dto.description ?? null,
+      },
+      expense.id,
+    );
     return expense;
   }
 

@@ -37,10 +37,16 @@ export class ItinerariesService {
     // Ghi nhật ký hoạt động để feed squad (marquee, Live Updates, Daily Recap)
     // có dữ liệu. Trước đây ActivitiesService.log() không nơi nào gọi.
     if (userId) {
-      await this.activities.log(tripId, userId, 'ITINERARY_ADDED', {
-        placeName: item.placeName,
-        day: item.day,
-      });
+      await this.activities.log(
+        tripId,
+        userId,
+        'ITINERARY_ADDED',
+        {
+          placeName: item.placeName,
+          day: item.day,
+        },
+        item.id,
+      );
     }
     await this.evictCache(tripId);
     return item;

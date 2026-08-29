@@ -34,9 +34,13 @@ export class MomentsService {
     });
     // Ghi nhật ký hoạt động để feed squad có dữ liệu — trước đây
     // ActivitiesService.log() không được gọi ở bất kỳ đâu.
-    await this.activities.log(tripId, userId, 'MOMENT_SHARED', {
-      caption: row.caption ?? '',
-    });
+    await this.activities.log(
+      tripId,
+      userId,
+      'MOMENT_SHARED',
+      { caption: row.caption ?? '' },
+      row.id,
+    );
     return row;
   }
 

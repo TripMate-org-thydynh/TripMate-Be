@@ -36,7 +36,13 @@ export class PollsService {
     });
     // Ghi nhật ký hoạt động để feed squad có dữ liệu — trước đây
     // ActivitiesService.log() không được gọi ở bất kỳ đâu.
-    await this.activities.log(tripId, createdBy, 'POLL_CREATED', { question: row.question });
+    await this.activities.log(
+      tripId,
+      createdBy,
+      'POLL_CREATED',
+      { question: row.question },
+      row.id,
+    );
     return row;
   }
 

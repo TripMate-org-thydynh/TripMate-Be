@@ -8,6 +8,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import type { User } from '@prisma/client';
 import { GamesService } from './games.service';
 import { CreateGameSessionDto, UpdateGameStateDto } from './dto/game.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -22,8 +24,17 @@ export class GamesController {
 
   @Post()
   @ApiOperation({ summary: 'Bắt đầu game session mới' })
-  create(@Param('tripId') tripId: string, @Body() dto: CreateGameSessionDto) {
-    return this.gamesService.create(tripId, dto.gameType, dto.initialState);
+  create(
+    @Param('tripId') tripId: string,
+    @CurrentUser() user: User,
+    @Body() dto: CreateGameSessionDto,
+  ) {
+    return this.gamesService.create(
+      tripId,
+      dto.gameType,
+      dto.initialState,
+      user.id,
+    );
   }
 
   @Get()

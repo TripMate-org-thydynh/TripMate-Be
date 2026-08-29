@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { UsersService } from './users.service';
+import { StoreService } from '../xp/store.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdatePresenceDto } from './dto/update-presence.dto';
@@ -22,7 +23,10 @@ import { UpdateSocialsDto } from './dto/update-socials.dto';
 @ApiBearerAuth('JWT')
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly store: StoreService,
+  ) {}
 
   @Get('me')
   @ApiOperation({ summary: 'Lấy profile hiện tại' })
@@ -102,28 +106,30 @@ export class UsersController {
     return this.usersService.getBadges(user.id);
   }
 
+  // Bốn route dưới giữ nguyên đường dẫn cho app cũ, nhưng nay chạy trên
+  // StoreService: trừ XP thật và lưu vào bảng, thay vì miễn phí + để trong RAM.
   @Get('theme-marketplace')
   @ApiOperation({ summary: 'Xem chợ chủ đề hình nền app' })
-  getThemes() {
-    return this.usersService.getThemeMarketplace();
+  getThemes(@CurrentUser() user: User) {
+    return this.store.getThemeMarketplace(user.id);
   }
 
   @Get('sticker-store')
   @ApiOperation({ summary: 'Xem cửa hàng Sticker biểu cảm' })
-  getStickers() {
-    return this.usersService.getStickerStore();
+  getStickers(@CurrentUser() user: User) {
+    return this.store.getStickerStore(user.id);
   }
 
   @Get('me/stickers')
   @ApiOperation({ summary: 'Kho sticker cá nhân sở hữu' })
   getMyStickers(@CurrentUser() user: User) {
-    return this.usersService.getStickersInventory(user.id);
+    return this.store.getMyStickers(user.id);
   }
 
   @Post('me/stickers/purchase')
   @ApiOperation({ summary: 'Mua sticker bằng điểm thưởng' })
   buySticker(@CurrentUser() user: User, @Body('stickerId') stickerId: string) {
-    return this.usersService.purchaseSticker(user.id, stickerId);
+    return this.store.purchaseSticker(user.id, stickerId);
   }
 
   @Get('me/followers')

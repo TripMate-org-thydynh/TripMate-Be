@@ -38,7 +38,13 @@ export class DocumentsService {
     });
     // Ghi nhật ký hoạt động để feed squad có dữ liệu — trước đây
     // ActivitiesService.log() không được gọi ở bất kỳ đâu.
-    await this.activities.log(tripId, userId, 'DOCUMENT_UPLOADED', { name: row.name });
+    await this.activities.log(
+      tripId,
+      userId,
+      'DOCUMENT_UPLOADED',
+      { name: row.name },
+      row.id,
+    );
     return row;
   }
 

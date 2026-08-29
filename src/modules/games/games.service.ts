@@ -1,15 +1,54 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { GameType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { XpService } from '../xp/xp.service';
 
 @Injectable()
 export class GamesService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(GamesService.name);
 
-  async create(tripId: string, gameType: GameType, initialState: object) {
-    return this.prisma.gameSession.create({
+  constructor(
+    private prisma: PrismaService,
+    private xp: XpService,
+  ) {}
+
+  /**
+   * Ghi một ván chơi và cộng XP cho người chơi.
+   *
+   * [userId] có thể thiếu ở các lời gọi cũ — khi đó chỉ ghi ván, không cộng.
+   * `initialState.xpReward` cho phép mỗi thử thách có mức thưởng riêng (dare
+   * dao động 80–300 XP); không có thì dùng mức mặc định của GAME_PLAYED.
+   */
+  async create(
+    tripId: string,
+    gameType: GameType,
+    initialState: object,
+    userId?: string,
+  ) {
+    const session = await this.prisma.gameSession.create({
       data: { tripId, gameType, stateJson: initialState, isActive: true },
     });
+
+    if (userId) {
+      const reward = (initialState as { xpReward?: unknown })?.xpReward;
+      const amount =
+        typeof reward === 'number' && reward > 0 && reward <= 500
+          ? reward
+          : undefined;
+      try {
+        await this.xp.award(userId, 'GAME_PLAYED', {
+          refId: session.id,
+          tripId,
+          amount,
+        });
+      } catch (e) {
+        this.logger.error(
+          `Cộng XP ván chơi thất bại: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+
+    return session;
   }
 
   async findAll(tripId: string) {

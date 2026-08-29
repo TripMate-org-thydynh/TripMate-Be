@@ -23,6 +23,11 @@ model User {
   isLocked         Boolean              @default(false) @map("is_locked")
   travelScore      Int                  @default(0) @map("travel_score")
   chaosScore       Int                  @default(0) @map("chaos_score")
+  /// Số XP còn tiêu được. Giảm khi mua sticker/theme.
+  xpBalance        Int                  @default(0) @map("xp_balance")
+  /// Tổng XP đã kiếm trong đời. KHÔNG giảm khi tiêu — dùng để tính cấp,
+  /// nên mua đồ không bao giờ làm tụt cấp.
+  xpEarned         Int                  @default(0) @map("xp_earned")
   createdAt        DateTime             @default(now()) @map("created_at")
   updatedAt        DateTime             @updatedAt @map("updated_at")
   deletedAt        DateTime?            @map("deleted_at")
@@ -53,6 +58,9 @@ model User {
   packingAssigned  PackingItem[]        @relation("PackingAssignee")
   bucketItems      BucketItem[]
   reservations     Reservation[]
+  xpLedger         XpLedger[]
+  stickersOwned    UserSticker[]
+  themesOwned      UserTheme[]
   todosAdded       TodoItem[]           @relation("TodoAddedBy")
   todosAssigned    TodoItem[]           @relation("TodoAssignee")
   invitesCreated   TripInvite[]
@@ -518,11 +526,13 @@ model PaymentCard {
 
 model UserWallet {
   userId           String   @id @map("user_id") @db.Uuid
-  balanceMomo      Decimal  @default(2500000.0) @map("balance_momo") @db.Decimal(12, 2)
-  balanceZalo      Decimal  @default(1200000.0) @map("balance_zalo") @db.Decimal(12, 2)
-  balanceCash      Decimal  @default(500000.0) @map("balance_cash") @db.Decimal(12, 2)
-  linkedBanksCount Int      @default(2) @map("linked_banks_count")
-  creditCardsCount Int      @default(1) @map("credit_cards_count")
+  /// Mặc định 0. Trước đây mặc định 2.500.000 / 1.200.000 / 500.000 nên mọi
+  /// tài khoản mới đều "có sẵn" 4,2 triệu chưa từng nạp.
+  balanceMomo      Decimal  @default(0) @map("balance_momo") @db.Decimal(12, 2)
+  balanceZalo      Decimal  @default(0) @map("balance_zalo") @db.Decimal(12, 2)
+  balanceCash      Decimal  @default(0) @map("balance_cash") @db.Decimal(12, 2)
+  linkedBanksCount Int      @default(0) @map("linked_banks_count")
+  creditCardsCount Int      @default(0) @map("credit_cards_count")
   updatedAt        DateTime @updatedAt @map("updated_at")
   user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -885,3 +895,72 @@ model SystemConfig {
   @@map("system_configs")
 }
 
+
+
+/// Sổ cái XP — mỗi dòng là một lần cộng hoặc trừ.
+///
+/// Số dư ở `users.xp_balance` là kết quả cộng dồn của bảng này. Giữ sổ cái để:
+///   1. chống cộng trùng (unique userId+reason+refId),
+///   2. tra được vì sao số dư ra con số đó khi người dùng thắc mắc,
+///   3. dựng lại số dư nếu có sự cố.
+model XpLedger {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  /// Dương = kiếm được, âm = đã tiêu.
+  delta        Int
+  reason       XpReason
+  /// Id của thực thể sinh ra XP (moment, expense...). Cùng một thực thể chỉ
+  /// được thưởng đúng một lần.
+  refId        String?  @map("ref_id")
+  tripId       String?  @map("trip_id") @db.Uuid
+  /// Số dư ngay sau giao dịch — để đối chiếu khi cần soát.
+  balanceAfter Int      @map("balance_after")
+  createdAt    DateTime @default(now()) @map("created_at")
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, reason, refId])
+  @@index([userId, createdAt])
+  @@index([userId, reason, createdAt])
+  @@map("xp_ledger")
+}
+
+enum XpReason {
+  MOMENT_SHARED
+  EXPENSE_ADDED
+  ITINERARY_ADDED
+  NOTE_ADDED
+  JOURNAL_WRITTEN
+  POLL_CREATED
+  DOCUMENT_UPLOADED
+  GAME_PLAYED
+  STICKER_PURCHASE
+  THEME_PURCHASE
+  ADMIN_ADJUST
+}
+
+/// Sticker một người đã sở hữu. Sở hữu là nhị phân — mua rồi thì dùng bao nhiêu
+/// lần cũng được, nên không đếm số lượng.
+model UserSticker {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  stickerId  String   @map("sticker_id")
+  acquiredAt DateTime @default(now()) @map("acquired_at")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, stickerId])
+  @@index([userId])
+  @@map("user_stickers")
+}
+
+/// Theme một người đã mở khoá.
+model UserTheme {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  themeId    String   @map("theme_id")
+  acquiredAt DateTime @default(now()) @map("acquired_at")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, themeId])
+  @@index([userId])
+  @@map("user_themes")
+}

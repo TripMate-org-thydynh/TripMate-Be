@@ -39,5 +39,16 @@
   "moments": {
     "notAuthor": "Chỉ người đăng mới sửa được khoảnh khắc này.",
     "cannotDelete": "Chỉ người đăng hoặc người tạo chuyến mới xoá được khoảnh khắc này."
+  },
+  "xp": {
+    "notEnough": "Bạn chưa đủ XP để đổi món này. Đăng ảnh, ghi chi tiêu hay chơi game để kiếm thêm nha!",
+    "invalidAmount": "Số XP không hợp lệ."
+  },
+  "store": {
+    "stickerNotFound": "Sticker này không còn trong cửa hàng.",
+    "themeNotFound": "Theme này không còn trong chợ.",
+    "alreadyOwned": "Bạn đã sở hữu món này rồi.",
+    "stickerRequired": "Thiếu mã sticker.",
+    "stickerNotOwned": "Bạn chưa sở hữu sticker này. Ghé cửa hàng đổi bằng XP nha!"
   }
 }
