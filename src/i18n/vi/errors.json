@@ -50,5 +50,10 @@
     "alreadyOwned": "Bạn đã sở hữu món này rồi.",
     "stickerRequired": "Thiếu mã sticker.",
     "stickerNotOwned": "Bạn chưa sở hữu sticker này. Ghé cửa hàng đổi bằng XP nha!"
+  },
+  "storage": {
+    "notConfigured": "Chức năng tải ảnh chưa được cấu hình. Báo admin giúp mình nha!",
+    "typeNotAllowed": "Định dạng file này không được hỗ trợ.",
+    "tooLarge": "File quá lớn. Thử ảnh nhẹ hơn nha!"
   }
 }

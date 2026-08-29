@@ -581,6 +581,92 @@ const themeBuyPoor = await call('POST', '/xp/themes/purchase', {
 check('Mua theme khi chưa đủ XP bị từ chối 400',
   themeBuyPoor.status === 400, `status=${themeBuyPoor.status}`);
 
+section('7i. Tải ảnh lên (Cloudinary)');
+
+// tokenC (mục 6) là user chưa tham gia chuyến nào — dùng để thử phân quyền.
+
+const badType = await call('POST', `/trips/${tripId}/storage/upload-ticket`, {
+  token: tokenA,
+  body: { contentType: 'application/x-msdownload' },
+});
+check('Từ chối loại file không cho phép', badType.status === 400,
+  `status=${badType.status}`);
+
+const tooBig = await call('POST', `/trips/${tripId}/storage/upload-ticket`, {
+  token: tokenA,
+  body: { contentType: 'image/jpeg', sizeBytes: 50 * 1024 * 1024 },
+});
+check('Từ chối ảnh quá lớn', tooBig.status === 400, `status=${tooBig.status}`);
+
+const ticket = await call('POST', `/trips/${tripId}/storage/upload-ticket`, {
+  token: tokenA,
+  body: { contentType: 'image/png', sizeBytes: 2048 },
+});
+check('Cấp vé tải lên có chữ ký',
+  (ticket.status === 201 || ticket.status === 200) &&
+    typeof ticket.data?.uploadUrl === 'string' &&
+    typeof ticket.data?.fields?.signature === 'string',
+  `status=${ticket.status}`);
+
+check('Vé KHÔNG chứa API secret',
+  !JSON.stringify(ticket.data ?? {}).includes('api_secret'),
+  'kiem tra ro ri secret');
+
+// Người ngoài chuyến không xin được vé.
+const outsider = await call('POST', `/trips/${tripId}/storage/upload-ticket`, {
+  token: tokenC,
+  body: { contentType: 'image/png' },
+});
+check('Người ngoài chuyến KHÔNG xin được vé tải lên',
+  outsider.status === 403 || outsider.status === 404,
+  `status=${outsider.status}`);
+
+// Tải một ảnh PNG 1x1 thật lên Cloudinary bằng chính vé vừa cấp.
+let uploadedUrl = null;
+if (ticket.data?.uploadUrl) {
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  const fd = new FormData();
+  for (const [k, v] of Object.entries(ticket.data.fields)) fd.append(k, v);
+  fd.append('file', new Blob([png], { type: 'image/png' }), 'e2e.png');
+  const up = await fetch(ticket.data.uploadUrl, { method: 'POST', body: fd });
+  const body = await up.json().catch(() => ({}));
+  uploadedUrl = body?.secure_url ?? null;
+  check('Tải ảnh THẬT lên Cloudinary thành công',
+    up.ok && typeof uploadedUrl === 'string',
+    `status=${up.status} ${JSON.stringify(body)?.slice(0, 140)}`);
+}
+
+if (uploadedUrl) {
+  const confirmed = await call('POST', `/trips/${tripId}/storage/confirm`, {
+    token: tokenA,
+    body: { url: uploadedUrl, contentType: 'image/png', sizeBytes: 70 },
+  });
+  check('Ghi được vào bảng media',
+    (confirmed.status === 201 || confirmed.status === 200) &&
+      confirmed.data?.type === 'IMAGE',
+    `status=${confirmed.status}`);
+
+  const realMoment = await call('POST', `/trips/${tripId}/moments`, {
+    token: tokenA,
+    body: { mediaUrl: uploadedUrl, type: 'PHOTO', caption: 'e2e upload' },
+  });
+  check('Tạo khoảnh khắc từ ảnh vừa tải lên',
+    realMoment.status === 201 || realMoment.status === 200,
+    `status=${realMoment.status}`);
+
+  // URL biến đổi — lý do chọn Cloudinary: một ảnh gốc ra mọi kích thước.
+  const thumbUrl = uploadedUrl.replace(
+    '/upload/',
+    '/upload/f_auto,q_auto,w_200,c_limit/',
+  );
+  const thumb = await fetch(thumbUrl);
+  check('URL thumbnail 200px tải được (không cần upload lại)',
+    thumb.ok, `status=${thumb.status}`);
+}
+
 section('8. Dọn dẹp');
 
 const del = await call('DELETE', `/trips/${tripId}`, { token: tokenA });

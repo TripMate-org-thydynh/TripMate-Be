@@ -14,6 +14,7 @@ import {
 import { envValidationSchema } from './common/config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
 import { XpModule } from './modules/xp/xp.module';
+import { StorageModule } from './modules/storage/storage.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { TripsModule } from './modules/trips/trips.module';
@@ -136,6 +137,7 @@ import { AppService } from './app.service';
     ExpensesModule,
     MomentsModule,
     XpModule,
+    StorageModule,
     GamesModule,
     ChatModule,
     PollsModule,
