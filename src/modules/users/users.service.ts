@@ -459,6 +459,10 @@ export class UsersService {
       tripId: m.tripId,
       tripName: m.trip.name,
       mediaUrl: m.mediaUrl,
+      type: m.type,
+      // Video khong hien duoc bang widget anh — tra kem anh bia de scrapbook
+      // ve duoc. Truoc day moment VIDEO ra o "Khong the tai anh".
+      posterUrl: StorageService.posterFor(m.mediaUrl, m.type, 600),
       caption: m.caption,
       authorName: m.user.name,
       authorAvatarUrl: m.user.avatarUrl,
