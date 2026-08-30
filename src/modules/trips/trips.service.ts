@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 import { CreateTripDto } from './dto/create-trip.dto';
 import { UpdateTripDto } from './dto/update-trip.dto';
 import { JoinTripDto } from './dto/join-trip.dto';
@@ -219,8 +220,16 @@ export class TripsService {
     if (!trip) throw new NotFoundException('errors.trips.notFound');
 
     const userIds = trip.members.map((m) => m.userId);
-    const [places, momentCount, expenses, moments, expenseRows, plans, notes] =
-      await Promise.all([
+    const [
+      places,
+      momentCount,
+      expenses,
+      moments,
+      recentMoments,
+      expenseRows,
+      plans,
+      notes,
+    ] = await Promise.all([
         this.prisma.itineraryItem.count({ where: { tripId } }),
         this.prisma.moment.count({ where: { tripId, deletedAt: null } }),
         this.prisma.expense.aggregate({
@@ -232,6 +241,15 @@ export class TripsService {
           by: ['userId'],
           where: { tripId, deletedAt: null, userId: { in: userIds } },
           _count: { _all: true },
+        }),
+        this.prisma.moment.findMany({
+          where: { tripId, deletedAt: null },
+          include: {
+            user: { select: { id: true, name: true, avatarUrl: true } },
+            _count: { select: { reactions: true, comments: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 8,
         }),
         this.prisma.expense.groupBy({
           by: ['paidById'],
@@ -281,15 +299,33 @@ export class TripsService {
       tripId,
       tripName: trip.name,
       destination: trip.destination,
+      coverImage: trip.coverImage,
       startDate: trip.startDate,
       endDate: trip.endDate,
       days: days > 0 ? days : 1,
       memberCount: trip.members.length,
+      members: trip.members.map((m) => ({
+        id: m.userId,
+        name: m.user.name,
+        avatarUrl: m.user.avatarUrl,
+      })),
       placeCount: places,
       momentCount,
       expenseCount: expenses._count._all,
       totalSpent: Number(expenses._sum.amount ?? 0),
       currency: trip.currency,
+      moments: recentMoments.map((m) => ({
+        id: m.id,
+        mediaUrl: m.mediaUrl,
+        posterUrl: StorageService.posterFor(m.mediaUrl, m.type, 900),
+        type: m.type,
+        caption: m.caption,
+        authorName: m.user.name,
+        authorAvatarUrl: m.user.avatarUrl,
+        reactionCount: m._count.reactions,
+        commentCount: m._count.comments,
+        createdAt: m.createdAt,
+      })),
       // null khi cả nhóm chưa đóng góp gì — client hiện trạng thái rỗng.
       mvp: mvp && mvp.xp > 0 ? mvp : null,
       hasData: places + momentCount + expenses._count._all > 0,
