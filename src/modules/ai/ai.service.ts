@@ -840,7 +840,7 @@ export class AiService {
         Generate a recommended 2-item timeline for a day of their trip based on the trip details.
         
         Trip Name: "${trip.name}"
-        Trip Destination/Description: "${trip.description || 'No description provided'}"
+        Destination: "${trip.destination || trip.description || 'No destination provided'}"
         Dates: from ${trip.startDate.toDateString()} to ${trip.endDate.toDateString()}
         
         Please provide exactly 2 aesthetic activities for the crew:
@@ -854,6 +854,8 @@ export class AiService {
           "reason": string
         }
         
+        Write "location" and "reason" in Vietnamese — the app is Vietnamese and
+        users saw English blurbs here before.
         Ensure the output is exactly a valid JSON array matching the schema!
       `;
       return await this.callGeminiJSON<RecommendedActivity[]>(promptText);

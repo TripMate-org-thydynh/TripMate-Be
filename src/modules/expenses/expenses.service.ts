@@ -107,6 +107,31 @@ export class ExpensesService {
     return expense;
   }
 
+
+  /**
+   * Decimal cua Prisma khong qua duoc Redis: cache serialise no thanh
+   * `{s, e, d}` nen app doc `amount` ra 0. Di het cay va doi Decimal/Date ve
+   * kieu nguyen thuy truoc khi tra va truoc khi cache.
+   *
+   * Khong dung JSON.stringify + replacer: Decimal co `toJSON()` tra ve chuoi,
+   * nen replacer chi nhin thay chuoi va `amount` se ra "250000" thay vi 250000.
+   */
+  private toPlain<T>(value: T): T {
+    const walk = (v: any): any => {
+      if (v === null || v === undefined) return v;
+      if (v instanceof Date) return v;
+      if (typeof v?.toNumber === 'function') return v.toNumber();
+      if (Array.isArray(v)) return v.map(walk);
+      if (typeof v === 'object') {
+        const out: Record<string, unknown> = {};
+        for (const [k, val] of Object.entries(v)) out[k] = walk(val);
+        return out;
+      }
+      return v;
+    };
+    return walk(value) as T;
+  }
+
   async findAll(tripId: string) {
     const cacheKey = `trip:${tripId}:expenses`;
     try {
@@ -129,13 +154,15 @@ export class ExpensesService {
       orderBy: { createdAt: 'desc' },
     });
 
+    const plain = this.toPlain(expenses);
+
     try {
-      await this.cacheManager.set(cacheKey, expenses, 300000);
+      await this.cacheManager.set(cacheKey, plain, 300000);
     } catch (e) {
       console.error('Redis cache set error:', e.message);
     }
 
-    return expenses;
+    return plain;
   }
 
   async findAllPaginated(tripId: string, page = 1, limit = 50) {
@@ -160,13 +187,13 @@ export class ExpensesService {
       }),
     ]);
 
-    return {
+    return this.toPlain({
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit),
       items,
-    };
+    });
   }
 
   async getBalances(tripId: string) {
@@ -241,13 +268,16 @@ export class ExpensesService {
       })),
     };
 
+    // `settlements[].from/.to` van con Decimal ben trong -> chuan hoa het.
+    const plainResult = this.toPlain(result);
+
     try {
-      await this.cacheManager.set(cacheKey, result, 300000);
+      await this.cacheManager.set(cacheKey, plainResult, 300000);
     } catch (e) {
       console.error('Redis cache set error:', e.message);
     }
 
-    return result;
+    return plainResult;
   }
 
   async markSplitPaid(expenseId: string, userId: string, requesterId: string) {
