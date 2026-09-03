@@ -43,10 +43,7 @@ export class InvitesController {
   @Delete(':tripId/invites/:inviteId')
   @UseGuards(TripMemberGuard)
   @ApiOperation({ summary: 'Vô hiệu hóa invite link' })
-  deactivate(
-    @Param('inviteId') inviteId: string,
-    @CurrentUser() user: User,
-  ) {
+  deactivate(@Param('inviteId') inviteId: string, @CurrentUser() user: User) {
     return this.invitesService.deactivateInvite(inviteId, user.id);
   }
 

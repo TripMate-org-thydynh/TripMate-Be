@@ -26,7 +26,6 @@ export class PremiumService {
 
   constructor(private prisma: PrismaService) {}
 
-
   private readonly activePromoCodes: Record<string, PromoDetails> = {
     MATEYCHAT: {
       discount: 0.15,

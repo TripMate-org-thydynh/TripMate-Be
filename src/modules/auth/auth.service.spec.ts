@@ -5,7 +5,11 @@ import { JwtService } from '@nestjs/jwt';
 import { TwilioService } from './twilio.service';
 import { MailService } from './mail.service';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { BadRequestException, ConflictException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  UnauthorizedException,
+} from '@nestjs/common';
 
 jest.mock('bcrypt', () => ({
   hash: jest.fn().mockResolvedValue('$2b$10$hashedpassword'),
@@ -82,7 +86,9 @@ describe('AuthService', () => {
 
     it('should convert non-UUID string into deterministic UUID format', () => {
       const result = service.ensureValidUuid('custom-string');
-      expect(result).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+      expect(result).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
     });
   });
 

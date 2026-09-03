@@ -1,5 +1,19 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { VacayService } from './vacay.service';
 import { CreateVacationDayDto } from './dto/create-vacation.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -23,7 +37,10 @@ export class VacayController {
   @ApiOperation({ summary: 'Ngày nghỉ của tôi' })
   @ApiQuery({ name: 'year', required: false, type: Number })
   getMyDays(@CurrentUser() user: User, @Query('year') year?: string) {
-    return this.vacayService.getMyDays(user.id, year ? parseInt(year) : undefined);
+    return this.vacayService.getMyDays(
+      user.id,
+      year ? parseInt(year) : undefined,
+    );
   }
 
   @Post('my-days')

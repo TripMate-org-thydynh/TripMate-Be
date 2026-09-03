@@ -22,4 +22,4 @@ export interface OwnedResourceMeta {
  * ```
  */
 export const OwnedResource = (model: string, paramName: string) =>
-  SetMetadata(OWNED_RESOURCE_KEY, { model, paramName } as OwnedResourceMeta);
+  SetMetadata(OWNED_RESOURCE_KEY, { model, paramName });

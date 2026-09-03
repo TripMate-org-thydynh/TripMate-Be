@@ -1,7 +1,19 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JournalService } from './journal.service';
-import { CreateJournalEntryDto, UpdateJournalEntryDto } from './dto/journal.dto';
+import {
+  CreateJournalEntryDto,
+  UpdateJournalEntryDto,
+} from './dto/journal.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { ResourceOwnerGuard } from '../../common/guards/resource-owner.guard';

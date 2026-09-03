@@ -1,4 +1,8 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ActivitiesService } from '../activities/activities.service';
 import { CreateNoteDto, UpdateNoteDto } from './dto/note.dto';
@@ -50,7 +54,9 @@ export class NotesService {
    * All fields are content — ownership or trip-creator required.
    */
   async update(noteId: string, userId: string, dto: UpdateNoteDto) {
-    const note = await this.prisma.tripNote.findUnique({ where: { id: noteId } });
+    const note = await this.prisma.tripNote.findUnique({
+      where: { id: noteId },
+    });
     if (!note) throw new NotFoundException('errors.database.notFound');
     await this.assertOwnerOrCreator(note.authorId, note.tripId, userId);
 
@@ -69,7 +75,9 @@ export class NotesService {
 
   /** DELETE is protected by ResourceOwnerGuard at controller level. */
   async delete(noteId: string, userId: string) {
-    const note = await this.prisma.tripNote.findUnique({ where: { id: noteId } });
+    const note = await this.prisma.tripNote.findUnique({
+      where: { id: noteId },
+    });
     if (!note) throw new NotFoundException('errors.database.notFound');
     return this.prisma.tripNote.delete({ where: { id: noteId } });
   }

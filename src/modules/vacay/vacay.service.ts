@@ -5,26 +5,86 @@ import { CreateVacationDayDto } from './dto/create-vacation.dto';
 // Vietnamese public holidays 2026-2027
 const VN_HOLIDAYS: { date: string; name: string; key: string }[] = [
   { date: '2026-01-01', name: 'Tết Dương lịch', key: 'NEW_YEAR' },
-  { date: '2026-01-28', name: 'Tết Nguyên Đán (Giao Thừa)', key: 'LUNAR_NEW_YEAR_EVE' },
-  { date: '2026-01-29', name: 'Tết Nguyên Đán (Mùng 1)', key: 'LUNAR_NEW_YEAR_D1' },
-  { date: '2026-01-30', name: 'Tết Nguyên Đán (Mùng 2)', key: 'LUNAR_NEW_YEAR_D2' },
-  { date: '2026-01-31', name: 'Tết Nguyên Đán (Mùng 3)', key: 'LUNAR_NEW_YEAR_D3' },
-  { date: '2026-02-01', name: 'Tết Nguyên Đán (Mùng 4)', key: 'LUNAR_NEW_YEAR_D4' },
-  { date: '2026-02-02', name: 'Tết Nguyên Đán (Mùng 5)', key: 'LUNAR_NEW_YEAR_D5' },
+  {
+    date: '2026-01-28',
+    name: 'Tết Nguyên Đán (Giao Thừa)',
+    key: 'LUNAR_NEW_YEAR_EVE',
+  },
+  {
+    date: '2026-01-29',
+    name: 'Tết Nguyên Đán (Mùng 1)',
+    key: 'LUNAR_NEW_YEAR_D1',
+  },
+  {
+    date: '2026-01-30',
+    name: 'Tết Nguyên Đán (Mùng 2)',
+    key: 'LUNAR_NEW_YEAR_D2',
+  },
+  {
+    date: '2026-01-31',
+    name: 'Tết Nguyên Đán (Mùng 3)',
+    key: 'LUNAR_NEW_YEAR_D3',
+  },
+  {
+    date: '2026-02-01',
+    name: 'Tết Nguyên Đán (Mùng 4)',
+    key: 'LUNAR_NEW_YEAR_D4',
+  },
+  {
+    date: '2026-02-02',
+    name: 'Tết Nguyên Đán (Mùng 5)',
+    key: 'LUNAR_NEW_YEAR_D5',
+  },
   { date: '2026-04-18', name: 'Giỗ Tổ Hùng Vương', key: 'HUNG_KING_FESTIVAL' },
-  { date: '2026-04-30', name: 'Ngày Giải Phóng Miền Nam', key: 'REUNIFICATION_DAY' },
+  {
+    date: '2026-04-30',
+    name: 'Ngày Giải Phóng Miền Nam',
+    key: 'REUNIFICATION_DAY',
+  },
   { date: '2026-05-01', name: 'Ngày Quốc tế Lao Động', key: 'LABOR_DAY' },
   { date: '2026-09-02', name: 'Ngày Quốc Khánh', key: 'INDEPENDENCE_DAY' },
-  { date: '2026-09-03', name: 'Ngày Quốc Khánh (bù)', key: 'INDEPENDENCE_DAY_EXTRA' },
+  {
+    date: '2026-09-03',
+    name: 'Ngày Quốc Khánh (bù)',
+    key: 'INDEPENDENCE_DAY_EXTRA',
+  },
   { date: '2027-01-01', name: 'Tết Dương lịch', key: 'NEW_YEAR' },
-  { date: '2027-02-16', name: 'Tết Nguyên Đán (Giao Thừa)', key: 'LUNAR_NEW_YEAR_EVE' },
-  { date: '2027-02-17', name: 'Tết Nguyên Đán (Mùng 1)', key: 'LUNAR_NEW_YEAR_D1' },
-  { date: '2027-02-18', name: 'Tết Nguyên Đán (Mùng 2)', key: 'LUNAR_NEW_YEAR_D2' },
-  { date: '2027-02-19', name: 'Tết Nguyên Đán (Mùng 3)', key: 'LUNAR_NEW_YEAR_D3' },
-  { date: '2027-02-20', name: 'Tết Nguyên Đán (Mùng 4)', key: 'LUNAR_NEW_YEAR_D4' },
-  { date: '2027-02-21', name: 'Tết Nguyên Đán (Mùng 5)', key: 'LUNAR_NEW_YEAR_D5' },
+  {
+    date: '2027-02-16',
+    name: 'Tết Nguyên Đán (Giao Thừa)',
+    key: 'LUNAR_NEW_YEAR_EVE',
+  },
+  {
+    date: '2027-02-17',
+    name: 'Tết Nguyên Đán (Mùng 1)',
+    key: 'LUNAR_NEW_YEAR_D1',
+  },
+  {
+    date: '2027-02-18',
+    name: 'Tết Nguyên Đán (Mùng 2)',
+    key: 'LUNAR_NEW_YEAR_D2',
+  },
+  {
+    date: '2027-02-19',
+    name: 'Tết Nguyên Đán (Mùng 3)',
+    key: 'LUNAR_NEW_YEAR_D3',
+  },
+  {
+    date: '2027-02-20',
+    name: 'Tết Nguyên Đán (Mùng 4)',
+    key: 'LUNAR_NEW_YEAR_D4',
+  },
+  {
+    date: '2027-02-21',
+    name: 'Tết Nguyên Đán (Mùng 5)',
+    key: 'LUNAR_NEW_YEAR_D5',
+  },
   { date: '2027-04-07', name: 'Giỗ Tổ Hùng Vương', key: 'HUNG_KING_FESTIVAL' },
-  { date: '2027-04-30', name: 'Ngày Giải Phóng Miền Nam', key: 'REUNIFICATION_DAY' },
+  {
+    date: '2027-04-30',
+    name: 'Ngày Giải Phóng Miền Nam',
+    key: 'REUNIFICATION_DAY',
+  },
   { date: '2027-05-01', name: 'Ngày Quốc tế Lao Động', key: 'LABOR_DAY' },
   { date: '2027-09-02', name: 'Ngày Quốc Khánh', key: 'INDEPENDENCE_DAY' },
 ];
@@ -86,12 +146,17 @@ export class VacayService {
 
   getBridgeSuggestions() {
     // Suggest "cầu" periods - weekends around holidays
-    const suggestions: { from: string; to: string; days: number; holidays: string[] }[] = [];
-    
+    const suggestions: {
+      from: string;
+      to: string;
+      days: number;
+      holidays: string[];
+    }[] = [];
+
     for (const holiday of VN_HOLIDAYS) {
       const hDate = new Date(holiday.date);
       const dayOfWeek = hDate.getDay(); // 0=Sun, 6=Sat
-      
+
       // If holiday is Tuesday or Wednesday, suggest bridging Mon
       if (dayOfWeek === 2) {
         // Tuesday - take Monday off for 4-day weekend

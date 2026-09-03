@@ -8,7 +8,15 @@ export class AdminService {
 
   // --- STATISTICS ---
   async getStats() {
-    const [totalUsers, totalTrips, totalExpenses, totalMoments, totalReservations, activeUsers, recentActivities] = await Promise.all([
+    const [
+      totalUsers,
+      totalTrips,
+      totalExpenses,
+      totalMoments,
+      totalReservations,
+      activeUsers,
+      recentActivities,
+    ] = await Promise.all([
       this.prisma.user.count(),
       this.prisma.trip.count(),
       this.prisma.expense.count(),
@@ -38,7 +46,8 @@ export class AdminService {
       type: a.type,
       description:
         typeof a.data === 'object' && a.data !== null
-          ? (((a.data as Record<string, unknown>)['description'] as string) ?? `${a.type} hoạt động`)
+          ? (((a.data as Record<string, unknown>)['description'] as string) ??
+            `${a.type} hoạt động`)
           : `${a.type} hoạt động`,
       createdAt: a.createdAt,
       user: a.user,
@@ -75,7 +84,10 @@ export class AdminService {
     ]);
 
     // Group by YYYY-MM-DD
-    const dateMap: Record<string, { date: string; users: number; trips: number }> = {};
+    const dateMap: Record<
+      string,
+      { date: string; users: number; trips: number }
+    > = {};
     for (let i = 29; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
@@ -219,7 +231,10 @@ export class AdminService {
     return user;
   }
 
-  async updateUser(id: string, data: { role?: UserRole; isLocked?: boolean; bio?: string }) {
+  async updateUser(
+    id: string,
+    data: { role?: UserRole; isLocked?: boolean; bio?: string },
+  ) {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found');
 
@@ -275,7 +290,13 @@ export class AdminService {
     };
   }
 
-  async createTrip(data: { name: string; destination?: string; startDate: Date; endDate: Date; createdBy: string }) {
+  async createTrip(data: {
+    name: string;
+    destination?: string;
+    startDate: Date;
+    endDate: Date;
+    createdBy: string;
+  }) {
     // Generate a unique invite code
     const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase();
     return this.prisma.trip.create({
@@ -366,13 +387,17 @@ export class AdminService {
   }
 
   async updateJournal(id: string, data: any) {
-    const journal = await this.prisma.journalEntry.findUnique({ where: { id } });
+    const journal = await this.prisma.journalEntry.findUnique({
+      where: { id },
+    });
     if (!journal) throw new NotFoundException('Journal not found');
     return this.prisma.journalEntry.update({ where: { id }, data });
   }
 
   async deleteJournal(id: string) {
-    const journal = await this.prisma.journalEntry.findUnique({ where: { id } });
+    const journal = await this.prisma.journalEntry.findUnique({
+      where: { id },
+    });
     if (!journal) throw new NotFoundException('Journal not found');
     return this.prisma.journalEntry.delete({ where: { id } });
   }

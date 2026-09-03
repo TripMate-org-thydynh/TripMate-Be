@@ -1,4 +1,12 @@
-import { Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { DocumentsService } from './documents.service';
 import { CreateDocumentDto } from './dto/create-document.dto';
@@ -23,7 +31,9 @@ export class DocumentsController {
   }
 
   @Post()
-  @ApiOperation({ summary: 'Upload tài liệu (metadata sau khi upload Supabase)' })
+  @ApiOperation({
+    summary: 'Upload tài liệu (metadata sau khi upload Supabase)',
+  })
   create(
     @Param('tripId') tripId: string,
     @CurrentUser() user: User,
@@ -36,10 +46,7 @@ export class DocumentsController {
   @OwnedResource('tripDocument', 'documentId')
   @Delete(':documentId')
   @ApiOperation({ summary: 'Xóa tài liệu' })
-  delete(
-    @Param('documentId') documentId: string,
-    @CurrentUser() user: User,
-  ) {
+  delete(@Param('documentId') documentId: string, @CurrentUser() user: User) {
     return this.documentsService.delete(documentId, user.id);
   }
 }

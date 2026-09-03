@@ -16,7 +16,14 @@ import { AdminService } from './admin.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { AdminGuard } from '../../common/guards/admin.guard';
 import { UserRole } from '@prisma/client';
-import { IsEnum, IsBoolean, IsOptional, IsString, IsNumber, IsDateString } from 'class-validator';
+import {
+  IsEnum,
+  IsBoolean,
+  IsOptional,
+  IsString,
+  IsNumber,
+  IsDateString,
+} from 'class-validator';
 
 // --- INLINED DTOS ---
 class UpdateUserDto {
@@ -221,7 +228,10 @@ export class AdminController {
   // --- RESERVATION ENDPOINTS ---
   @Get('reservations')
   @ApiOperation({ summary: 'Danh sách đặt chỗ (admin)' })
-  getReservations(@Query('page') page?: number, @Query('limit') limit?: number) {
+  getReservations(
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
     return this.adminService.getReservations(page, limit);
   }
 
@@ -274,7 +284,10 @@ export class AdminController {
   // --- PACKING ITEM ENDPOINTS ---
   @Get('packing-items')
   @ApiOperation({ summary: 'Danh sách đồ đạc chuẩn bị (admin)' })
-  getPackingItems(@Query('page') page?: number, @Query('limit') limit?: number) {
+  getPackingItems(
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
     return this.adminService.getPackingItems(page, limit);
   }
 
@@ -305,10 +318,7 @@ export class AdminController {
 
   @Put('configs/:key')
   @ApiOperation({ summary: 'Cập nhật cấu hình hệ thống (admin)' })
-  updateConfig(
-    @Param('key') key: string,
-    @Body() dto: UpdateConfigDto,
-  ) {
+  updateConfig(@Param('key') key: string, @Body() dto: UpdateConfigDto) {
     return this.adminService.updateConfig(key, dto.value, dto.description);
   }
 }

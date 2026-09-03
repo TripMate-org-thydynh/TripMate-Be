@@ -1,7 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { TripsService } from './trips.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 
 describe('TripsService', () => {
   let service: TripsService;
@@ -31,10 +35,7 @@ describe('TripsService', () => {
     };
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        TripsService,
-        { provide: PrismaService, useValue: prisma },
-      ],
+      providers: [TripsService, { provide: PrismaService, useValue: prisma }],
     }).compile();
 
     service = module.get<TripsService>(TripsService);
@@ -100,7 +101,7 @@ describe('TripsService', () => {
     });
 
     it('should add user to trip when valid invite code and not member', async () => {
-      prisma.trip.findUnique.mockImplementation(({ where }) => {
+      prisma.trip.findUnique.mockImplementation(({ where }: any) => {
         if (where.inviteCode) return Promise.resolve(mockTrip);
         if (where.id) return Promise.resolve(mockTrip);
         return Promise.resolve(null);

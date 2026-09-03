@@ -26,7 +26,9 @@ export class ItinerariesController {
 
   @Post()
   @ApiOperation({ summary: 'Thêm điểm dừng vào lịch trình' })
-  create(@Param('tripId') tripId: string, @Body() dto: CreateItineraryItemDto,
+  create(
+    @Param('tripId') tripId: string,
+    @Body() dto: CreateItineraryItemDto,
     @CurrentUser() user: User,
   ) {
     return this.itinerariesService.create(tripId, dto, user.id);

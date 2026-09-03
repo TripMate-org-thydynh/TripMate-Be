@@ -33,7 +33,9 @@ export class CreateJournalEntryDto {
   @MaxLength(10000)
   body: string;
 
-  @ApiProperty({ enum: ['HAPPY', 'CHILL', 'TIRED', 'WOW', 'SAD', 'EXCITED', 'ANNOYED'] })
+  @ApiProperty({
+    enum: ['HAPPY', 'CHILL', 'TIRED', 'WOW', 'SAD', 'EXCITED', 'ANNOYED'],
+  })
   @IsIn(['HAPPY', 'CHILL', 'TIRED', 'WOW', 'SAD', 'EXCITED', 'ANNOYED'])
   mood: string;
 

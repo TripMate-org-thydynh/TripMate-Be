@@ -1,4 +1,8 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ActivitiesService } from '../activities/activities.service';
 import { CreateDocumentDto } from './dto/create-document.dto';
@@ -50,7 +54,9 @@ export class DocumentsService {
 
   /** DELETE is protected by ResourceOwnerGuard at controller level. */
   async delete(documentId: string, userId: string) {
-    const doc = await this.prisma.tripDocument.findUnique({ where: { id: documentId } });
+    const doc = await this.prisma.tripDocument.findUnique({
+      where: { id: documentId },
+    });
     if (!doc) throw new NotFoundException('errors.database.notFound');
     return this.prisma.tripDocument.delete({ where: { id: documentId } });
   }

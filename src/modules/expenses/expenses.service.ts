@@ -38,6 +38,16 @@ export class ExpensesService {
         userId: m.userId,
         shareAmount: perPerson,
       }));
+      if (splits.length > 0) {
+        const sumShares = splits.reduce(
+          (acc, s) => acc.add(s.shareAmount),
+          new Decimal(0),
+        );
+        const diff = totalAmount.sub(sumShares);
+        if (!diff.isZero()) {
+          splits[0].shareAmount = splits[0].shareAmount.add(diff);
+        }
+      }
     } else if (dto.splitType === 'EXACT' || dto.splitType === 'PERCENTAGE') {
       if (!dto.splits || dto.splits.length === 0) {
         throw new BadRequestException(
@@ -53,6 +63,16 @@ export class ExpensesService {
           userId: s.userId,
           shareAmount: totalAmount.mul(s.amount).div(100).toDecimalPlaces(2),
         }));
+        if (splits.length > 0) {
+          const sumShares = splits.reduce(
+            (acc, s) => acc.add(s.shareAmount),
+            new Decimal(0),
+          );
+          const diff = totalAmount.sub(sumShares);
+          if (!diff.isZero()) {
+            splits[0].shareAmount = splits[0].shareAmount.add(diff);
+          }
+        }
       } else {
         splits = dto.splits.map((s) => ({
           userId: s.userId,
@@ -106,7 +126,6 @@ export class ExpensesService {
     );
     return expense;
   }
-
 
   /**
    * Decimal cua Prisma khong qua duoc Redis: cache serialise no thanh

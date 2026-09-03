@@ -11,6 +11,7 @@ import { BadRequestException } from '@nestjs/common';
 import { Decimal } from '@prisma/client/runtime/library';
 
 import { AiService } from '../ai/ai.service';
+import { ActivitiesService } from '../activities/activities.service';
 
 describe('ExpensesService', () => {
   let service: ExpensesService;
@@ -63,6 +64,10 @@ describe('ExpensesService', () => {
     },
   };
 
+  const mockActivitiesService = {
+    log: jest.fn().mockResolvedValue({}),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -70,6 +75,7 @@ describe('ExpensesService', () => {
         { provide: PrismaService, useValue: mockPrismaService },
         { provide: AiService, useValue: mockAiService },
         { provide: CACHE_MANAGER, useValue: mockCacheManager },
+        { provide: ActivitiesService, useValue: mockActivitiesService },
       ],
     }).compile();
 

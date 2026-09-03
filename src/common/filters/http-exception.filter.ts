@@ -38,7 +38,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
           message = translated;
         }
       } catch (err) {
-        this.logger.warn(`Failed to translate key "${message}": ${err.message || err}`);
+        this.logger.warn(
+          `Failed to translate key "${message}": ${err.message || err}`,
+        );
       }
     }
 

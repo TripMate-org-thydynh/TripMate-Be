@@ -1,7 +1,14 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ActivitiesService } from '../activities/activities.service';
-import { CreateJournalEntryDto, UpdateJournalEntryDto } from './dto/journal.dto';
+import {
+  CreateJournalEntryDto,
+  UpdateJournalEntryDto,
+} from './dto/journal.dto';
 
 @Injectable()
 export class JournalService {
@@ -75,7 +82,9 @@ export class JournalService {
    * All fields are content — ownership or trip-creator required.
    */
   async update(entryId: string, userId: string, dto: UpdateJournalEntryDto) {
-    const entry = await this.prisma.journalEntry.findUnique({ where: { id: entryId } });
+    const entry = await this.prisma.journalEntry.findUnique({
+      where: { id: entryId },
+    });
     if (!entry) throw new NotFoundException('errors.database.notFound');
     await this.assertOwnerOrCreator(entry.authorId, entry.tripId, userId);
 
@@ -95,7 +104,9 @@ export class JournalService {
 
   /** DELETE is protected by ResourceOwnerGuard at controller level. */
   async delete(entryId: string, userId: string) {
-    const entry = await this.prisma.journalEntry.findUnique({ where: { id: entryId } });
+    const entry = await this.prisma.journalEntry.findUnique({
+      where: { id: entryId },
+    });
     if (!entry) throw new NotFoundException('errors.database.notFound');
     return this.prisma.journalEntry.delete({ where: { id: entryId } });
   }

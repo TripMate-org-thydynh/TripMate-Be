@@ -104,13 +104,7 @@ export class ReservationsService {
     let expensesCreated = 0;
 
     for (const p of withPrice) {
-      await this.autoCreateExpense(
-        tripId,
-        userId,
-        p.type,
-        p.title,
-        p.price!,
-      );
+      await this.autoCreateExpense(tripId, userId, p.type, p.title, p.price!);
       expensesCreated++;
     }
 

@@ -230,43 +230,43 @@ export class TripsService {
       plans,
       notes,
     ] = await Promise.all([
-        this.prisma.itineraryItem.count({ where: { tripId } }),
-        this.prisma.moment.count({ where: { tripId, deletedAt: null } }),
-        this.prisma.expense.aggregate({
-          where: { tripId },
-          _sum: { amount: true },
-          _count: { _all: true },
-        }),
-        this.prisma.moment.groupBy({
-          by: ['userId'],
-          where: { tripId, deletedAt: null, userId: { in: userIds } },
-          _count: { _all: true },
-        }),
-        this.prisma.moment.findMany({
-          where: { tripId, deletedAt: null },
-          include: {
-            user: { select: { id: true, name: true, avatarUrl: true } },
-            _count: { select: { reactions: true, comments: true } },
-          },
-          orderBy: { createdAt: 'desc' },
-          take: 8,
-        }),
-        this.prisma.expense.groupBy({
-          by: ['paidById'],
-          where: { tripId, paidById: { in: userIds } },
-          _count: { _all: true },
-        }),
-        this.prisma.activity.groupBy({
-          by: ['userId'],
-          where: { tripId, type: 'ITINERARY_ADDED', userId: { in: userIds } },
-          _count: { _all: true },
-        }),
-        this.prisma.tripNote.groupBy({
-          by: ['authorId'],
-          where: { tripId, authorId: { in: userIds } },
-          _count: { _all: true },
-        }),
-      ]);
+      this.prisma.itineraryItem.count({ where: { tripId } }),
+      this.prisma.moment.count({ where: { tripId, deletedAt: null } }),
+      this.prisma.expense.aggregate({
+        where: { tripId },
+        _sum: { amount: true },
+        _count: { _all: true },
+      }),
+      this.prisma.moment.groupBy({
+        by: ['userId'],
+        where: { tripId, deletedAt: null, userId: { in: userIds } },
+        _count: { _all: true },
+      }),
+      this.prisma.moment.findMany({
+        where: { tripId, deletedAt: null },
+        include: {
+          user: { select: { id: true, name: true, avatarUrl: true } },
+          _count: { select: { reactions: true, comments: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 8,
+      }),
+      this.prisma.expense.groupBy({
+        by: ['paidById'],
+        where: { tripId, paidById: { in: userIds } },
+        _count: { _all: true },
+      }),
+      this.prisma.activity.groupBy({
+        by: ['userId'],
+        where: { tripId, type: 'ITINERARY_ADDED', userId: { in: userIds } },
+        _count: { _all: true },
+      }),
+      this.prisma.tripNote.groupBy({
+        by: ['authorId'],
+        where: { tripId, authorId: { in: userIds } },
+        _count: { _all: true },
+      }),
+    ]);
 
     type GroupRow = { _count: { _all: number } } & Record<string, unknown>;
     const countOf = (rows: GroupRow[], key: string, id: string) =>

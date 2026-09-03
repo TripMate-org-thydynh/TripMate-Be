@@ -14,11 +14,7 @@ export class ItinerariesService {
     private readonly activities: ActivitiesService,
   ) {}
 
-  async create(
-    tripId: string,
-    dto: CreateItineraryItemDto,
-    userId?: string,
-  ) {
+  async create(tripId: string, dto: CreateItineraryItemDto, userId?: string) {
     const item = await this.prisma.itineraryItem.create({
       data: {
         tripId,

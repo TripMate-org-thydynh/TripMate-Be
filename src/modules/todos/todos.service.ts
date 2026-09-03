@@ -29,7 +29,8 @@ export class TodosService {
       progress: {
         total: items.length,
         done,
-        percent: items.length === 0 ? 0 : Math.round((done / items.length) * 100),
+        percent:
+          items.length === 0 ? 0 : Math.round((done / items.length) * 100),
       },
     };
   }
@@ -59,7 +60,8 @@ export class TodosService {
       progress: {
         total: items.length,
         done,
-        percent: items.length === 0 ? 0 : Math.round((done / items.length) * 100),
+        percent:
+          items.length === 0 ? 0 : Math.round((done / items.length) * 100),
       },
     };
   }
