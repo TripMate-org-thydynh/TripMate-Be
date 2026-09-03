@@ -8,6 +8,27 @@ import { StorageService } from '../storage/storage.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { I18nContext } from 'nestjs-i18n';
 
+/**
+ * Khoảng cách great-circle giữa hai toạ độ, đơn vị km.
+ *
+ * Đủ chính xác cho một chỉ số hiển thị trên hồ sơ; không cần thư viện GIS.
+ */
+function haversineKm(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
+  const R = 6371;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
 @Injectable()
 export class UsersService {
   constructor(private prisma: PrismaService) {}
@@ -235,11 +256,57 @@ export class UsersService {
       where: { userId },
     });
 
+    // Quãng đường và số địa điểm tính THẬT từ toạ độ điểm lịch trình.
+    //
+    // Trước đây `totalDistanceKm` bị hardcode 0 (BUG-007) và client lấy tạm
+    // `chaosScore` để lấp vào ô "Countries" (BUG-005) — nhãn không khớp dữ
+    // liệu. Toạ độ đã có sẵn (đang dùng cho màn Bản đồ chuyến), nên tính luôn
+    // ở đây thay vì để hai chỉ số chết trên giao diện.
+    const tripIds = (
+      await this.prisma.tripMember.findMany({
+        where: { userId },
+        select: { tripId: true },
+      })
+    ).map((m) => m.tripId);
+
+    const points = await this.prisma.itineraryItem.findMany({
+      where: {
+        tripId: { in: tripIds },
+        latitude: { not: null },
+        longitude: { not: null },
+      },
+      select: {
+        tripId: true,
+        day: true,
+        startTime: true,
+        latitude: true,
+        longitude: true,
+      },
+      orderBy: [{ tripId: 'asc' }, { day: 'asc' }, { startTime: 'asc' }],
+    });
+
+    // Cộng dồn quãng đường trong từng chuyến, không nối điểm giữa hai chuyến
+    // khác nhau (nếu không sẽ tính cả đoạn "bay" vô nghĩa giữa các chuyến).
+    let totalDistanceKm = 0;
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1];
+      const b = points[i];
+      if (a.tripId !== b.tripId) continue;
+      totalDistanceKm += haversineKm(
+        Number(a.latitude),
+        Number(a.longitude),
+        Number(b.latitude),
+        Number(b.longitude),
+      );
+    }
+
     return {
       userId,
       totalTrips,
-      // Chưa có nguồn quãng đường thật → 0 (thay vì số giả 4200km).
-      totalDistanceKm: 0,
+      totalDistanceKm: Math.round(totalDistanceKm),
+      // Số địa điểm đã ghé — chỉ số có thật, thay cho ô "Countries" vốn không
+      // có nguồn dữ liệu nào ở backend.
+      totalPlaces: points.length,
       achievementPoints: user.travelScore,
       // Rep suy từ travelScore thật (0 → "New", >=90 → "Legendary").
       squadReputationScore: Math.min(100, user.travelScore),
