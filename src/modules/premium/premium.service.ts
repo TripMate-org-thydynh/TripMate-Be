@@ -4,6 +4,7 @@ import {
   ServiceUnavailableException,
   Logger,
 } from '@nestjs/common';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EntitlementService } from './entitlement.service';
 
@@ -216,40 +217,161 @@ export class PremiumService {
     };
   }
 
-  async handleMomoIpn(payload: any) {
-    const secretKey = process.env.MOMO_SECRET_KEY || 'momo-secret-key';
-    const { orderId, amount, resultCode } = payload;
+  /// Mã đơn hàng cho gói đăng ký.
+  ///
+  /// Mọi thứ cần để cấp quyền đều nằm trong chính mã đơn:
+  /// `tmsub.<userId>.<plan>.<months>`. Cổng thanh toán trả lại nguyên mã này ở
+  /// webhook, nên không cần bảng đơn hàng chờ riêng — và cũng không thể bị sửa
+  /// giữa đường vì chữ ký của cổng bao trùm mã đơn.
+  static buildOrderId(userId: string, plan: 'PLUS' | 'SQUAD', months: number) {
+    return `tmsub.${userId}.${plan}.${months}.${Date.now()}`;
+  }
 
-    const isSuccess = resultCode === 0 || resultCode === '0';
-    if (isSuccess && orderId) {
-      await this.prisma.paymentTransaction.updateMany({
-        where: { transactionId: orderId },
-        data: { status: 'SUCCESS' },
-      });
+  private parseOrderId(orderId: string | undefined) {
+    if (!orderId || !orderId.startsWith('tmsub.')) return null;
+    const [, userId, plan, months] = orderId.split('.');
+    if (!userId || (plan !== 'PLUS' && plan !== 'SQUAD')) return null;
+    const m = Number(months);
+    if (!Number.isFinite(m) || m < 1 || m > 24) return null;
+    return { userId, plan: plan as 'PLUS' | 'SQUAD', months: m };
+  }
+
+  /// Webhook Momo.
+  ///
+  /// **Bản trước đọc `MOMO_SECRET_KEY` ra rồi không dùng đến.** Không kiểm tra
+  /// chữ ký nghĩa là bất kỳ ai biết đường dẫn cũng gửi được `resultCode: 0` và
+  /// nhận gói miễn phí. Nay chữ ký được kiểm trước, sai thì từ chối thẳng.
+  ///
+  /// Chuỗi ký theo đúng thứ tự trường mà Momo quy định — sai thứ tự là sai chữ
+  /// ký, nên không tự sắp xếp lại được.
+  async handleMomoIpn(payload: any) {
+    const secretKey = process.env.MOMO_SECRET_KEY;
+    if (!secretKey) {
+      this.logger.error('Thiếu MOMO_SECRET_KEY — từ chối IPN');
+      throw new ServiceUnavailableException('errors.premium.gatewayNotConfigured');
     }
 
+    const raw =
+      `accessKey=${process.env.MOMO_ACCESS_KEY ?? ''}` +
+      `&amount=${payload.amount ?? ''}` +
+      `&extraData=${payload.extraData ?? ''}` +
+      `&message=${payload.message ?? ''}` +
+      `&orderId=${payload.orderId ?? ''}` +
+      `&orderInfo=${payload.orderInfo ?? ''}` +
+      `&orderType=${payload.orderType ?? ''}` +
+      `&partnerCode=${payload.partnerCode ?? ''}` +
+      `&payType=${payload.payType ?? ''}` +
+      `&requestId=${payload.requestId ?? ''}` +
+      `&responseTime=${payload.responseTime ?? ''}` +
+      `&resultCode=${payload.resultCode ?? ''}` +
+      `&transId=${payload.transId ?? ''}`;
+
+    const expected = createHmac('sha256', secretKey).update(raw).digest('hex');
+    if (!this.safeEqual(expected, String(payload.signature ?? ''))) {
+      this.logger.warn(`IPN Momo sai chữ ký: order=${payload.orderId}`);
+      throw new BadRequestException('errors.premium.badSignature');
+    }
+
+    const ok = payload.resultCode === 0 || payload.resultCode === '0';
+    if (ok) {
+      await this.fulfill(payload.orderId, 'MOMO', String(payload.transId ?? ''));
+    }
     return { resultCode: 0, message: 'IPN processed successfully' };
   }
 
+  /// Webhook ZaloPay.
+  ///
+  /// Cùng lỗ hổng như Momo: `ZALOPAY_KEY2` được đọc ra nhưng không dùng. ZaloPay
+  /// ký bằng HMAC-SHA256 trên **chuỗi `data` nguyên văn** — phải ký trên chuỗi
+  /// gốc chứ không phải trên object đã parse, vì parse rồi stringify lại sẽ đổi
+  /// thứ tự khoá và ra chữ ký khác.
   async handleZaloPayIpn(payload: any) {
-    const key2 = process.env.ZALOPAY_KEY2 || 'zalopay-key2';
-    const { data: dataStr, mac } = payload;
+    const key2 = process.env.ZALOPAY_KEY2;
+    if (!key2) {
+      this.logger.error('Thiếu ZALOPAY_KEY2 — từ chối IPN');
+      throw new ServiceUnavailableException('errors.premium.gatewayNotConfigured');
+    }
 
-    let dataJson: any = {};
+    const dataStr = typeof payload.data === 'string' ? payload.data : '';
+    const expected = createHmac('sha256', key2).update(dataStr).digest('hex');
+    if (!this.safeEqual(expected, String(payload.mac ?? ''))) {
+      this.logger.warn('IPN ZaloPay sai chữ ký');
+      // ZaloPay quy ước trả về mã lỗi trong thân phản hồi, không dùng HTTP 4xx.
+      return { return_code: -1, return_message: 'mac not equal' };
+    }
+
+    let data: any = {};
     try {
-      dataJson = typeof dataStr === 'string' ? JSON.parse(dataStr) : dataStr;
+      data = JSON.parse(dataStr);
     } catch {
-      dataJson = {};
+      return { return_code: -1, return_message: 'bad data' };
     }
 
-    const appTransId = dataJson.app_trans_id;
-    if (appTransId) {
-      await this.prisma.paymentTransaction.updateMany({
-        where: { transactionId: appTransId },
-        data: { status: 'SUCCESS' },
-      });
+    // `embed_data` mang mã đơn của mình; `app_trans_id` là mã của ZaloPay.
+    let embed: any = {};
+    try {
+      embed =
+        typeof data.embed_data === 'string'
+          ? JSON.parse(data.embed_data)
+          : (data.embed_data ?? {});
+    } catch {
+      embed = {};
     }
 
+    await this.fulfill(
+      embed.orderId ?? data.app_trans_id,
+      'ZALOPAY',
+      String(data.zp_trans_id ?? data.app_trans_id ?? ''),
+    );
     return { return_code: 1, return_message: 'Success' };
+  }
+
+  /// So sánh chữ ký theo thời gian hằng định.
+  ///
+  /// So bằng `===` để lộ độ dài tiền tố khớp qua thời gian chạy, đủ để dò dần
+  /// ra chữ ký đúng.
+  private safeEqual(a: string, b: string) {
+    const ba = Buffer.from(a);
+    const bb = Buffer.from(b);
+    if (ba.length !== bb.length) return false;
+    return timingSafeEqual(ba, bb);
+  }
+
+  /// Cấp quyền sau khi cổng thanh toán xác nhận trả tiền thành công.
+  ///
+  /// Đây là mắt xích trước đây **hoàn toàn không tồn tại**: webhook cũ chỉ đổi
+  /// `status` của `PaymentTransaction` rồi dừng, nên trả tiền xong người dùng
+  /// vẫn không nhận được gì.
+  private async fulfill(
+    orderId: string | undefined,
+    provider: 'MOMO' | 'ZALOPAY',
+    externalId: string,
+  ) {
+    const parsed = this.parseOrderId(orderId);
+    if (!parsed) {
+      this.logger.warn(`Bỏ qua IPN: mã đơn không hợp lệ "${orderId}"`);
+      return;
+    }
+
+    // `@@unique([provider, externalId])` ở tầng database chặn cấp trùng khi
+    // cổng gọi lại webhook nhiều lần cho cùng một giao dịch.
+    const existing = await this.prisma.subscription.findFirst({
+      where: { provider, externalId },
+    });
+    if (existing) {
+      this.logger.log(`IPN trùng, bỏ qua: ${provider}/${externalId}`);
+      return;
+    }
+
+    await this.entitlements.grant({
+      userId: parsed.userId,
+      plan: parsed.plan,
+      months: parsed.months,
+      provider,
+      externalId,
+    });
+    this.logger.log(
+      `Đã cấp ${parsed.plan} ${parsed.months} tháng cho ${parsed.userId} qua ${provider}`,
+    );
   }
 }

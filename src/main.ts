@@ -54,7 +54,7 @@ async function bootstrap() {
   // Global Interceptors
   app.useGlobalInterceptors(
     new ClassSerializerInterceptor(app.get(Reflector)),
-    new TransformInterceptor(),
+    new TransformInterceptor(app.get(Reflector)),
   );
 
   // Global Exception Filters

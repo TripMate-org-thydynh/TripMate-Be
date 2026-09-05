@@ -5,7 +5,17 @@ import {
   CallHandler,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
+import { SetMetadata } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { map } from 'rxjs/operators';
+
+/// Đánh dấu endpoint phải trả **nguyên văn**, không bọc envelope.
+///
+/// Webhook của cổng thanh toán quy định sẵn hình dạng phản hồi (ZaloPay đọc
+/// `return_code` ở gốc). Bọc chúng trong `{success, data}` thì cổng không đọc
+/// được và sẽ coi như giao dịch thất bại, rồi gọi lại webhook mãi.
+export const RAW_RESPONSE = 'raw_response';
+export const RawResponse = () => SetMetadata(RAW_RESPONSE, true);
 
 export interface ApiResponse<T> {
   success: boolean;
@@ -59,10 +69,19 @@ function normalizeDecimals(value: unknown, seen = new WeakSet<object>()): unknow
 export class TransformInterceptor<T>
   implements NestInterceptor<T, ApiResponse<T>>
 {
+  constructor(private readonly reflector: Reflector) {}
+
   intercept(
     context: ExecutionContext,
     next: CallHandler,
-  ): Observable<ApiResponse<T>> {
+  ): Observable<any> {
+    const raw = this.reflector.getAllAndOverride<boolean>(RAW_RESPONSE, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (raw) {
+      return next.handle().pipe(map((data) => normalizeDecimals(data)));
+    }
     return next.handle().pipe(
       map((data) => ({
         success: true,
