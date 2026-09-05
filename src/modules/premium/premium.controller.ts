@@ -17,6 +17,20 @@ export class PremiumController {
     return this.premiumService.getSubscriptions(user.id);
   }
 
+  @Get('entitlement')
+  @ApiOperation({
+    summary: 'Quyền hiện tại: gói, hạn dùng và hạn mức từng loại',
+  })
+  entitlement(@CurrentUser() user: { id: string }) {
+    return this.premiumService.entitlement(user.id);
+  }
+
+  @Post('cancel')
+  @ApiOperation({ summary: 'Huỷ gia hạn, vẫn dùng tới hết kỳ đã trả' })
+  cancel(@CurrentUser() user: { id: string }) {
+    return this.premiumService.cancelSubscription(user.id);
+  }
+
   @Post('checkout')
   @ApiOperation({ summary: 'Thực hiện thanh toán nâng cấp Premium' })
   checkout(

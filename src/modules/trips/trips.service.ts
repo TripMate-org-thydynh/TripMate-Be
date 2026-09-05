@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EntitlementService } from '../premium/entitlement.service';
 import { StorageService } from '../storage/storage.service';
 import { CreateTripDto } from './dto/create-trip.dto';
 import { UpdateTripDto } from './dto/update-trip.dto';
@@ -19,9 +20,22 @@ function generateInviteCode(): string {
 
 @Injectable()
 export class TripsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private entitlements: EntitlementService,
+  ) {}
 
   async create(userId: string, dto: CreateTripDto) {
+    // Hạn mức chuyến đang hoạt động.
+    //
+    // Đếm chuyến CHƯA XOÁ mà người này là thành viên — kể cả chuyến người khác
+    // tạo, vì chi phí phục vụ nằm ở chỗ tham gia chứ không ở chỗ tạo. Đếm theo
+    // "đã tạo" thì lách được bằng cách nhờ bạn tạo hộ.
+    const activeTrips = await this.prisma.tripMember.count({
+      where: { userId, trip: { deletedAt: null } },
+    });
+    await this.entitlements.assertWithin(userId, 'activeTrips', activeTrips);
+
     let inviteCode: string;
     let attempts = 0;
     do {

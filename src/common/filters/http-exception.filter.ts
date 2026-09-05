@@ -44,10 +44,25 @@ export class HttpExceptionFilter implements ExceptionFilter {
       }
     }
 
+    // Giữ lại phần dữ liệu máy đọc được mà exception mang theo.
+    //
+    // Trước đây filter chỉ lấy `message` rồi bỏ hết phần còn lại, nên khi hạn
+    // mức bị vượt client chỉ nhận được "Forbidden Exception" — không biết vượt
+    // hạn mức NÀO, giới hạn bao nhiêu, đang ở gói gì. Không có mấy thứ đó thì
+    // paywall chỉ hiện được một quảng cáo chung chung thay vì nói đúng thứ vừa
+    // bị chặn.
+    const detail =
+      exceptionResponse && typeof exceptionResponse === 'object'
+        ? (({ message: _m, statusCode: _s, error: _e, ...rest }) => rest)(
+            exceptionResponse,
+          )
+        : {};
+
     response.status(status).json({
       success: false,
       statusCode: status,
       message,
+      ...detail,
       timestamp: new Date().toISOString(),
     });
   }

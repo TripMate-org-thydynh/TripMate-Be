@@ -32,6 +32,8 @@ model User {
   updatedAt        DateTime             @updatedAt @map("updated_at")
   deletedAt        DateTime?            @map("deleted_at")
   activities       Activity[]
+  subscriptions    Subscription[]
+  squadSeats       SquadSeat[]
   aiRequests       AIRequest[]
   chatMessagesSent ChatMessage[]
   expenseSplits    ExpenseSplit[]
@@ -280,6 +282,85 @@ model PaymentTransaction {
   @@index([receiverId])
   @@index([expenseId])
   @@map("payment_transactions")
+}
+
+/// Gói đăng ký của một người dùng.
+///
+/// Trước đây trạng thái premium được suy ra bằng cách tìm chuỗi
+/// `'ELITE_SQUAD_SUBSCRIPTION'` trong trường `note` của `PaymentTransaction` —
+/// một bảng vốn dùng để ghi **chuyển tiền giữa các thành viên trong chuyến**.
+/// Cách đó có ba lỗ hổng: bất kỳ ghi chú nào chứa chuỗi đó cũng thành premium,
+/// không có chỗ nào lưu hạn dùng (nên một lần trả = premium vĩnh viễn), và
+/// không có nơi để ghi gia hạn hay huỷ.
+///
+/// Bảng này là **nguồn sự thật duy nhất** cho câu hỏi "người này được dùng gì".
+model Subscription {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  plan      Plan
+  status    SubStatus @default(ACTIVE)
+
+  /// Khoảng hiệu lực. `currentPeriodEnd` là mốc duy nhất quyết định còn hạn
+  /// hay không — mọi kiểm tra quyền đều so với nó.
+  currentPeriodStart DateTime  @default(now()) @map("current_period_start")
+  currentPeriodEnd   DateTime  @map("current_period_end")
+
+  /// Người dùng đã bấm huỷ nhưng vẫn còn hạn: giữ quyền tới hết kỳ.
+  cancelAtPeriodEnd  Boolean   @default(false) @map("cancel_at_period_end")
+  canceledAt         DateTime? @map("canceled_at")
+
+  /// Nguồn thanh toán và mã giao dịch bên ngoài, để đối soát và chống trùng.
+  provider      PaymentProvider
+  externalId    String?  @map("external_id")
+
+  /// Số ghế cho Squad Pass. Gói cá nhân luôn là 1.
+  seats     Int      @default(1)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  squadSeats SquadSeat[]
+
+  @@index([userId])
+  @@index([userId, status])
+  /// Chống ghi trùng khi cổng thanh toán gọi lại webhook nhiều lần.
+  @@unique([provider, externalId])
+  @@map("subscriptions")
+}
+
+/// Một ghế của Squad Pass, cấp cho thành viên khác dùng ké.
+///
+/// Đây là chỗ TripMate khác các app du lịch khác: sản phẩm vốn dành cho nhóm,
+/// nên một người trả được cho cả squad. Giá cảm nhận giảm xuống mức mua được,
+/// và việc mua gói trở thành chuyện của cả nhóm.
+model SquadSeat {
+  id             String   @id @default(uuid()) @db.Uuid
+  subscriptionId String   @map("subscription_id") @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  grantedAt      DateTime @default(now()) @map("granted_at")
+  revokedAt      DateTime? @map("revoked_at")
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Mỗi người chỉ giữ một ghế trong cùng một gói.
+  @@unique([subscriptionId, userId])
+  @@index([userId])
+  @@map("squad_seats")
+}
+
+enum Plan {
+  FREE
+  PLUS
+  SQUAD
+}
+
+enum SubStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  EXPIRED
 }
 
 model Media {

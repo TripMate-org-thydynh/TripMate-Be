@@ -5,6 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EntitlementService } from './entitlement.service';
 
 export interface BillingItem {
   id: string;
@@ -24,7 +25,10 @@ export interface PromoDetails {
 export class PremiumService {
   private readonly logger = new Logger(PremiumService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private entitlements: EntitlementService,
+  ) {}
 
   private readonly activePromoCodes: Record<string, PromoDetails> = {
     MATEYCHAT: {
@@ -35,54 +39,60 @@ export class PremiumService {
     ELITESQUAD: { discount: 0.5, description: '50% Off Half-Price Trial' },
   };
 
+  /// Trạng thái gói hiện tại, đọc từ bảng `Subscription`.
+  ///
+  /// Trước đây hàm này suy ra premium bằng cách tìm chuỗi
+  /// `'ELITE_SQUAD_SUBSCRIPTION'` trong trường `note` của `PaymentTransaction`
+  /// — bảng vốn dùng để ghi chuyển tiền giữa các thành viên trong chuyến. Cách
+  /// đó có ba lỗ hổng: khớp `contains` trên text tự do nên ghi chú nào chứa
+  /// chuỗi đó cũng thành premium; **không kiểm tra hết hạn** nên một lần trả
+  /// tiền là premium vĩnh viễn; và không có chỗ ghi gia hạn hay huỷ.
   async getSubscriptions(userId: string) {
-    // Dynamic query from database transactions to check active premium
-    const subscriptionTx = await this.prisma.paymentTransaction.findFirst({
-      where: {
-        senderId: userId,
-        status: 'SUCCESS',
-        note: {
-          contains: 'ELITE_SQUAD_SUBSCRIPTION',
-        },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+    const ent = await this.entitlements.of(userId);
 
-    if (subscriptionTx) {
-      const startDate = subscriptionTx.createdAt.toISOString();
-      const nextBillingDate = new Date(subscriptionTx.createdAt);
-      nextBillingDate.setMonth(nextBillingDate.getMonth() + 1);
-
+    if (ent.via === 'none') {
       return {
         userId,
-        tier: 'ELITE_SQUAD',
-        status: 'ACTIVE',
-        price: 99000,
-        billingCycle: 'MONTHLY',
-        startDate,
-        nextBillingDate: nextBillingDate.toISOString(),
-        benefits: [
-          'Không giới hạn AI Recap Exports 🎬',
-          'Bộ nhãn dán Social Chaos độc quyền 🕹️',
-          'Tải lên file phương tiện độ phân giải gốc 📂',
-          'Quyền truy cập sớm các mini-game nâng cao 🎭',
-        ],
+        plan: 'FREE',
+        status: 'INACTIVE',
+        price: 0,
+        billingCycle: 'NONE',
+        activeUntil: null,
+        via: 'none',
+        limits: ent.limits,
       };
     }
 
-    // Default to free tier
+    const sub = await this.prisma.subscription.findFirst({
+      where: { userId, status: 'ACTIVE' },
+      orderBy: { currentPeriodEnd: 'desc' },
+    });
+
     return {
       userId,
-      tier: 'FREE',
-      status: 'INACTIVE',
-      price: 0,
-      billingCycle: 'NONE',
-      startDate: null,
-      nextBillingDate: null,
-      benefits: ['Giới hạn AI Recap Exports 🎬', 'Bộ nhãn dán cơ bản 🕹️'],
+      plan: ent.plan,
+      status: 'ACTIVE',
+      // Giá theo mặt bằng Việt Nam: mốc tham chiếu của người dùng là YouTube
+      // Premium 79.000đ. Mức 99.000đ cũ còn đắt hơn cả nó.
+      price: ent.plan === 'SQUAD' ? 99000 : 39000,
+      billingCycle: 'MONTHLY',
+      activeUntil: ent.activeUntil,
+      // Dùng ghế của người khác thì không có gì để tự gia hạn hay huỷ.
+      via: ent.via,
+      cancelAtPeriodEnd: sub?.cancelAtPeriodEnd ?? false,
+      seats: sub?.seats ?? 1,
+      limits: ent.limits,
     };
+  }
+
+  /// Quyền hiện tại — client dùng để biết cái gì bị khoá và giới hạn bao nhiêu.
+  entitlement(userId: string) {
+    return this.entitlements.of(userId);
+  }
+
+  /// Huỷ gia hạn; vẫn dùng được tới hết kỳ đã trả.
+  cancelSubscription(userId: string) {
+    return this.entitlements.cancel(userId);
   }
 
   /// Thanh toán ngoài Google Play.
