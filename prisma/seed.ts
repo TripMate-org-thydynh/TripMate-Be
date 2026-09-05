@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
 
@@ -6,6 +7,7 @@ async function main() {
   console.log('🌱 Starting database seeding...');
 
   // 1. Clean existing data (safe delete order)
+  await prisma.systemConfig.deleteMany({});
   await prisma.gameSession.deleteMany({});
   await prisma.momentReaction.deleteMany({});
   await prisma.momentComment.deleteMany({});
@@ -18,6 +20,24 @@ async function main() {
   await prisma.user.deleteMany({});
 
   console.log('🧹 Cleaned existing database records.');
+
+  // 2. Create Admin User
+  const adminPassword = process.env.ADMIN_INITIAL_PASSWORD || 'Thithithi@0305';
+  const adminPasswordHash = await bcrypt.hash(adminPassword, 10);
+  const adminUser = await prisma.user.create({
+    data: {
+      email: 'dinhthi03@tripmate.com',
+      supabaseId: 'eeeeeeee-0000-0000-0000-000000000004',
+      name: 'Đinh Thị Admin',
+      username: 'dinhthi03',
+      bio: 'Hệ thống TripMate Admin 🚀',
+      vibeTags: ['admin', 'manager'],
+      avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
+      role: 'ADMIN',
+      passwordHash: adminPasswordHash,
+    },
+  });
+  console.log('👤 Created Admin user.');
 
   // 2. Create Users (no password - using Supabase Auth)
   const user1 = await prisma.user.create({
@@ -192,6 +212,52 @@ async function main() {
   });
 
   console.log(`🎮 Created game session.`);
+
+  // 9. Create System Configs
+  await prisma.systemConfig.createMany({
+    data: [
+      {
+        key: 'feature_flags',
+        value: JSON.stringify({
+          ai_planning: true,
+          moments: true,
+          payments: true,
+          expenses: true,
+          journal: true,
+          todos: true,
+        }),
+        description: 'Bật/tắt các tính năng chính của hệ thống',
+      },
+      {
+        key: 'gemini_api_key',
+        value: process.env.GEMINI_API_KEY || 'mock_gemini_key',
+        description: 'API key cho Google Gemini AI Assistant',
+      },
+      {
+        key: 'sendgrid_api_key',
+        value: process.env.SENDGRID_API_KEY || 'mock_sendgrid_key',
+        description: 'API key cho dịch vụ gửi mail SendGrid',
+      },
+      {
+        key: 'payment_config',
+        value: JSON.stringify({
+          momo: {
+            partnerCode: 'MOMO',
+            accessKey: 'mock_access',
+            secretKey: 'mock_secret',
+          },
+          zalopay: {
+            appId: '123',
+            key1: 'mock1',
+            key2: 'mock2',
+          },
+        }),
+        description: 'Cấu hình tích hợp cổng thanh toán Momo & ZaloPay',
+      },
+    ],
+  });
+  console.log('⚙️ Created System Configs.');
+
   console.log('✅ Seeding complete!');
 }
 

@@ -9,6 +9,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import type { User } from '@prisma/client';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ItinerariesService } from './itineraries.service';
 import { CreateItineraryItemDto } from './dto/create-itinerary-item.dto';
 import { UpdateItineraryItemDto } from './dto/update-itinerary-item.dto';
@@ -24,8 +26,12 @@ export class ItinerariesController {
 
   @Post()
   @ApiOperation({ summary: 'Thêm điểm dừng vào lịch trình' })
-  create(@Param('tripId') tripId: string, @Body() dto: CreateItineraryItemDto) {
-    return this.itinerariesService.create(tripId, dto);
+  create(
+    @Param('tripId') tripId: string,
+    @Body() dto: CreateItineraryItemDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.itinerariesService.create(tripId, dto, user.id);
   }
 
   @Get()
@@ -36,19 +42,23 @@ export class ItinerariesController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Xem chi tiết điểm dừng' })
-  findOne(@Param('id') id: string) {
-    return this.itinerariesService.findOne(id);
+  findOne(@Param('tripId') tripId: string, @Param('id') id: string) {
+    return this.itinerariesService.findOne(id, tripId);
   }
 
   @Patch(':id')
   @ApiOperation({ summary: 'Cập nhật điểm dừng' })
-  update(@Param('id') id: string, @Body() dto: UpdateItineraryItemDto) {
-    return this.itinerariesService.update(id, dto);
+  update(
+    @Param('tripId') tripId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateItineraryItemDto,
+  ) {
+    return this.itinerariesService.update(id, tripId, dto);
   }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Xóa điểm dừng' })
-  remove(@Param('id') id: string) {
-    return this.itinerariesService.remove(id);
+  remove(@Param('tripId') tripId: string, @Param('id') id: string) {
+    return this.itinerariesService.remove(id, tripId);
   }
 }

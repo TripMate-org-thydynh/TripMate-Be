@@ -1,10 +1,10 @@
+import type { User } from '@prisma/client';
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AiService } from './ai.service';
 import { CreateAIRequestDto } from './dto/ai-request.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-
 @ApiTags('AI')
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth('JWT')
@@ -14,7 +14,7 @@ export class AiController {
 
   @Post('request')
   @ApiOperation({ summary: 'Tạo yêu cầu AI (lập lịch, recap, caption...)' })
-  create(@CurrentUser() user: any, @Body() dto: CreateAIRequestDto) {
+  create(@CurrentUser() user: User, @Body() dto: CreateAIRequestDto) {
     return this.aiService.createRequest(
       user.id,
       dto.tripId,
@@ -23,9 +23,21 @@ export class AiController {
     );
   }
 
+  @Post('photo-location')
+  @ApiOperation({
+    summary:
+      'Phân tích ảnh (base64) → toạ độ + tên địa điểm (EXIF → AI vision)',
+  })
+  photoLocation(@Body() dto: { imageBase64: string; mimeType?: string }) {
+    return this.aiService.photoLocation(
+      dto.imageBase64,
+      dto.mimeType ?? 'image/jpeg',
+    );
+  }
+
   @Get('my-requests')
   @ApiOperation({ summary: 'Lịch sử yêu cầu AI của tôi' })
-  findAll(@CurrentUser() user: any) {
+  findAll(@CurrentUser() user: User) {
     return this.aiService.findAll(user.id);
   }
 
@@ -50,15 +62,15 @@ export class AiController {
   }
 
   @Get('saved-prompts')
-  @ApiOperation({ summary: 'Danh sách các câu lệnh mẫu ưa thích' })
-  getSavedPrompts() {
-    return this.aiService.getSavedPrompts();
+  @ApiOperation({ summary: 'Câu lệnh AI gợi ý sẵn (danh mục do team soạn)' })
+  getSuggestedPrompts() {
+    return this.aiService.getSuggestedPrompts();
   }
 
   @Get('generation-queue')
   @ApiOperation({ summary: 'Hàng chờ xử lý/render background bằng AI' })
-  getQueue() {
-    return this.aiService.getGenerationQueue();
+  getQueue(@CurrentUser() user: User) {
+    return this.aiService.getGenerationQueue(user.id);
   }
 
   @Get('trips/:tripId')

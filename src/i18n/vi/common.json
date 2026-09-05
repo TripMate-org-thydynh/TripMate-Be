@@ -14,10 +14,32 @@
   "trips": {
     "not_found": "Không tìm thấy chuyến đi",
     "not_member": "Bạn không phải thành viên của chuyến đi này",
-    "create_success": "Tạo chuyến đi thành công"
+    "create_success": "Tạo chuyến đi thành công",
+    "mock_trip_name": "🏖️ Quẩy Hết Nấc Ở Phú Quốc",
+    "mock_trip_desc": "Chuyến đi Phú Quốc 5 ngày 4 đêm đầy ắp tiếng cười và kỷ niệm cùng hội bạn thân!",
+    "mock_flight": "✈️ Bay đi Phú Quốc",
+    "mock_flight_notes": "Tập trung tại ga đi quốc nội sân bay Tân Sơn Nhất",
+    "mock_lunch": "🍜 Ăn trưa bún quậy Thanh Hùng",
+    "mock_lunch_notes": "Thưởng thức đặc sản bún quậy nổi tiếng Phú Quốc",
+    "mock_beach": "🏖️ Tắm biển & ngắm hoàng hôn Bãi Sao",
+    "mock_beach_notes": "Bãi biển cát trắng nước trong cực đẹp",
+    "mock_expense_desc": "Lẩu dê tối ngày 1"
   },
   "expenses": {
     "not_found": "Không tìm thấy chi phí",
     "create_success": "Thêm chi phí thành công"
+  },
+  "badges": {
+    "b1_title": "Siêu Cấp Phượt Thủ 🏆",
+    "b1_desc": "Đi trên 5 chuyến đi cùng TripMate",
+    "b2_title": "Thần Tài Gõ Đầu 💸",
+    "b2_desc": "Đứng ra trả trước từ 3 khoản chi của nhóm",
+    "b3_title": "Thợ Săn Check-in 📍",
+    "b3_desc": "Check-in xác nhận tham gia 10 ngày hoạt động"
+  },
+  "themes": {
+    "theme1": "Kyoto Neon Vaporwave 🌌",
+    "theme2": "Dalat Pine Minimalist 🌲",
+    "theme3": "Cyberpunk Chaos ⚡"
   }
 }

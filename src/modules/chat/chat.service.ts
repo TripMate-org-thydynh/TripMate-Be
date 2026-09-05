@@ -1,10 +1,20 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { MessageType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { findSticker } from '../xp/store.catalog';
+import { StoreService } from '../xp/store.service';
 
 @Injectable()
 export class ChatService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private store: StoreService,
+  ) {}
 
   async sendMessage(
     tripId: string,
@@ -16,6 +26,22 @@ export class ChatService {
       replyToId?: string;
     },
   ) {
+    // Gửi sticker phải sở hữu sticker đó. Không kiểm thì ai cũng gửi được mọi
+    // sticker và việc đổi XP mua sticker trở nên vô nghĩa.
+    if (data.type === 'STICKER') {
+      const stickerId = data.content?.trim();
+      if (!stickerId) {
+        throw new BadRequestException('errors.store.stickerRequired');
+      }
+      if (!findSticker(stickerId)) {
+        throw new NotFoundException('errors.store.stickerNotFound');
+      }
+      const owns = await this.store.ownsSticker(senderId, stickerId);
+      if (!owns) {
+        throw new ForbiddenException('errors.store.stickerNotOwned');
+      }
+    }
+
     return this.prisma.chatMessage.create({
       data: {
         tripId,
@@ -70,6 +96,19 @@ export class ChatService {
   }
 
   async deleteMessage(id: string, userId: string) {
+    const message = await this.prisma.chatMessage.findUnique({
+      where: { id },
+      include: { trip: { select: { createdBy: true } } },
+    });
+
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+
+    if (message.senderId !== userId && message.trip.createdBy !== userId) {
+      throw new ForbiddenException("You cannot delete someone else's message");
+    }
+
     return this.prisma.chatMessage.update({
       where: { id },
       data: { deletedAt: new Date(), content: null },

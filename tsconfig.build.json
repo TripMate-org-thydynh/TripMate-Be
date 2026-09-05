@@ -1,4 +1,12 @@
 {
   "extends": "./tsconfig.json",
-  "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
+  "comment": "scratch/ và prisma/seed.ts nằm ngoài src/ — nếu để lọt vào build, rootDir bị đẩy lên gốc repo và output thành dist/src/main.js thay vì dist/main.js, làm `npm run start:prod` (node dist/main) fail.",
+  "exclude": [
+    "node_modules",
+    "test",
+    "dist",
+    "scratch",
+    "prisma",
+    "**/*spec.ts"
+  ]
 }

@@ -13,6 +13,47 @@
     "usernameTaken": "Tên đăng nhập đã tồn tại.",
     "userNotFound": "Không tìm thấy tài khoản. Vui lòng đăng ký trước.",
     "notMember": "Bạn không phải thành viên của chuyến đi này.",
+    "notOwner": "Chỉ người tạo mục này hoặc trưởng nhóm chuyến đi mới được sửa/xoá.",
     "creatorCannotLeave": "Người tạo chuyến đi không thể rời chuyến đi mà không chuyển quyền sở hữu."
+  },
+  "resource": {
+    "conflict": "Ai đó vừa thay đổi mục này, hãy tải lại và thử lại."
+  },
+  "trips": {
+    "notFound": "Không tìm thấy chuyến đi.",
+    "alreadyMember": "Cưng đã là thành viên của chuyến đi này rồi!",
+    "creatorCannotLeave": "Không thể tự xoá chính mình khi là người tạo chuyến đi nha!",
+    "invalidInviteCode": "Mã mời không hợp lệ.",
+    "onlyCreator": "Chỉ người tạo chuyến đi mới có quyền thực hiện hành động này."
+  },
+  "premium": {
+    "tokenRequired": "Mã token và productId là bắt buộc! 🤪",
+    "selfReferral": "Không thể tự nhập mã giới thiệu của mình nha cưng! 🤪",
+    "couponInvalid": "Mã giảm giá đã hết hạn hoặc không tồn tại! 😢",
+    "checkoutNotAvailable": "Thanh toán Premium hiện chưa mở. Bọn mình đang hoàn tất tích hợp cổng thanh toán, quay lại sau ít hôm nha! 🙏",
+    "verifyNotConfigured": "Xác thực thanh toán Google Play chưa được cấu hình. Vui lòng thử lại sau."
+  },
+  "ai": {
+    "unavailable": "AI đang bận hoặc chưa sẵn sàng. Thử lại sau ít phút nha! 🤖"
+  },
+  "moments": {
+    "notAuthor": "Chỉ người đăng mới sửa được khoảnh khắc này.",
+    "cannotDelete": "Chỉ người đăng hoặc người tạo chuyến mới xoá được khoảnh khắc này."
+  },
+  "xp": {
+    "notEnough": "Bạn chưa đủ XP để đổi món này. Đăng ảnh, ghi chi tiêu hay chơi game để kiếm thêm nha!",
+    "invalidAmount": "Số XP không hợp lệ."
+  },
+  "store": {
+    "stickerNotFound": "Sticker này không còn trong cửa hàng.",
+    "themeNotFound": "Theme này không còn trong chợ.",
+    "alreadyOwned": "Bạn đã sở hữu món này rồi.",
+    "stickerRequired": "Thiếu mã sticker.",
+    "stickerNotOwned": "Bạn chưa sở hữu sticker này. Ghé cửa hàng đổi bằng XP nha!"
+  },
+  "storage": {
+    "notConfigured": "Chức năng tải ảnh chưa được cấu hình. Báo admin giúp mình nha!",
+    "typeNotAllowed": "Định dạng file này không được hỗ trợ.",
+    "tooLarge": "File quá lớn. Thử ảnh nhẹ hơn nha!"
   }
 }

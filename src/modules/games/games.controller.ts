@@ -8,6 +8,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import type { User } from '@prisma/client';
 import { GamesService } from './games.service';
 import { CreateGameSessionDto, UpdateGameStateDto } from './dto/game.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -22,8 +24,17 @@ export class GamesController {
 
   @Post()
   @ApiOperation({ summary: 'Bắt đầu game session mới' })
-  create(@Param('tripId') tripId: string, @Body() dto: CreateGameSessionDto) {
-    return this.gamesService.create(tripId, dto.gameType, dto.initialState);
+  create(
+    @Param('tripId') tripId: string,
+    @CurrentUser() user: User,
+    @Body() dto: CreateGameSessionDto,
+  ) {
+    return this.gamesService.create(
+      tripId,
+      dto.gameType,
+      dto.initialState,
+      user.id,
+    );
   }
 
   @Get()
@@ -36,8 +47,8 @@ export class GamesController {
 
   @Get('dare/random')
   @ApiOperation({ summary: 'Tạo thử thách Dare ngẫu nhiên' })
-  getRandomDare() {
-    return this.gamesService.getRandomDare();
+  getRandomDare(@Param('tripId') tripId: string) {
+    return this.gamesService.getRandomDare(tripId);
   }
 
   @Get('xp')
@@ -48,14 +59,26 @@ export class GamesController {
 
   @Get('seasonal')
   @ApiOperation({ summary: 'Danh sách sự kiện mùa giải du lịch' })
-  getSeasonal() {
-    return this.gamesService.getSeasonalEvents();
+  getSeasonal(@Param('tripId') tripId: string) {
+    return this.gamesService.getSeasonalEvents(tripId);
+  }
+
+  @Get('daily')
+  @ApiOperation({ summary: 'Nhiệm vụ trong ngày, tiến độ tính từ hôm nay' })
+  getDailyMissions(@Param('tripId') tripId: string) {
+    return this.gamesService.getDailyMissions(tripId);
   }
 
   @Get('weekly')
   @ApiOperation({ summary: 'Danh sách nhiệm vụ thử thách tuần' })
-  getWeekly() {
-    return this.gamesService.getWeeklyChallenges();
+  getWeekly(@Param('tripId') tripId: string) {
+    return this.gamesService.getWeeklyChallenges(tripId);
+  }
+
+  @Get('leaderboard')
+  @ApiOperation({ summary: 'Bảng xếp hạng đóng góp của từng thành viên' })
+  getLeaderboard(@Param('tripId') tripId: string) {
+    return this.gamesService.getLeaderboard(tripId);
   }
 
   @Get(':id')

@@ -158,9 +158,12 @@ export class DashboardService {
         id: a.id,
         type: a.type,
         // Activity model uses 'data' (JSON) not 'description'
-        description: typeof a.data === 'object' && a.data !== null
-          ? ((a.data as Record<string, unknown>)['description'] as string | undefined) ?? `${a.type} hoạt động`
-          : `${a.type} hoạt động`,
+        description:
+          typeof a.data === 'object' && a.data !== null
+            ? (((a.data as Record<string, unknown>)['description'] as
+                | string
+                | undefined) ?? `${a.type} hoạt động`)
+            : `${a.type} hoạt động`,
         createdAt: a.createdAt,
         user: a.user,
         trip: a.trip,

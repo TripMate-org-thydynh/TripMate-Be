@@ -1,39 +1,108 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import type { User } from '@prisma/client';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { UsersService } from './users.service';
+import { StoreService } from '../xp/store.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdatePresenceDto } from './dto/update-presence.dto';
+import { UpdateSocialsDto } from './dto/update-socials.dto';
 
 @ApiTags('Users')
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth('JWT')
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly store: StoreService,
+  ) {}
 
   @Get('me')
   @ApiOperation({ summary: 'Lấy profile hiện tại' })
-  getMe(@CurrentUser() user: any) {
+  getMe(@CurrentUser() user: User) {
     return this.usersService.findById(user.id);
   }
 
   @Get('me/trips')
   @ApiOperation({ summary: 'Lấy danh sách chuyến đi của tôi' })
-  getMyTrips(@CurrentUser() user: any) {
+  getMyTrips(@CurrentUser() user: User) {
     return this.usersService.getMyTrips(user.id);
+  }
+
+  @Get('me/buddies')
+  @ApiOperation({
+    summary: 'Những người đã đi chung chuyến với tôi (màn Danh sách bạn bè)',
+  })
+  getTravelBuddies(@CurrentUser() user: User) {
+    return this.usersService.getTravelBuddies(user.id);
+  }
+
+  @Get('me/widget-feed')
+  @ApiOperation({
+    summary: 'Dữ liệu gọn cho widget màn hình chính (ảnh mới nhất của squad)',
+  })
+  getWidgetFeed(@CurrentUser() user: User) {
+    return this.usersService.getWidgetFeed(user.id);
+  }
+
+  @Get('me/moments/recent')
+  @ApiOperation({
+    summary: 'Kỷ niệm mới nhất trên mọi chuyến của tôi (scrapbook ở màn Home)',
+  })
+  getRecentMoments(@CurrentUser() user: User) {
+    return this.usersService.getRecentMoments(user.id);
+  }
+
+  @Get('me/activities/recent')
+  @ApiOperation({
+    summary: 'Hoạt động mới nhất trên mọi chuyến của tôi (marquee màn Home)',
+  })
+  getRecentActivities(@CurrentUser() user: User) {
+    return this.usersService.getRecentActivities(user.id);
+  }
+
+  @Get('me/up-next')
+  @ApiOperation({
+    summary: 'Điểm lịch trình kế tiếp của tôi (thẻ "Up Next" màn Home)',
+  })
+  getUpNext(@CurrentUser() user: User) {
+    return this.usersService.getUpNext(user.id);
+  }
+
+  @Get('me/expense-summary')
+  @ApiOperation({
+    summary: 'Tổng hợp chi tiêu trên mọi chuyến (khối "The Roast" màn Home)',
+  })
+  getExpenseSummary(@CurrentUser() user: User) {
+    return this.usersService.getExpenseSummary(user.id);
+  }
+
+  @Delete('me')
+  @ApiOperation({ summary: 'Xoá tài khoản (PDPD - quyền được xoá dữ liệu)' })
+  deleteAccount(@CurrentUser() user: User) {
+    return this.usersService.deleteAccount(user.id);
   }
 
   @Patch('me')
   @ApiOperation({ summary: 'Cập nhật profile' })
-  updateProfile(@CurrentUser() user: any, @Body() dto: UpdateProfileDto) {
+  updateProfile(@CurrentUser() user: User, @Body() dto: UpdateProfileDto) {
     return this.usersService.updateProfile(user.id, dto);
   }
 
   @Post('me/presence')
   @ApiOperation({ summary: 'Cập nhật trạng thái online/vị trí của tôi' })
-  updatePresence(@CurrentUser() user: any, @Body() dto: UpdatePresenceDto) {
+  updatePresence(@CurrentUser() user: User, @Body() dto: UpdatePresenceDto) {
     return this.usersService.updatePresence(user.id, dto);
   }
 
@@ -41,56 +110,64 @@ export class UsersController {
 
   @Get('me/badges')
   @ApiOperation({ summary: 'Lấy danh hiệu / cúp phượt thủ' })
-  getBadges(@CurrentUser() user: any) {
+  getBadges(@CurrentUser() user: User) {
     return this.usersService.getBadges(user.id);
   }
 
+  // Bốn route dưới giữ nguyên đường dẫn cho app cũ, nhưng nay chạy trên
+  // StoreService: trừ XP thật và lưu vào bảng, thay vì miễn phí + để trong RAM.
   @Get('theme-marketplace')
   @ApiOperation({ summary: 'Xem chợ chủ đề hình nền app' })
-  getThemes() {
-    return this.usersService.getThemeMarketplace();
+  getThemes(@CurrentUser() user: User) {
+    return this.store.getThemeMarketplace(user.id);
   }
 
   @Get('sticker-store')
   @ApiOperation({ summary: 'Xem cửa hàng Sticker biểu cảm' })
-  getStickers() {
-    return this.usersService.getStickerStore();
+  getStickers(@CurrentUser() user: User) {
+    return this.store.getStickerStore(user.id);
   }
 
   @Get('me/stickers')
   @ApiOperation({ summary: 'Kho sticker cá nhân sở hữu' })
-  getMyStickers(@CurrentUser() user: any) {
-    return this.usersService.getStickersInventory(user.id);
+  getMyStickers(@CurrentUser() user: User) {
+    return this.store.getMyStickers(user.id);
   }
 
   @Post('me/stickers/purchase')
   @ApiOperation({ summary: 'Mua sticker bằng điểm thưởng' })
-  buySticker(@CurrentUser() user: any, @Body('stickerId') stickerId: string) {
-    return this.usersService.purchaseSticker(user.id, stickerId);
+  buySticker(@CurrentUser() user: User, @Body('stickerId') stickerId: string) {
+    return this.store.purchaseSticker(user.id, stickerId);
   }
 
   @Get('me/followers')
   @ApiOperation({ summary: 'Danh sách bạn bè / người theo dõi' })
-  getFollowers(@CurrentUser() user: any) {
+  getFollowers(@CurrentUser() user: User) {
     return this.usersService.getFollowers(user.id);
   }
 
   @Get('me/social-links')
   @ApiOperation({ summary: 'Lấy danh sách liên kết mạng xã hội' })
-  getSocials(@CurrentUser() user: any) {
+  getSocials(@CurrentUser() user: User) {
     return this.usersService.getSocialLinks(user.id);
   }
 
   @Patch('me/social-links')
   @ApiOperation({ summary: 'Cập nhật liên kết mạng xã hội' })
-  updateSocials(@CurrentUser() user: any, @Body() body: any) {
-    return this.usersService.updateSocialLinks(user.id, body);
+  updateSocials(@CurrentUser() user: User, @Body() dto: UpdateSocialsDto) {
+    return this.usersService.updateSocialLinks(user.id, dto);
   }
 
   @Get('me/stats')
   @ApiOperation({ summary: 'Thống kê chỉ số phượt thủ cá nhân' })
-  getStats(@CurrentUser() user: any) {
+  getStats(@CurrentUser() user: User) {
     return this.usersService.getProfileStats(user.id);
+  }
+
+  @Get('me/travel-atlas')
+  @ApiOperation({ summary: 'Dữ liệu Travel Atlas: địa điểm, streak, marker' })
+  getTravelAtlas(@CurrentUser() user: User) {
+    return this.usersService.getTravelAtlas(user.id);
   }
 
   @Get(':id')

@@ -3,8 +3,10 @@ import {
   IsBoolean,
   IsDateString,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
+  Min,
 } from 'class-validator';
 
 export class CreateTripDto {
@@ -17,6 +19,22 @@ export class CreateTripDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  @ApiPropertyOptional({ example: 'Đà Lạt, Lâm Đồng' })
+  @IsOptional()
+  @IsString()
+  destination?: string;
+
+  @ApiPropertyOptional({ example: 5000000, description: 'Ngân sách dự kiến' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  budget?: number;
+
+  @ApiPropertyOptional({ example: 'CHILL', description: 'Vibe chuyến đi' })
+  @IsOptional()
+  @IsString()
+  vibe?: string;
 
   @ApiProperty({ example: '2026-06-15' })
   @IsDateString()

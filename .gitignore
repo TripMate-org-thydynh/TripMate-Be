@@ -42,3 +42,17 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# Google OAuth client secret (không được commit)
+client_secret_*.json
+
+# Scratch / local artifacts
+scratch/
+
+# Log runtime khi chạy backend cục bộ
+be-out.log
+be-err.log
+
+# File tam / backup
+*.bak
+tm_skip.png

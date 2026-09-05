@@ -13,6 +13,47 @@
     "usernameTaken": "This username is already taken.",
     "userNotFound": "Account not found. Please register first.",
     "notMember": "You are not a member of this trip.",
+    "notOwner": "Only the creator of this item or the trip organizer can modify it.",
     "creatorCannotLeave": "The creator cannot leave the trip without transferring ownership."
+  },
+  "resource": {
+    "conflict": "Someone just changed this item. Please reload and try again."
+  },
+  "trips": {
+    "notFound": "Trip not found.",
+    "alreadyMember": "You are already a member of this trip.",
+    "creatorCannotLeave": "Cannot remove yourself as creator without transferring ownership.",
+    "invalidInviteCode": "Invalid invite code.",
+    "onlyCreator": "Only the trip creator can perform this action."
+  },
+  "premium": {
+    "tokenRequired": "Token and product ID are required! 🤪",
+    "selfReferral": "You cannot use your own referral code! 🤪",
+    "couponInvalid": "Coupon code has expired or does not exist! 😢",
+    "checkoutNotAvailable": "Premium checkout isn't open yet. We're finishing the payment integration — check back soon! 🙏",
+    "verifyNotConfigured": "Google Play purchase verification is not configured yet. Please try again later."
+  },
+  "ai": {
+    "unavailable": "AI is busy or unavailable right now. Please try again in a few minutes. 🤖"
+  },
+  "moments": {
+    "notAuthor": "Only the author can edit this moment.",
+    "cannotDelete": "Only the author or the trip creator can delete this moment."
+  },
+  "xp": {
+    "notEnough": "Not enough XP yet. Post photos, log expenses or play games to earn more!",
+    "invalidAmount": "Invalid XP amount."
+  },
+  "store": {
+    "stickerNotFound": "That sticker is no longer in the store.",
+    "themeNotFound": "That theme is no longer available.",
+    "alreadyOwned": "You already own this.",
+    "stickerRequired": "Sticker id is missing.",
+    "stickerNotOwned": "You don't own this sticker yet. Grab it in the store with XP!"
+  },
+  "storage": {
+    "notConfigured": "Uploads are not configured yet. Please contact an admin.",
+    "typeNotAllowed": "This file type is not supported.",
+    "tooLarge": "File is too large. Try a smaller one."
   }
 }
