@@ -20,7 +20,12 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:api-e2e": "node test/e2e/api-e2e.mjs",
     "test:entitlement": "node test/e2e/entitlement-e2e.mjs",
-    "test:webhook": "node test/e2e/webhook-e2e.mjs"
+    "test:webhook": "node test/e2e/webhook-e2e.mjs",
+    "test:payment": "node test/e2e/payment-e2e.mjs",
+    "test:gating": "node test/e2e/gating-e2e.mjs",
+    "test:trial": "node test/e2e/trial-e2e.mjs",
+    "seed:promo": "ts-node prisma/seed-promo-codes.ts",
+    "test:referral": "node test/e2e/referral-promo-e2e.mjs"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -32,6 +37,7 @@
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/platform-socket.io": "^11.1.27",
+    "@nestjs/schedule": "^12.0.1",
     "@nestjs/swagger": "^11.4.4",
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/websockets": "^11.1.27",

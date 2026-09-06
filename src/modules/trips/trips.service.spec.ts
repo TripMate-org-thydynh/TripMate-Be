@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { TripsService } from './trips.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EntitlementService } from '../premium/entitlement.service';
 import {
   ConflictException,
   ForbiddenException,
@@ -10,6 +11,7 @@ import {
 describe('TripsService', () => {
   let service: TripsService;
   let prisma: any;
+  let entitlements: any;
 
   const mockTrip = {
     id: 'trip-111',
@@ -28,14 +30,26 @@ describe('TripsService', () => {
         update: jest.fn(),
       },
       tripMember: {
+        count: jest.fn().mockResolvedValue(0),
         findUnique: jest.fn(),
         create: jest.fn(),
         delete: jest.fn(),
       },
     };
 
+    // Mặc định cho qua hạn mức: các test ở đây kiểm hành vi tạo/sửa chuyến,
+    // không kiểm paywall. Ca vượt hạn mức được kiểm riêng ở khối cuối file.
+    entitlements = {
+      assertWithin: jest.fn().mockResolvedValue(undefined),
+      assertTripWithin: jest.fn().mockResolvedValue(undefined),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
-      providers: [TripsService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        TripsService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: EntitlementService, useValue: entitlements },
+      ],
     }).compile();
 
     service = module.get<TripsService>(TripsService);

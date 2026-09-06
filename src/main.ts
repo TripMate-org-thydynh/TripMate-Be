@@ -101,4 +101,31 @@ async function bootstrap() {
   console.log(`🚀 TripMate API running on: http://localhost:${port}/api/v1`);
   console.log(`📖 Swagger docs: http://localhost:${port}/docs`);
 }
-bootstrap();
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[UNHANDLED REJECTION]', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[UNCAUGHT EXCEPTION]', err);
+});
+
+process.on('beforeExit', (code) => {
+  console.log(`[PROCESS BEFORE EXIT] code=${code}`);
+});
+
+process.on('exit', (code) => {
+  console.log(`[PROCESS EXIT] code=${code}`);
+});
+
+process.on('SIGINT', () => {
+  console.log('[PROCESS SIGNAL] SIGINT received');
+});
+
+process.on('SIGTERM', () => {
+  console.log('[PROCESS SIGNAL] SIGTERM received');
+});
+
+bootstrap().catch((err) => {
+  console.error('Failed to start server:', err);
+});

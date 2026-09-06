@@ -22,6 +22,15 @@ const EARN_RULES: Record<XpReason, { amount: number; dailyCap: number }> = {
   POLL_CREATED: { amount: 20, dailyCap: 3 },
   DOCUMENT_UPLOADED: { amount: 15, dailyCap: 3 },
   GAME_PLAYED: { amount: 50, dailyCap: 10 },
+  // Giới thiệu bạn. Trần ngày ở đây là chốt chặn chống cày: không có nó thì
+  // một người dựng hàng loạt tài khoản và tự nhập mã của mình vào từng cái sẽ
+  // cày XP không giới hạn. `unique(userId, reason, refId)` chặn cộng trùng cho
+  // CÙNG một người được mời, nhưng không chặn được nhiều người được mời khác
+  // nhau — trần ngày mới chặn.
+  REFERRAL_SENT: { amount: 500, dailyCap: 10 },
+  // Chiều nhận chỉ xảy ra một lần trong đời (ràng buộc `@unique` trên
+  // `refereeId`), nên trần ngày ở đây chỉ là thừa cho chắc.
+  REFERRAL_RECEIVED: { amount: 300, dailyCap: 1 },
   // Ba loại dưới là chiều tiêu / chỉnh tay, không áp trần ngày.
   STICKER_PURCHASE: { amount: 0, dailyCap: 0 },
   THEME_PURCHASE: { amount: 0, dailyCap: 0 },

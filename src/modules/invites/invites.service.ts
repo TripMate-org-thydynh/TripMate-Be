@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EntitlementService } from '../premium/entitlement.service';
 import { CreateInviteDto } from './dto/create-invite.dto';
 import * as crypto from 'crypto';
 
@@ -14,7 +15,10 @@ function generateInviteCode(): string {
 
 @Injectable()
 export class InvitesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private entitlements: EntitlementService,
+  ) {}
 
   async createInvite(tripId: string, userId: string, dto: CreateInviteDto) {
     // Verify member
@@ -98,6 +102,19 @@ export class InvitesService {
       where: { tripId_userId: { tripId: invite.tripId, userId } },
     });
     if (existing) throw new BadRequestException('Already a trip member');
+
+    // Hạn mức số thành viên — cùng chốt chặn như `TripsService.join()`.
+    //
+    // Đây là đường vào chuyến thứ hai. Chặn một đường mà bỏ đường kia thì hạn
+    // mức chỉ là gợi ý: ai cũng lách được bằng cách dùng link mời thay vì mã.
+    const members = await this.prisma.tripMember.count({
+      where: { tripId: invite.tripId },
+    });
+    await this.entitlements.assertTripWithin(
+      invite.tripId,
+      'membersPerTrip',
+      members,
+    );
 
     // Add member & increment use count
     await this.prisma.$transaction([

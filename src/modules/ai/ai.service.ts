@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { AIRequestType, AIStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EntitlementService } from '../premium/entitlement.service';
 import { ConfigService } from '@nestjs/config';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as exifr from 'exifr';
@@ -139,6 +140,7 @@ export class AiService {
   constructor(
     private prisma: PrismaService,
     private config: ConfigService,
+    private entitlements: EntitlementService,
   ) {
     const apiKey =
       this.config.get<string>('GEMINI_API_KEY') || process.env.GEMINI_API_KEY;
@@ -461,6 +463,21 @@ export class AiService {
     type: AIRequestType,
     prompt: string,
   ) {
+    // Hạn mức lời gọi AI mỗi tháng.
+    //
+    // Đây là hạn mức duy nhất gắn với chi phí biến đổi thật (mỗi lời gọi là
+    // tiền trả cho Gemini), nhưng lại là hạn mức chưa từng được kiểm — bản
+    // Free trước đây gọi AI không giới hạn.
+    //
+    // Đếm theo **tháng dương lịch** chứ không phải 30 ngày trượt: người dùng
+    // hiểu "hết lượt tháng này, đầu tháng có lại", còn cửa sổ trượt thì không
+    // ai đoán được lúc nào lượt hồi.
+    await this.entitlements.assertWithin(
+      userId,
+      'aiPerMonth',
+      await this.usageThisMonth(userId),
+    );
+
     try {
       return await this.runRequest(userId, tripId, type, prompt);
     } catch (e) {
@@ -469,6 +486,20 @@ export class AiService {
       });
       throw e;
     }
+  }
+
+  /**
+   * Số lời gọi AI đã dùng trong tháng dương lịch hiện tại.
+   *
+   * Đếm cả bản ghi `FAILED`: một lời gọi hỏng vẫn đã tiêu tiền ở phía Gemini,
+   * và không đếm chúng thì một client lỗi có thể quay vòng vô hạn.
+   */
+  private async usageThisMonth(userId: string): Promise<number> {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    return this.prisma.aIRequest.count({
+      where: { userId, createdAt: { gte: start } },
+    });
   }
 
   private async runRequest(

@@ -138,6 +138,23 @@ export class TripsService {
     });
     if (existing) throw new ConflictException('errors.trips.alreadyMember');
 
+    // Hạn mức số thành viên của chuyến.
+    //
+    // `membersPerTrip` được khai báo trong `FREE_LIMITS`/`PAID_LIMITS` từ đầu
+    // nhưng chưa từng được kiểm ở đâu — chỉ `activeTrips` có chốt chặn, nên
+    // người trả tiền thực tế chỉ nhận được đúng một thứ.
+    //
+    // Chặn ở đây chứ không ở lúc tạo lời mời: lời mời có thể nằm im nhiều
+    // ngày, số thành viên chỉ thật sự tăng ở giây phút này.
+    const members = await this.prisma.tripMember.count({
+      where: { tripId: trip.id },
+    });
+    await this.entitlements.assertTripWithin(
+      trip.id,
+      'membersPerTrip',
+      members,
+    );
+
     await this.prisma.tripMember.create({
       data: { tripId: trip.id, userId, role: 'MEMBER' },
     });
