@@ -6,15 +6,28 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { ActivitiesService } from '../activities/activities.service';
 import { CreateMomentDto } from './dto/create-moment.dto';
+import { EntitlementService } from '../premium/entitlement.service';
 
 @Injectable()
 export class MomentsService {
   constructor(
     private prisma: PrismaService,
     private readonly activities: ActivitiesService,
+    private readonly entitlements: EntitlementService,
   ) {}
 
   async create(tripId: string, userId: string, dto: CreateMomentDto) {
+    // Hạn mức khoảnh khắc mỗi chuyến.
+    //
+    // Đếm cả moment của mọi thành viên, vì `momentsPerTrip` là giới hạn của
+    // chuyến — chi phí lưu trữ nằm ở chuyến, không ở người đăng.
+    const moments = await this.prisma.moment.count({ where: { tripId } });
+    await this.entitlements.assertTripWithin(
+      tripId,
+      'momentsPerTrip',
+      moments,
+    );
+
     const row = await this.prisma.moment.create({
       data: {
         tripId,

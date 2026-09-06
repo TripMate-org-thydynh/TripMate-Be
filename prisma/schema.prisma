@@ -9,68 +9,76 @@ datasource db {
 }
 
 model User {
-  id               String               @id @default(uuid()) @db.Uuid
-  supabaseId       String               @unique @map("supabase_id") @db.Uuid
-  email            String               @unique
-  name             String
-  username         String?              @unique
-  passwordHash     String?              @map("password_hash")
-  avatarUrl        String?              @map("avatar_url")
-  bio              String?
-  vibeTags         String[]             @map("vibe_tags")
-  theme            String?              @default("dark")
-  role             UserRole             @default(USER)
-  isLocked         Boolean              @default(false) @map("is_locked")
-  travelScore      Int                  @default(0) @map("travel_score")
-  chaosScore       Int                  @default(0) @map("chaos_score")
+  id                 String               @id @default(uuid()) @db.Uuid
+  supabaseId         String               @unique @map("supabase_id") @db.Uuid
+  email              String               @unique
+  name               String
+  username           String?              @unique
+  passwordHash       String?              @map("password_hash")
+  avatarUrl          String?              @map("avatar_url")
+  bio                String?
+  vibeTags           String[]             @map("vibe_tags")
+  theme              String?              @default("dark")
+  role               UserRole             @default(USER)
+  isLocked           Boolean              @default(false) @map("is_locked")
+  travelScore        Int                  @default(0) @map("travel_score")
+  chaosScore         Int                  @default(0) @map("chaos_score")
   /// Số XP còn tiêu được. Giảm khi mua sticker/theme.
-  xpBalance        Int                  @default(0) @map("xp_balance")
+  xpBalance          Int                  @default(0) @map("xp_balance")
   /// Tổng XP đã kiếm trong đời. KHÔNG giảm khi tiêu — dùng để tính cấp,
   /// nên mua đồ không bao giờ làm tụt cấp.
-  xpEarned         Int                  @default(0) @map("xp_earned")
-  createdAt        DateTime             @default(now()) @map("created_at")
-  updatedAt        DateTime             @updatedAt @map("updated_at")
-  deletedAt        DateTime?            @map("deleted_at")
-  activities       Activity[]
-  subscriptions    Subscription[]
-  squadSeats       SquadSeat[]
-  aiRequests       AIRequest[]
-  chatMessagesSent ChatMessage[]
-  expenseSplits    ExpenseSplit[]
-  expensesPaid     Expense[]
-  linkedBanks      LinkedBank[]
-  media            Media[]
-  messageReactions MessageReaction[]
-  momentComments   MomentComment[]
-  momentReactions  MomentReaction[]
-  moments          Moment[]
-  notifications    Notification[]
-  paymentCards     PaymentCard[]
-  paymentsReceived PaymentTransaction[] @relation("PaymentReceiver")
-  paymentsSent     PaymentTransaction[] @relation("PaymentSender")
-  pollVotes        PollVote[]
-  pollsCreated     Poll[]
-  tripMembers      TripMember[]
-  tripsCreated     Trip[]               @relation("TripCreator")
-  presence         UserPresence?
-  wallet           UserWallet?
-  fundContributions FundContribution[]
-  wishlistItems    WishlistItem[]
-  packingAdded     PackingItem[]        @relation("PackingAddedBy")
-  packingAssigned  PackingItem[]        @relation("PackingAssignee")
-  bucketItems      BucketItem[]
-  reservations     Reservation[]
-  xpLedger         XpLedger[]
-  stickersOwned    UserSticker[]
-  themesOwned      UserTheme[]
-  todosAdded       TodoItem[]           @relation("TodoAddedBy")
-  todosAssigned    TodoItem[]           @relation("TodoAssignee")
-  invitesCreated   TripInvite[]
-  notes            TripNote[]
-  checkins         DayCheckin[]
-  documents        TripDocument[]
-  journalEntries   JournalEntry[]
-  vacationDays     VacationDay[]
+  xpEarned           Int                  @default(0) @map("xp_earned")
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt @map("updated_at")
+  deletedAt          DateTime?            @map("deleted_at")
+  activities         Activity[]
+  subscriptions      Subscription[]
+  paymentOrders      PaymentOrder[]
+  trialClaims        TrialClaim[]
+  subscriptionEvents SubscriptionEvent[]
+  referralCode       ReferralCode?
+  referralsMade      Referral[]           @relation("Referrer")
+  referralReceived   Referral?            @relation("Referee")
+  promoRedemptions   PromoRedemption[]
+  squadSeats         SquadSeat[]
+  aiRequests         AIRequest[]
+  chatMessagesSent   ChatMessage[]
+  expenseSplits      ExpenseSplit[]
+  expensesPaid       Expense[]
+  linkedBanks        LinkedBank[]
+  media              Media[]
+  messageReactions   MessageReaction[]
+  momentComments     MomentComment[]
+  momentReactions    MomentReaction[]
+  moments            Moment[]
+  notifications      Notification[]
+  paymentCards       PaymentCard[]
+  paymentsReceived   PaymentTransaction[] @relation("PaymentReceiver")
+  paymentsSent       PaymentTransaction[] @relation("PaymentSender")
+  pollVotes          PollVote[]
+  pollsCreated       Poll[]
+  tripMembers        TripMember[]
+  tripsCreated       Trip[]               @relation("TripCreator")
+  presence           UserPresence?
+  wallet             UserWallet?
+  fundContributions  FundContribution[]
+  wishlistItems      WishlistItem[]
+  packingAdded       PackingItem[]        @relation("PackingAddedBy")
+  packingAssigned    PackingItem[]        @relation("PackingAssignee")
+  bucketItems        BucketItem[]
+  reservations       Reservation[]
+  xpLedger           XpLedger[]
+  stickersOwned      UserSticker[]
+  themesOwned        UserTheme[]
+  todosAdded         TodoItem[]           @relation("TodoAddedBy")
+  todosAssigned      TodoItem[]           @relation("TodoAssignee")
+  invitesCreated     TripInvite[]
+  notes              TripNote[]
+  checkins           DayCheckin[]
+  documents          TripDocument[]
+  journalEntries     JournalEntry[]
+  vacationDays       VacationDay[]
+  adminAuditLogs     AdminAuditLog[]
 
   @@map("users")
 }
@@ -88,58 +96,58 @@ model UserPresence {
 }
 
 model Trip {
-  id            String          @id @default(uuid()) @db.Uuid
-  name          String
-  description   String?
-  destination   String?
-  startDate     DateTime        @map("start_date") @db.Date
-  endDate       DateTime        @map("end_date") @db.Date
-  coverImage    String?         @map("cover_image")
-  inviteCode    String          @unique @map("invite_code")
-  currency      String          @default("VND")
-  budget        Decimal?        @db.Decimal(12, 2)
-  vibe          String?
-  theme         String?
-  isPublic      Boolean         @default(false) @map("is_public")
-  createdBy     String          @map("created_by") @db.Uuid
-  createdAt     DateTime        @default(now()) @map("created_at")
-  updatedAt     DateTime        @updatedAt @map("updated_at")
-  deletedAt     DateTime?       @map("deleted_at")
-  activities    Activity[]
-  aiRequests    AIRequest[]
-  budgetGoal    BudgetGoal?
-  chatMessages  ChatMessage[]
-  expenses      Expense[]
-  gameSessions  GameSession[]
-  itineraries   ItineraryItem[]
-  moments       Moment[]
-  notifications Notification[]
-  polls         Poll[]
-  members       TripMember[]
-  creator       User            @relation("TripCreator", fields: [createdBy], references: [id], onDelete: Cascade)
-  fund          TripFund?
-  wishlistItems WishlistItem[]
-  packingItems  PackingItem[]
-  reservations  Reservation[]
-  todoItems     TodoItem[]
-  invites       TripInvite[]
-  notes         TripNote[]
-  checkins      DayCheckin[]
-  documents     TripDocument[]
+  id             String          @id @default(uuid()) @db.Uuid
+  name           String
+  description    String?
+  destination    String?
+  startDate      DateTime        @map("start_date") @db.Date
+  endDate        DateTime        @map("end_date") @db.Date
+  coverImage     String?         @map("cover_image")
+  inviteCode     String          @unique @map("invite_code")
+  currency       String          @default("VND")
+  budget         Decimal?        @db.Decimal(12, 2)
+  vibe           String?
+  theme          String?
+  isPublic       Boolean         @default(false) @map("is_public")
+  createdBy      String          @map("created_by") @db.Uuid
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+  deletedAt      DateTime?       @map("deleted_at")
+  activities     Activity[]
+  aiRequests     AIRequest[]
+  budgetGoal     BudgetGoal?
+  chatMessages   ChatMessage[]
+  expenses       Expense[]
+  gameSessions   GameSession[]
+  itineraries    ItineraryItem[]
+  moments        Moment[]
+  notifications  Notification[]
+  polls          Poll[]
+  members        TripMember[]
+  creator        User            @relation("TripCreator", fields: [createdBy], references: [id], onDelete: Cascade)
+  fund           TripFund?
+  wishlistItems  WishlistItem[]
+  packingItems   PackingItem[]
+  reservations   Reservation[]
+  todoItems      TodoItem[]
+  invites        TripInvite[]
+  notes          TripNote[]
+  checkins       DayCheckin[]
+  documents      TripDocument[]
   journalEntries JournalEntry[]
 
   @@map("trips")
 }
 
 model TripFund {
-  id           String             @id @default(uuid()) @db.Uuid
-  tripId       String             @unique @map("trip_id") @db.Uuid
-  targetAmount Decimal            @map("target_amount") @db.Decimal(14, 2)
-  deadline     DateTime?          @db.Date
-  note         String?
-  createdAt    DateTime           @default(now()) @map("created_at")
-  updatedAt    DateTime           @updatedAt @map("updated_at")
-  trip         Trip               @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  id            String             @id @default(uuid()) @db.Uuid
+  tripId        String             @unique @map("trip_id") @db.Uuid
+  targetAmount  Decimal            @map("target_amount") @db.Decimal(14, 2)
+  deadline      DateTime?          @db.Date
+  note          String?
+  createdAt     DateTime           @default(now()) @map("created_at")
+  updatedAt     DateTime           @updatedAt @map("updated_at")
+  trip          Trip               @relation(fields: [tripId], references: [id], onDelete: Cascade)
   contributions FundContribution[]
 
   @@map("trip_funds")
@@ -295,37 +303,37 @@ model PaymentTransaction {
 ///
 /// Bảng này là **nguồn sự thật duy nhất** cho câu hỏi "người này được dùng gì".
 model Subscription {
-  id        String   @id @default(uuid()) @db.Uuid
-  userId    String   @map("user_id") @db.Uuid
-  plan      Plan
-  status    SubStatus @default(ACTIVE)
+  id     String    @id @default(uuid()) @db.Uuid
+  userId String    @map("user_id") @db.Uuid
+  plan   Plan
+  status SubStatus @default(ACTIVE)
 
   /// Khoảng hiệu lực. `currentPeriodEnd` là mốc duy nhất quyết định còn hạn
   /// hay không — mọi kiểm tra quyền đều so với nó.
-  currentPeriodStart DateTime  @default(now()) @map("current_period_start")
-  currentPeriodEnd   DateTime  @map("current_period_end")
+  currentPeriodStart DateTime @default(now()) @map("current_period_start")
+  currentPeriodEnd   DateTime @map("current_period_end")
 
   /// Người dùng đã bấm huỷ nhưng vẫn còn hạn: giữ quyền tới hết kỳ.
-  cancelAtPeriodEnd  Boolean   @default(false) @map("cancel_at_period_end")
-  canceledAt         DateTime? @map("canceled_at")
+  cancelAtPeriodEnd Boolean   @default(false) @map("cancel_at_period_end")
+  canceledAt        DateTime? @map("canceled_at")
 
   /// Nguồn thanh toán và mã giao dịch bên ngoài, để đối soát và chống trùng.
-  provider      PaymentProvider
-  externalId    String?  @map("external_id")
+  provider   PaymentProvider
+  externalId String?         @map("external_id")
 
   /// Số ghế cho Squad Pass. Gói cá nhân luôn là 1.
-  seats     Int      @default(1)
+  seats Int @default(1)
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   squadSeats SquadSeat[]
 
-  @@index([userId])
-  @@index([userId, status])
   /// Chống ghi trùng khi cổng thanh toán gọi lại webhook nhiều lần.
   @@unique([provider, externalId])
+  @@index([userId])
+  @@index([userId, status])
   @@map("subscriptions")
 }
 
@@ -335,10 +343,10 @@ model Subscription {
 /// nên một người trả được cho cả squad. Giá cảm nhận giảm xuống mức mua được,
 /// và việc mua gói trở thành chuyện của cả nhóm.
 model SquadSeat {
-  id             String   @id @default(uuid()) @db.Uuid
-  subscriptionId String   @map("subscription_id") @db.Uuid
-  userId         String   @map("user_id") @db.Uuid
-  grantedAt      DateTime @default(now()) @map("granted_at")
+  id             String    @id @default(uuid()) @db.Uuid
+  subscriptionId String    @map("subscription_id") @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  grantedAt      DateTime  @default(now()) @map("granted_at")
   revokedAt      DateTime? @map("revoked_at")
 
   subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
@@ -350,6 +358,241 @@ model SquadSeat {
   @@map("squad_seats")
 }
 
+/// Một lần bấm mua gói, ghi lại **trước khi** người dùng rời app sang ví.
+///
+/// Không có bảng này thì `fulfill()` chỉ còn biết tin vào mã đơn: mã đơn tự
+/// mang `plan` và `months`, nên ai dựng được một đơn 1.000đ mang mã
+/// `tmsub.<id>.SQUAD.12` là nhận trọn một năm Squad. Số tiền phải mua gói đó
+/// được chốt ở đây, lúc tạo đơn, và webhook đối chiếu lại với số tiền cổng
+/// báo về.
+///
+/// Bảng này cũng là nguồn cho lịch sử thanh toán gói. `PaymentTransaction`
+/// không dùng được: nó bắt buộc có `receiverId` là một User, mà mua gói thì
+/// không có người nhận nào cả.
+model PaymentOrder {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Mã đơn `tmsub.<userId>.<plan>.<months>.<ts>` — cũng là mã gửi sang cổng,
+  /// và là mã cổng trả lại ở webhook.
+  orderId String @unique @map("order_id")
+
+  userId String @map("user_id") @db.Uuid
+  plan   Plan
+  months Int
+
+  /// Số tiền THỰC PHẢI TRẢ, đã trừ giảm giá, chốt tại thời điểm tạo đơn. Đây
+  /// là con số webhook đối chiếu.
+  amount Decimal @db.Decimal(12, 2)
+
+  /// Giá gốc trước khi giảm, và mã đã dùng. Giữ lại để hoá đơn nói được
+  /// "950.000 − 190.000" thay vì chỉ một con số trần, và để đối soát khuyến mãi.
+  baseAmount     Decimal @default(0) @map("base_amount") @db.Decimal(12, 2)
+  discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  promoCode      String? @map("promo_code")
+
+  provider PaymentProvider
+  status   PaymentStatus   @default(PENDING)
+
+  /// Mã giao dịch bên cổng, điền khi webhook về.
+  externalId    String?   @map("external_id")
+  failureReason String?   @map("failure_reason")
+  paidAt        DateTime? @map("paid_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, status])
+  @@index([status, createdAt])
+  @@map("payment_orders")
+}
+
+/// Một lần xin dùng thử, kèm kết luận của tầng xét duyệt.
+///
+/// Tồn tại **kể cả khi bị từ chối**: không lưu lần bị từ chối thì lần sau
+/// không biết đã từ chối vì lý do gì, và không đo được tầng xét duyệt có chặn
+/// oan hay không.
+///
+/// Chỉ lưu **giá trị băm có salt**, không lưu IP hay device id thô. Câu hỏi
+/// duy nhất cần trả lời là "cái này đã thấy bao giờ chưa", và băm trả lời được
+/// câu đó mà không giữ lại thứ có thể lần ra một con người.
+model TrialClaim {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  /// Băm của email đã chuẩn hoá (gmail: bỏ dấu chấm và phần sau dấu +).
+  /// Bắt được `a.b+1@gmail.com` và `ab@gmail.com` là cùng một hộp thư.
+  emailHash   String  @map("email_hash")
+  /// Băm của mã thiết bị do client gửi. Không có thì thôi — thiếu một tín hiệu
+  /// chứ không phải căn cứ để từ chối.
+  deviceHash  String? @map("device_hash")
+  /// Băm của dải mạng /24, không phải IP đầy đủ. Cả một quán cà phê hay một ký
+  /// túc xá dùng chung một dải là chuyện bình thường, nên tín hiệu này **một
+  /// mình không bao giờ đủ để chặn**.
+  networkHash String? @map("network_hash")
+
+  verdict TrialVerdict
+  /// Các tín hiệu đã kích hoạt, để người trực còn đọc được vì sao.
+  reasons String[]
+
+  startedAt DateTime     @default(now()) @map("started_at")
+  endsAt    DateTime?    @map("ends_at")
+  endedAt   DateTime?    @map("ended_at")
+  outcome   TrialOutcome @default(RUNNING)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([emailHash])
+  @@index([deviceHash])
+  @@index([networkHash])
+  @@index([verdict])
+  @@map("trial_claims")
+}
+
+/// Nhật ký mọi lần trạng thái gói đổi.
+///
+/// Không có bảng này thì khi người dùng hỏi "sao tôi mất gói" hoặc khi cần đối
+/// soát với cổng thanh toán, thứ duy nhất còn lại là dòng log đã bị xoay vòng.
+/// Chỉ ghi thêm, không sửa, không xoá.
+model SubscriptionEvent {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  /// `TRIAL_STARTED`, `TRIAL_EXPIRED`, `GRANTED`, `CANCELED`, ...
+  type String
+
+  fromStatus String? @map("from_status")
+  toStatus   String? @map("to_status")
+  plan       Plan?
+
+  /// Ai/cái gì gây ra: `user`, `webhook:MOMO`, `job:trial-expiry`.
+  actor String
+
+  /// Chi tiết kèm theo (mã đơn, mã giao dịch, lý do). Không chứa dữ liệu nhạy cảm.
+  meta Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+  @@map("subscription_events")
+}
+
+/// Mã giới thiệu của một người. Sinh lần đầu họ mở màn giới thiệu.
+///
+/// Tách khỏi `User` thành bảng riêng vì mã cần `@unique` và cần index riêng để
+/// tra ngược, mà phần lớn người dùng sẽ không bao giờ có mã — nhét vào `User`
+/// là thêm một cột rỗng cho mọi hàng.
+model ReferralCode {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @unique @map("user_id") @db.Uuid
+
+  /// Chuỗi người dùng đọc và gõ lại được. Không dùng ký tự dễ nhầm (0/O, 1/I).
+  code String @unique
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("referral_codes")
+}
+
+/// Một lần giới thiệu thành công.
+///
+/// `refereeId` là `@unique`: **mỗi người chỉ được giới thiệu một lần trong
+/// đời**. Không có ràng buộc này thì một người nhập lần lượt mã của cả nhóm
+/// bạn và cả nhóm cùng nhận thưởng.
+model Referral {
+  id         String @id @default(uuid()) @db.Uuid
+  referrerId String @map("referrer_id") @db.Uuid
+  refereeId  String @unique @map("referee_id") @db.Uuid
+
+  /// Mã đã dùng, lưu nguyên văn để đối soát kể cả khi mã bị đổi sau này.
+  code String
+
+  /// XP đã trao cho mỗi bên, lưu lại vì mức thưởng có thể đổi theo thời gian.
+  referrerXp Int @map("referrer_xp")
+  refereeXp  Int @map("referee_xp")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  referrer User @relation("Referrer", fields: [referrerId], references: [id], onDelete: Cascade)
+  referee  User @relation("Referee", fields: [refereeId], references: [id], onDelete: Cascade)
+
+  @@index([referrerId])
+  @@map("referrals")
+}
+
+/// Mã giảm giá.
+///
+/// Trước đây ba mã nằm cứng trong một object của service: sửa giá phải sửa mã
+/// và triển khai lại, không có hạn dùng, không giới hạn số lần, và **mức giảm
+/// không được áp vào giá ở bất cứ đâu** — `validatePromoCode` trả về `discount`
+/// rồi không ai dùng tới.
+model PromoCode {
+  id   String @id @default(uuid()) @db.Uuid
+  code String @unique
+
+  description String
+
+  /// Giảm theo phần trăm (0..1) HOẶC theo số tiền tuyệt đối — đúng một trong
+  /// hai. Cho phép cả hai cùng lúc là mời gọi những phép cộng dồn không ai
+  /// kiểm soát được.
+  discountPercent Decimal? @map("discount_percent") @db.Decimal(4, 3)
+  discountAmount  Decimal? @map("discount_amount") @db.Decimal(12, 2)
+
+  /// Rỗng = áp cho mọi gói.
+  appliesToPlans Plan[] @map("applies_to_plans")
+
+  /// Tổng số lần dùng tối đa trên toàn hệ thống. `null` = không giới hạn.
+  maxRedemptions Int? @map("max_redemptions")
+  /// Số lần mỗi người được dùng.
+  perUserLimit   Int  @default(1) @map("per_user_limit")
+
+  validFrom  DateTime  @default(now()) @map("valid_from")
+  validUntil DateTime? @map("valid_until")
+  isActive   Boolean   @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  redemptions PromoRedemption[]
+
+  @@index([code, isActive])
+  @@map("promo_codes")
+}
+
+/// Một lần mã giảm giá được dùng thật.
+///
+/// Chỉ ghi khi đơn **đã thanh toán thành công**, không ghi lúc tạo đơn: tính
+/// lượt ngay lúc tạo thì mọi đơn bị bỏ giữa chừng đều đốt mất một suất, và một
+/// người bấm mua rồi thoát vài lần là tự khoá mình khỏi mã.
+model PromoRedemption {
+  id      String @id @default(uuid()) @db.Uuid
+  codeId  String @map("code_id") @db.Uuid
+  userId  String @map("user_id") @db.Uuid
+  orderId String @unique @map("order_id")
+
+  /// Số tiền thực sự được giảm, chốt tại thời điểm thanh toán.
+  discountApplied Decimal @map("discount_applied") @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  promoCode PromoCode @relation(fields: [codeId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([codeId])
+  @@index([userId])
+  @@map("promo_redemptions")
+}
+
 enum Plan {
   FREE
   PLUS
@@ -357,10 +600,37 @@ enum Plan {
 }
 
 enum SubStatus {
+  /// Đang dùng thử miễn phí. Quyền giống hệt `ACTIVE` — tách trạng thái ra để
+  /// biết ai chưa từng trả đồng nào, và để lúc hết hạn xử lý khác nhau.
+  TRIALING
   ACTIVE
   PAST_DUE
   CANCELED
   EXPIRED
+}
+
+/// Kết luận của tầng xét duyệt dùng thử.
+///
+/// Có `REVIEW` vì các tín hiệu chống lạm dụng đều là xác suất, không phải bằng
+/// chứng. Ép mọi trường hợp về `ELIGIBLE`/`INELIGIBLE` nghĩa là hoặc phát
+/// không cho người gian, hoặc chặn oan người thật — cả hai đều tệ hơn việc
+/// thừa nhận "chưa chắc" và cho qua kèm ghi chú.
+enum TrialVerdict {
+  ELIGIBLE
+  INELIGIBLE
+  REVIEW
+}
+
+/// Kết cục của một lần dùng thử.
+enum TrialOutcome {
+  /// Đang chạy.
+  RUNNING
+  /// Hết 3 ngày, không mua.
+  EXPIRED
+  /// Người dùng tự dừng trước hạn.
+  CANCELED
+  /// Mua gói trong lúc còn dùng thử.
+  CONVERTED
 }
 
 model Media {
@@ -653,36 +923,36 @@ model PackingItem {
 }
 
 model TodoItem {
-  id         String    @id @default(uuid()) @db.Uuid
-  tripId     String    @map("trip_id") @db.Uuid
-  addedBy    String    @map("added_by") @db.Uuid
-  title      String
-  priority   String    @default("NORMAL")
-  assignedTo String?   @map("assigned_to") @db.Uuid
-  isDone     Boolean   @default(false) @map("is_done")
-  dueDate    DateTime? @map("due_date")
-  createdAt  DateTime  @default(now()) @map("created_at")
-  updatedAt  DateTime  @updatedAt @map("updated_at")
-  trip        Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  addedByUser User     @relation("TodoAddedBy", fields: [addedBy], references: [id], onDelete: Cascade)
-  assignee    User?    @relation("TodoAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
+  id          String    @id @default(uuid()) @db.Uuid
+  tripId      String    @map("trip_id") @db.Uuid
+  addedBy     String    @map("added_by") @db.Uuid
+  title       String
+  priority    String    @default("NORMAL")
+  assignedTo  String?   @map("assigned_to") @db.Uuid
+  isDone      Boolean   @default(false) @map("is_done")
+  dueDate     DateTime? @map("due_date")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  trip        Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  addedByUser User      @relation("TodoAddedBy", fields: [addedBy], references: [id], onDelete: Cascade)
+  assignee    User?     @relation("TodoAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
 
   @@index([tripId])
   @@map("todo_items")
 }
 
 model TripInvite {
-  id         String    @id @default(uuid()) @db.Uuid
-  tripId     String    @map("trip_id") @db.Uuid
-  createdBy  String    @map("created_by") @db.Uuid
-  code       String    @unique
-  expiresAt  DateTime? @map("expires_at")
-  maxUses    Int?      @map("max_uses")
-  useCount   Int       @default(0) @map("use_count")
-  isActive   Boolean   @default(true) @map("is_active")
-  createdAt  DateTime  @default(now()) @map("created_at")
-  trip       Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  creator    User      @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+  id        String    @id @default(uuid()) @db.Uuid
+  tripId    String    @map("trip_id") @db.Uuid
+  createdBy String    @map("created_by") @db.Uuid
+  code      String    @unique
+  expiresAt DateTime? @map("expires_at")
+  maxUses   Int?      @map("max_uses")
+  useCount  Int       @default(0) @map("use_count")
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at")
+  trip      Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  creator   User      @relation(fields: [createdBy], references: [id], onDelete: Cascade)
 
   @@index([tripId])
   @@index([code])
@@ -722,18 +992,18 @@ model DayCheckin {
 }
 
 model TripDocument {
-  id          String   @id @default(uuid()) @db.Uuid
-  tripId      String   @map("trip_id") @db.Uuid
-  uploadedBy  String   @map("uploaded_by") @db.Uuid
-  name        String
-  url         String
-  mimeType    String   @map("mime_type")
-  sizeBytes   Int?     @map("size_bytes")
-  linkedType  String?  @map("linked_type")
-  linkedId    String?  @map("linked_id") @db.Uuid
-  createdAt   DateTime @default(now()) @map("created_at")
-  trip        Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  uploader    User     @relation(fields: [uploadedBy], references: [id], onDelete: Cascade)
+  id         String   @id @default(uuid()) @db.Uuid
+  tripId     String   @map("trip_id") @db.Uuid
+  uploadedBy String   @map("uploaded_by") @db.Uuid
+  name       String
+  url        String
+  mimeType   String   @map("mime_type")
+  sizeBytes  Int?     @map("size_bytes")
+  linkedType String?  @map("linked_type")
+  linkedId   String?  @map("linked_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+  trip       Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  uploader   User     @relation(fields: [uploadedBy], references: [id], onDelete: Cascade)
 
   @@index([tripId])
   @@map("trip_documents")
@@ -976,8 +1246,6 @@ model SystemConfig {
   @@map("system_configs")
 }
 
-
-
 /// Sổ cái XP — mỗi dòng là một lần cộng hoặc trừ.
 ///
 /// Số dư ở `users.xp_balance` là kết quả cộng dồn của bảng này. Giữ sổ cái để:
@@ -1016,6 +1284,10 @@ enum XpReason {
   GAME_PLAYED
   STICKER_PURCHASE
   THEME_PURCHASE
+  /// Thưởng cho người giới thiệu, mỗi lần một bạn mới nhập mã của họ.
+  REFERRAL_SENT
+  /// Thưởng cho người được giới thiệu, một lần duy nhất trong đời.
+  REFERRAL_RECEIVED
   ADMIN_ADJUST
 }
 
@@ -1044,4 +1316,24 @@ model UserTheme {
   @@unique([userId, themeId])
   @@index([userId])
   @@map("user_themes")
+}
+
+/// Nhật ký thao tác nhạy cảm của Quản trị viên (Admin Audit Log).
+/// Bắt buộc ghi lại mọi hành vi can thiệp thủ công (gia hạn, thu hồi gói, khoá tài khoản...)
+/// kèm lý do để đối soát và phòng chống lạm dụng quyền hạn.
+model AdminAuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  adminId    String   @map("admin_id") @db.Uuid
+  action     String
+  targetType String   @map("target_type")
+  targetId   String?  @map("target_id")
+  reason     String
+  details    Json?    @default("{}")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  admin User @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@index([targetType, targetId])
+  @@map("admin_audit_logs")
 }
