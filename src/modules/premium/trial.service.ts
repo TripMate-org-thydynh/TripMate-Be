@@ -163,37 +163,47 @@ export class TrialService {
     // cái được chỉ là ba ngày bản trả phí.
     const endsAt = new Date(now.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
 
-    const sub = await this.prisma.subscription.create({
-      data: {
-        userId,
+    const sub = await this.prisma.$transaction(async (tx) => {
+      const createdSub = await tx.subscription.create({
+        data: {
+          userId,
+          plan: TRIAL_PLAN,
+          status: 'TRIALING',
+          // `CASH` vì không có tiền nào đi qua cổng nào. Không bịa ra một
+          // provider để trông cho giống một giao dịch thật.
+          provider: 'CASH',
+          currentPeriodStart: now,
+          currentPeriodEnd: endsAt,
+        },
+      });
+
+      await tx.trialClaim.create({
+        data: {
+          userId,
+          ...result.hashes,
+          verdict: result.verdict,
+          reasons: result.reasons,
+          startedAt: now,
+          endsAt,
+          outcome: 'RUNNING',
+        },
+      });
+
+      return createdSub;
+    });
+
+    try {
+      await this.log(userId, 'TRIAL_STARTED', {
+        actor: 'user',
+        toStatus: 'TRIALING',
         plan: TRIAL_PLAN,
-        status: 'TRIALING',
-        // `CASH` vì không có tiền nào đi qua cổng nào. Không bịa ra một
-        // provider để trông cho giống một giao dịch thật.
-        provider: 'CASH',
-        currentPeriodStart: now,
-        currentPeriodEnd: endsAt,
-      },
-    });
-
-    await this.prisma.trialClaim.create({
-      data: {
-        userId,
-        ...result.hashes,
-        verdict: result.verdict,
-        reasons: result.reasons,
-        startedAt: now,
-        endsAt,
-        outcome: 'RUNNING',
-      },
-    });
-
-    await this.log(userId, 'TRIAL_STARTED', {
-      actor: 'user',
-      toStatus: 'TRIALING',
-      plan: TRIAL_PLAN,
-      meta: { verdict: result.verdict, reasons: result.reasons },
-    });
+        meta: { verdict: result.verdict, reasons: result.reasons },
+      });
+    } catch (e) {
+      this.logger.warn(
+        `Không thể ghi log TRIAL_STARTED cho user ${userId}: ${(e as Error)?.message}`,
+      );
+    }
 
     return {
       active: true,

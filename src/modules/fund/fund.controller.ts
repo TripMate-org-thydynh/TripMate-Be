@@ -44,7 +44,11 @@ export class FundController {
   }
 
   @Delete('contributions/:id')
-  deleteContribution(@Param('id') id: string, @Request() req: RequestWithUser) {
-    return this.fundService.deleteContribution(id, req.user.id);
+  deleteContribution(
+    @Param('tripId') tripId: string,
+    @Param('id') id: string,
+    @Request() req: RequestWithUser,
+  ) {
+    return this.fundService.deleteContribution(id, req.user.id, tripId);
   }
 }

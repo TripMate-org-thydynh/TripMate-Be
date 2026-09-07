@@ -240,6 +240,70 @@ export class PremiumService {
       },
     });
 
+    // Cổng thanh toán không nhận giao dịch 0 đồng, nên đơn miễn phí (mã giảm 100%)
+    // phải được hoàn tất và cấp quyền ngay tại server mà không gọi qua cổng.
+    const isZeroAmount =
+      typeof amount === 'number'
+        ? amount === 0
+        : typeof (amount as any)?.isZero === 'function'
+          ? (amount as any).isZero()
+          : Number(amount) === 0;
+
+    if (isZeroAmount) {
+      await this.prisma.paymentOrder.update({
+        where: { orderId },
+        data: {
+          status: 'SUCCESS',
+          paidAt: new Date(),
+        },
+      });
+
+      await this.entitlements.grant({
+        userId,
+        plan,
+        months: m,
+        provider: 'CASH',
+        externalId: undefined,
+      });
+
+      if (appliedCode && discount > 0) {
+        await this.promos.redeem({
+          code: appliedCode,
+          userId,
+          orderId,
+          discountApplied: discount,
+        });
+      }
+
+      await this.trials.markConverted(userId);
+
+      await this.trials.log(userId, 'SUBSCRIPTION_GRANTED', {
+        actor: 'system:promo_100',
+        toStatus: 'ACTIVE',
+        plan,
+        meta: { orderId, promoCode: appliedCode, months: m },
+      });
+
+      this.logger.log(
+        `Đơn miễn phí 0đ (${orderId}) áp mã "${appliedCode}": đã hoàn tất và cấp ${plan} ${m} tháng cho ${userId}`,
+      );
+
+      return {
+        orderId,
+        plan,
+        months: m,
+        amount,
+        baseAmount,
+        discount,
+        promoCode: appliedCode,
+        provider: gateway,
+        payUrl: null,
+        deeplink: null,
+        qrCodeUrl: null,
+        paid: true,
+      };
+    }
+
     try {
       const created = await this.gateways.create({
         gateway,

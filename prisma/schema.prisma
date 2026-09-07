@@ -154,16 +154,19 @@ model TripFund {
 }
 
 model FundContribution {
-  id        String   @id @default(uuid()) @db.Uuid
-  fundId    String   @map("fund_id") @db.Uuid
-  userId    String   @map("user_id") @db.Uuid
-  amount    Decimal  @db.Decimal(14, 2)
-  note      String?
-  status    String   @default("CONFIRMED")
-  createdAt DateTime @default(now()) @map("created_at")
-  fund      TripFund @relation(fields: [fundId], references: [id], onDelete: Cascade)
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id              String   @id @default(uuid()) @db.Uuid
+  fundId          String   @map("fund_id") @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  amount          Decimal  @db.Decimal(14, 2)
+  note            String?
+  status          String   @default("CONFIRMED")
+  // Idempotency key chặn ghi trùng khi client gửi lại cùng một thao tác
+  clientRequestId String?  @map("client_request_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  fund            TripFund @relation(fields: [fundId], references: [id], onDelete: Cascade)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([clientRequestId])
   @@map("fund_contributions")
 }
 
@@ -521,6 +524,10 @@ model Referral {
   referrerXp Int @map("referrer_xp")
   refereeXp  Int @map("referee_xp")
 
+  /// Thời điểm người giới thiệu thực sự được trả thưởng.
+  /// `null` = người được mời chưa làm hành động đủ điều kiện (chống farm tài khoản ảo).
+  referrerAwardedAt DateTime? @map("referrer_awarded_at")
+
   createdAt DateTime @default(now()) @map("created_at")
 
   referrer User @relation("Referrer", fields: [referrerId], references: [id], onDelete: Cascade)
@@ -856,6 +863,8 @@ model LinkedBank {
   createdAt     DateTime @default(now()) @map("created_at")
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  // Một người dùng không được liên kết trùng cùng một số tài khoản ở cùng một ngân hàng.
+  @@unique([userId, bankName, accountNumber])
   @@index([userId])
   @@map("linked_banks")
 }
@@ -1192,6 +1201,11 @@ enum AIRequestType {
   WEATHER_ADVICE
   DESTINATION_SUGGEST
   BUDGET_OPTIMIZE
+  PHOTO_LOCATION
+  BOOKING_PARSE
+  PERSONALITY_ROAST
+  SQUAD_MOOD
+  RECOMMEND_TIMELINE
 }
 
 enum AIStatus {
@@ -1336,4 +1350,56 @@ model AdminAuditLog {
   @@index([adminId])
   @@index([targetType, targetId])
   @@map("admin_audit_logs")
+}
+
+/// Số liệu request đã gộp theo bucket 1 phút.
+/// Gộp trong bộ nhớ rồi flush, không ghi từng request.
+model RequestMetric {
+  id           String   @id @default(uuid()) @db.Uuid
+  /// Đầu phút (UTC), đã cắt giây và mili-giây.
+  bucketStart  DateTime @map("bucket_start")
+  /// Route PATTERN (vd `/trips/:tripId/expenses`), không phải URL thật.
+  route        String
+  method       String
+  /// 2 = 2xx, 4 = 4xx, 5 = 5xx.
+  statusClass  Int      @map("status_class")
+  count        Int      @default(0)
+  sumLatencyMs BigInt   @default(0) @map("sum_latency_ms")
+  maxLatencyMs Int      @default(0) @map("max_latency_ms")
+  /// Histogram tích luỹ kiểu Prometheus, để tính p95/p99 mà không lưu từng mẫu.
+  le50   Int @default(0) @map("le_50")
+  le100  Int @default(0) @map("le_100")
+  le250  Int @default(0) @map("le_250")
+  le500  Int @default(0) @map("le_500")
+  le1000 Int @default(0) @map("le_1000")
+  le2500 Int @default(0) @map("le_2500")
+  le5000 Int @default(0) @map("le_5000")
+  leInf  Int @default(0) @map("le_inf")
+
+  @@unique([bucketStart, route, method, statusClass])
+  @@index([bucketStart])
+  @@map("request_metrics")
+}
+
+/// Mục tiêu chất lượng dịch vụ (SLO) do admin cấu hình.
+model SloTarget {
+  id                 String   @id @default(uuid()) @db.Uuid
+  /// Khoá máy đọc, vd `api-availability`.
+  key                String   @unique
+  name               String
+  /// AVAILABILITY (tỉ lệ request không lỗi 5xx) hoặc LATENCY (tỉ lệ request nhanh hơn ngưỡng).
+  sliType            String   @map("sli_type")
+  /// Mục tiêu phần trăm, vd 99.9
+  objective          Decimal  @db.Decimal(6, 3)
+  /// Cửa sổ đánh giá, vd 30 ngày.
+  windowDays         Int      @default(30) @map("window_days")
+  /// Chỉ dùng cho LATENCY: ngưỡng mili-giây coi là "nhanh".
+  latencyThresholdMs Int?     @map("latency_threshold_ms")
+  /// null = áp cho toàn hệ thống; có giá trị = chỉ áp cho route khớp tiền tố này.
+  routePrefix        String?  @map("route_prefix")
+  isActive           Boolean  @default(true) @map("is_active")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@map("slo_targets")
 }

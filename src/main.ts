@@ -8,6 +8,8 @@ import { PrismaClientExceptionFilter } from './common/filters/prisma-exception.f
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { I18nValidationPipe, I18nValidationExceptionFilter } from 'nestjs-i18n';
 import { json, urlencoded } from 'express';
+import { MetricsBufferService } from './modules/observability/metrics-buffer.service';
+import { makeMetricsMiddleware } from './modules/observability/metrics.middleware';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -18,6 +20,11 @@ async function bootstrap() {
 
   // Global prefix
   app.setGlobalPrefix('api/v1');
+
+  // Metrics middleware đo lường latency và HTTP status code
+  // Đặt sớm trước helmet, CORS, pipes, filters để bắt được cả request bị chặn (401/403/429) và 404
+  const metricsBuffer = app.get(MetricsBufferService);
+  app.use(makeMetricsMiddleware(metricsBuffer));
 
   // Security headers. Tắt CSP ở dev để Swagger UI hoạt động.
   const isProd = process.env.NODE_ENV === 'production';

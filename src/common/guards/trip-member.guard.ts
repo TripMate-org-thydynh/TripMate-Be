@@ -27,7 +27,10 @@ export class TripMemberGuard implements CanActivate {
     const user = request.user;
     const tripId = request.params.tripId;
 
-    if (!tripId) return true;
+    // Fail-closed: Thiếu tripId trong request params -> từ chối truy cập để bảo vệ tài nguyên chuyến đi
+    if (!tripId) {
+      throw new ForbiddenException('errors.auth.forbidden');
+    }
 
     const member = await this.prisma.tripMember.findUnique({
       where: { tripId_userId: { tripId, userId: user.id } },

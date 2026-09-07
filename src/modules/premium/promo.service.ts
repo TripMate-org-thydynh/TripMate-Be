@@ -156,26 +156,69 @@ export class PromoService {
     orderId: string;
     discountApplied: number;
   }) {
-    const promo = await this.prisma.promoCode.findUnique({
-      where: { code: params.code.toUpperCase() },
-    });
-    if (!promo) {
-      this.logger.warn(`Đơn ${params.orderId} mang mã lạ "${params.code}"`);
-      return;
-    }
-    try {
-      await this.prisma.promoRedemption.create({
-        data: {
-          codeId: promo.id,
-          userId: params.userId,
-          orderId: params.orderId,
-          discountApplied: params.discountApplied,
-        },
+    return this.prisma.$transaction(async (tx) => {
+      const promo = await tx.promoCode.findUnique({
+        where: { code: params.code.toUpperCase() },
       });
-    } catch {
-      // `@unique(orderId)`: webhook gọi lại. Không phải lỗi.
-      this.logger.log(`Lượt dùng mã của đơn ${params.orderId} đã được ghi`);
-    }
+      if (!promo) {
+        this.logger.warn(`Đơn ${params.orderId} mang mã lạ "${params.code}"`);
+        return;
+      }
+
+      // Kiểm tra xem đơn này đã được ghi nhận chưa (idempotency khi webhook gọi lại)
+      const existing = await tx.promoRedemption.findUnique({
+        where: { orderId: params.orderId },
+      });
+      if (existing) {
+        this.logger.log(`Lượt dùng mã của đơn ${params.orderId} đã được ghi`);
+        return;
+      }
+
+      // LƯU Ý: Hàm redeem() chạy trong luồng xử lý webhook thanh toán (fulfill),
+      // SAU KHI tiền đã vào tài khoản và entitlements đã cấp gói xong.
+      // Tuyệt đối KHÔNG ném ngoại lệ ở đây vì ném lỗi sẽ làm lật trạng thái đơn hàng
+      // từ SUCCESS về PENDING và khiến cổng thanh toán retry liên tục, trong khi vấn đề
+      // chỉ là ghi sổ khuyến mãi. Chỗ ĐÚNG để từ chối mã vượt trần là lúc TẠO ĐƠN (`validate()`),
+      // không phải lúc ghi nhận sau thanh toán.
+
+      // Đếm lại bằng tx: tổng lượt đã dùng của mã so với maxRedemptions
+      if (promo.maxRedemptions !== null) {
+        const used = await tx.promoRedemption.count({
+          where: { codeId: promo.id },
+        });
+        if (used >= promo.maxRedemptions) {
+          this.logger.warn(
+            `Không ghi nhận mã "${params.code}" cho đơn ${params.orderId} (userId: ${params.userId}): mã đã hết lượt dùng (${used}/${promo.maxRedemptions})`,
+          );
+          return;
+        }
+      }
+
+      // Đếm lại bằng tx: số lượt của riêng user này so với perUserLimit
+      const mine = await tx.promoRedemption.count({
+        where: { codeId: promo.id, userId: params.userId },
+      });
+      if (mine >= promo.perUserLimit) {
+        this.logger.warn(
+          `Không ghi nhận mã "${params.code}" cho đơn ${params.orderId} (userId: ${params.userId}): người dùng đã vượt giới hạn lượt dùng (${mine}/${promo.perUserLimit})`,
+        );
+        return;
+      }
+
+      try {
+        await tx.promoRedemption.create({
+          data: {
+            codeId: promo.id,
+            userId: params.userId,
+            orderId: params.orderId,
+            discountApplied: params.discountApplied,
+          },
+        });
+      } catch {
+        // `@unique(orderId)`: webhook gọi lại. Không phải lỗi.
+        this.logger.log(`Lượt dùng mã của đơn ${params.orderId} đã được ghi`);
+      }
+    });
   }
 
   /** Các mã đang chạy, để màn khuyến mãi hiện thay vì để người dùng đoán. */

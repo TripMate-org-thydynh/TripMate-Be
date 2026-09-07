@@ -27,6 +27,11 @@ import { PrismaModule } from '../../prisma/prisma.module';
     ReferralService,
   ],
   // Xuất ra để mọi module khác hỏi được "người này được dùng gì".
-  exports: [PremiumService, EntitlementService, TrialService],
+  exports: [
+    PremiumService,
+    EntitlementService,
+    TrialService,
+    ReferralService,
+  ],
 })
 export class PremiumModule {}

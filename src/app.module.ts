@@ -53,6 +53,7 @@ import {
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import * as path from 'path';
+import { ObservabilityModule } from './modules/observability/observability.module';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -105,6 +106,7 @@ import { AppService } from './app.service';
     }),
     ThrottlerModule.forRoot([
       {
+        name: 'default',
         ttl: 60000,
         limit: 100,
       },
@@ -157,6 +159,7 @@ import { AppService } from './app.service';
     JournalModule,
     VacayModule,
     AdminModule,
+    ObservabilityModule,
   ],
   controllers: [AppController],
   providers: [

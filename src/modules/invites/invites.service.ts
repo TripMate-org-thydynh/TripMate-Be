@@ -103,6 +103,12 @@ export class InvitesService {
     });
     if (existing) throw new BadRequestException('Already a trip member');
 
+    // Hạn mức chuyến đang hoạt động của người tham gia.
+    const activeTrips = await this.prisma.tripMember.count({
+      where: { userId, trip: { deletedAt: null } },
+    });
+    await this.entitlements.assertWithin(userId, 'activeTrips', activeTrips);
+
     // Hạn mức số thành viên — cùng chốt chặn như `TripsService.join()`.
     //
     // Đây là đường vào chuyến thứ hai. Chặn một đường mà bỏ đường kia thì hạn
@@ -117,22 +123,36 @@ export class InvitesService {
     );
 
     // Add member & increment use count
-    await this.prisma.$transaction([
-      this.prisma.tripMember.create({
-        data: { tripId: invite.tripId, userId, role: 'MEMBER' },
-      }),
-      this.prisma.tripInvite.update({
-        where: { id: invite.id },
-        data: {
-          useCount: { increment: 1 },
-          // Deactivate if single-use
-          isActive:
-            invite.maxUses !== null && invite.useCount + 1 >= invite.maxUses
-              ? false
-              : true,
+    await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.tripInvite.updateMany({
+        where: {
+          id: invite.id,
+          isActive: true,
+          ...(invite.maxUses !== null
+            ? { useCount: { lt: invite.maxUses } }
+            : {}),
         },
-      }),
-    ]);
+        data: { useCount: { increment: 1 } },
+      });
+
+      if (claimed.count === 0) {
+        throw new BadRequestException('Invite link has reached max uses');
+      }
+
+      if (invite.maxUses !== null) {
+        await tx.tripInvite.updateMany({
+          where: {
+            id: invite.id,
+            useCount: { gte: invite.maxUses },
+          },
+          data: { isActive: false },
+        });
+      }
+
+      await tx.tripMember.create({
+        data: { tripId: invite.tripId, userId, role: 'MEMBER' },
+      });
+    });
 
     return this.prisma.trip.findUnique({
       where: { id: invite.tripId },
