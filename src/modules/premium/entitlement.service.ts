@@ -217,14 +217,18 @@ export class EntitlementService {
     });
 
     const base = existing?.currentPeriodEnd ?? now;
-    const end = new Date(base);
-    end.setMonth(end.getMonth() + months);
+    // Không dùng thẳng `setMonth` vì JS sẽ tự chuẩn hoá tràn ngày (ví dụ 31/01 + 1 tháng thành 03/03).
+    // Dùng `addMonths` để tự động kẹp về ngày cuối cùng của tháng đích (28/02 hoặc 29/02 năm nhuận).
+    const end = this.addMonths(base, months);
 
     if (existing) {
       return this.prisma.subscription.update({
         where: { id: existing.id },
         data: {
           plan,
+          // Đồng bộ số ghế theo gói mới khi nâng/hạ cấp (ví dụ PLUS -> SQUAD được nâng lên 5 ghế,
+          // tránh tình trạng khách trả tiền lên SQUAD nhưng vẫn bị giữ nguyên seats = 1).
+          seats: plan === 'SQUAD' ? 5 : 1,
           currentPeriodEnd: end,
           cancelAtPeriodEnd: false,
           canceledAt: null,
@@ -248,6 +252,32 @@ export class EntitlementService {
         seats: plan === 'SQUAD' ? 5 : 1,
       },
     });
+  }
+
+  /**
+   * Cộng tháng vào mốc thời gian và xử lý triệt để lỗi tràn ngày (overflow) của JavaScript Date.
+   *
+   * Vì sao không dùng trực tiếp `date.setMonth(date.getMonth() + months)`:
+   * Khi ngày của mốc ban đầu là 31 (hoặc 29, 30) mà tháng đích có ít ngày hơn (ví dụ 31/01 cộng 1 tháng),
+   * hàm `setMonth` sẽ gán thành 31/02, sau đó JS tự động chuẩn hoá (overflow) sang tháng tiếp theo
+   * thành 03/03 ở năm thường hoặc 02/03 ở năm nhuận — vô tình tặng thêm 2-3 ngày cho người dùng.
+   * Tình trạng tương tự cũng xảy ra với ngày 31 của các tháng 3, 5, 8, 10 khi cộng sang tháng có 30 ngày.
+   *
+   * Giải pháp:
+   * 1. Ghi nhớ ngày trong tháng ban đầu (`expectedDay = base.getDate()`).
+   * 2. Cộng tháng vào bản sao `result`.
+   * 3. Nếu ngày kết quả bị tràn (`result.getDate() !== expectedDay`), gọi `result.setDate(0)` để lùi
+   *    về ngày 0 của tháng bị tràn — tức ngày cuối cùng của tháng đích (ví dụ 28/02 hoặc 29/02 năm nhuận).
+   * 4. Giữ nguyên vẹn giờ, phút, giây, mili-giây của `base`.
+   */
+  private addMonths(base: Date, months: number): Date {
+    const result = new Date(base);
+    const expectedDay = result.getDate();
+    result.setMonth(result.getMonth() + months);
+    if (result.getDate() !== expectedDay) {
+      result.setDate(0);
+    }
+    return result;
   }
 
   /**

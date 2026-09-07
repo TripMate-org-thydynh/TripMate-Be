@@ -4,6 +4,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AiService } from './ai.service';
 import { CreateAIRequestDto } from './dto/ai-request.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 @ApiTags('AI')
 @UseGuards(JwtAuthGuard)
@@ -28,8 +29,12 @@ export class AiController {
     summary:
       'Phân tích ảnh (base64) → toạ độ + tên địa điểm (EXIF → AI vision)',
   })
-  photoLocation(@Body() dto: { imageBase64: string; mimeType?: string }) {
+  photoLocation(
+    @CurrentUser() user: User,
+    @Body() dto: { imageBase64: string; mimeType?: string },
+  ) {
     return this.aiService.photoLocation(
+      user.id,
       dto.imageBase64,
       dto.mimeType ?? 'image/jpeg',
     );
@@ -44,21 +49,30 @@ export class AiController {
   // --- MODULE 10 AI FLOW ENDPOINTS ---
 
   @Get('trips/:tripId/personality')
+  @UseGuards(TripMemberGuard)
   @ApiOperation({ summary: 'Phân tích tính cách phượt thủ của cả nhóm' })
-  getPersonality(@Param('tripId') tripId: string) {
-    return this.aiService.getPersonalityRoast(tripId);
+  getPersonality(
+    @CurrentUser() user: User,
+    @Param('tripId') tripId: string,
+  ) {
+    return this.aiService.getPersonalityRoast(user.id, tripId);
   }
 
   @Get('trips/:tripId/mood')
+  @UseGuards(TripMemberGuard)
   @ApiOperation({ summary: 'Đo lường tâm trạng và xung đột của Squad' })
-  getMood(@Param('tripId') tripId: string) {
-    return this.aiService.getSquadMood(tripId);
+  getMood(@CurrentUser() user: User, @Param('tripId') tripId: string) {
+    return this.aiService.getSquadMood(user.id, tripId);
   }
 
   @Get('trips/:tripId/timeline')
+  @UseGuards(TripMemberGuard)
   @ApiOperation({ summary: 'Dòng thời gian gợi ý hành trình tự động bằng AI' })
-  getTimeline(@Param('tripId') tripId: string) {
-    return this.aiService.getRecommendationTimeline(tripId);
+  getTimeline(
+    @CurrentUser() user: User,
+    @Param('tripId') tripId: string,
+  ) {
+    return this.aiService.getRecommendationTimeline(user.id, tripId);
   }
 
   @Get('saved-prompts')
@@ -74,6 +88,7 @@ export class AiController {
   }
 
   @Get('trips/:tripId')
+  @UseGuards(TripMemberGuard)
   @ApiOperation({ summary: 'AI requests của chuyến đi' })
   findByTrip(@Param('tripId') tripId: string) {
     return this.aiService.findByTrip(tripId);

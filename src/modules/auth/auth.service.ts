@@ -18,7 +18,7 @@ import { MailService } from './mail.service';
 import { GoogleLoginDto } from './dto/google-login.dto';
 import { RegisterPasswordDto } from './dto/register-password.dto';
 import { LoginPasswordDto } from './dto/login-password.dto';
-import * as crypto from 'crypto';
+import * as crypto from 'node:crypto';
 import { OAuth2Client } from 'google-auth-library';
 
 @Injectable()
@@ -217,16 +217,19 @@ export class AuthService {
 
   async sendOtp(phoneNumber: string) {
     const cleanedPhone = phoneNumber.trim();
-    // Generate a random 4-digit code
-    const code = Math.floor(1000 + Math.random() * 9000).toString();
+    // Generate a cryptographically secure 6-digit code
+    const code = crypto.randomInt(100000, 1000000).toString();
 
     // Cache the OTP code for 5 minutes
     const cacheKey = `phone_otp:${cleanedPhone}`;
-    await this.cacheManager.set(cacheKey, code, 300000);
+    const attemptsKey = `phone_otp_attempts:${cleanedPhone}`;
+    const OTP_TTL = 300000;
+    await this.cacheManager.set(cacheKey, code, OTP_TTL);
+    await this.cacheManager.del(attemptsKey);
 
-    this.logger.log(
-      `Generated OTP code ${code} for phone/email ${cleanedPhone}`,
-    );
+    if (process.env.NODE_ENV !== 'production') {
+      this.logger.debug(`Generated OTP code for ${cleanedPhone}`);
+    }
 
     if (cleanedPhone.includes('@')) {
       // Gửi OTP qua email thật bằng SendGrid (fallback log nếu chưa cấu hình).
@@ -253,6 +256,8 @@ export class AuthService {
   async verifyOtp(phoneNumber: string, code: string) {
     const cleanedPhone = phoneNumber.trim();
     const cacheKey = `phone_otp:${cleanedPhone}`;
+    const attemptsKey = `phone_otp_attempts:${cleanedPhone}`;
+    const OTP_TTL = 300000;
 
     const cachedCode = await this.cacheManager.get<string>(cacheKey);
 
@@ -260,12 +265,34 @@ export class AuthService {
       throw new UnauthorizedException('Mã OTP đã hết hạn hoặc không tồn tại');
     }
 
-    if (cachedCode !== code) {
+    const inputBuffer = Buffer.from(code ?? '', 'utf-8');
+    const cachedBuffer = Buffer.from(cachedCode, 'utf-8');
+
+    let isMatch = false;
+    if (inputBuffer.length === cachedBuffer.length) {
+      isMatch = crypto.timingSafeEqual(inputBuffer, cachedBuffer);
+    }
+
+    if (!isMatch) {
+      const currentAttempts =
+        (await this.cacheManager.get<number>(attemptsKey)) || 0;
+      const newAttempts = currentAttempts + 1;
+
+      if (newAttempts >= 5) {
+        await this.cacheManager.del(cacheKey);
+        await this.cacheManager.del(attemptsKey);
+        throw new UnauthorizedException(
+          'Bạn đã nhập sai mã OTP quá 5 lần. Vui lòng yêu cầu mã mới.',
+        );
+      }
+
+      await this.cacheManager.set(attemptsKey, newAttempts, OTP_TTL);
       throw new UnauthorizedException('Mã OTP không chính xác');
     }
 
-    // OTP verified successfully - evict cache key
+    // OTP verified successfully - evict cache keys
     await this.cacheManager.del(cacheKey);
+    await this.cacheManager.del(attemptsKey);
 
     // Formulate a client-friendly mock supabaseId
     const isEmail = cleanedPhone.includes('@');

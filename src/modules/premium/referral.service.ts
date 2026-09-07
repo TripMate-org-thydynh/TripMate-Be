@@ -4,6 +4,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { randomInt } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { XpService } from '../xp/xp.service';
@@ -173,47 +174,76 @@ export class ReferralService {
     }
 
     try {
-      await this.prisma.referral.create({
-        data: {
-          referrerId: owner.userId,
-          refereeId: userId,
-          code,
-          referrerXp: REFERRER_XP,
-          refereeXp: REFEREE_XP,
-        },
+      const result = await this.prisma.$transaction(async (tx) => {
+        // Thưởng cho người giới thiệu được hoãn tới khi người được mời làm hành
+        // động thật (tạo hoặc tham gia chuyến), để tài khoản ảo không sinh ra thưởng.
+        // Do đó lúc này referrerXp = 0.
+        const referral = await tx.referral.create({
+          data: {
+            referrerId: owner.userId,
+            refereeId: userId,
+            code,
+            referrerXp: 0,
+            refereeXp: REFEREE_XP,
+          },
+        });
+
+        // Trao XP THẬT qua sổ cái XP trong cùng transaction cho NGƯỜI ĐƯỢC MỜI.
+        // Chạy tuần tự thay vì Promise.all vì Prisma Transaction Client
+        // không an toàn khi thực thi đồng thời nhiều câu lệnh.
+        const refereeAward = await this.xp.award(userId, 'REFERRAL_RECEIVED', {
+          refId: owner.userId,
+          amount: REFEREE_XP,
+          tx,
+        });
+
+        // `refereeXp` trong bảng Referral là số dùng để HIỂN THỊ,
+        // phải khớp với XP thật đã vào ví, ví dụ khi chạm trần dailyCap hoặc bị duplicate.
+        const actualRefereeXp =
+          refereeAward.awarded && !refereeAward.skipped
+            ? (refereeAward.amount ?? REFEREE_XP)
+            : 0;
+
+        // Cập nhật lại số XP thực tế đã trao vào bản ghi Referral vừa tạo.
+        // Cùng nằm trong transaction nên đảm bảo tính nguyên tử, không cần try/catch nuốt lỗi.
+        await tx.referral.update({
+          where: { id: referral.id },
+          data: {
+            referrerXp: 0,
+            refereeXp: actualRefereeXp,
+          },
+        });
+
+        return {
+          actualRefereeXp,
+          balance: refereeAward.balance,
+        };
       });
-    } catch {
-      // Hai request song song: `@unique` giữ lại đúng một bản ghi.
-      throw new BadRequestException({
-        code: 'ALREADY_REFERRED',
-        message: 'errors.referral.alreadyReferred',
-      });
+
+      this.logger.log(`Giới thiệu: ${owner.userId} → ${userId} (mã ${code})`);
+
+      return {
+        success: true,
+        code,
+        /// XP người NHẬP mã được nhận. Người mời nhận `REFERRER_XP`, xem ở màn
+        /// mã của họ sau khi người được mời tạo/tham gia chuyến.
+        rewardXp: result.actualRefereeXp,
+        balance: result.balance,
+      };
+    } catch (e) {
+      // Hai request song song: `@unique` trên refereeId giữ lại đúng một bản ghi.
+      if (
+        (e instanceof Prisma.PrismaClientKnownRequestError &&
+          e.code === 'P2002') ||
+        (e as { code?: string })?.code === 'P2002'
+      ) {
+        throw new BadRequestException({
+          code: 'ALREADY_REFERRED',
+          message: 'errors.referral.alreadyReferred',
+        });
+      }
+      throw e;
     }
-
-    // Trao XP THẬT qua sổ cái XP, không phải một con số trong response.
-    // `refId` là id người kia nên `unique(userId, reason, refId)` chặn luôn
-    // việc cộng trùng nếu chỗ này bị gọi lại.
-    const [refereeAward] = await Promise.all([
-      this.xp.award(userId, 'REFERRAL_RECEIVED', {
-        refId: owner.userId,
-        amount: REFEREE_XP,
-      }),
-      this.xp.award(owner.userId, 'REFERRAL_SENT', {
-        refId: userId,
-        amount: REFERRER_XP,
-      }),
-    ]);
-
-    this.logger.log(`Giới thiệu: ${owner.userId} → ${userId} (mã ${code})`);
-
-    return {
-      success: true,
-      code,
-      /// XP người NHẬP mã được nhận. Người mời nhận `REFERRER_XP`, xem ở màn
-      /// mã của họ.
-      rewardXp: REFEREE_XP,
-      balance: refereeAward.balance,
-    };
   }
 
   /**
@@ -238,4 +268,78 @@ export class ReferralService {
         : null,
     };
   }
+
+  /**
+   * Quyết toán thưởng cho người giới thiệu khi người được mời thực hiện hành động thật.
+   *
+   * Toàn bộ phương thức được bọc trong try/catch nuốt lỗi và ghi log warn:
+   * phương thức này được kích hoạt ở cuối luồng tạo chuyến (create) hoặc tham gia
+   * chuyến (join). Tuyệt đối không được để lỗi phát sinh từ việc trao thưởng referral
+   * làm hỏng hành động cốt lõi của người dùng (tạo/tham gia chuyến đi).
+   */
+  async settleReferralReward(refereeId: string): Promise<void> {
+    try {
+      const referral = await this.prisma.referral.findFirst({
+        where: {
+          refereeId,
+          referrerAwardedAt: null,
+        },
+      });
+
+      // Không có bản ghi referral nào đang chờ trả thưởng (hoặc đã được trả rồi)
+      if (!referral) {
+        return;
+      }
+
+      await this.prisma.$transaction(async (tx) => {
+        // Kiểm tra lại trong transaction để tránh race condition nếu 2 hành động xảy ra song song
+        const current = await tx.referral.findUnique({
+          where: { id: referral.id },
+          select: { referrerAwardedAt: true },
+        });
+        if (current?.referrerAwardedAt) {
+          return;
+        }
+
+        const awardResult = await this.xp.award(
+          referral.referrerId,
+          'REFERRAL_SENT',
+          {
+            refId: referral.refereeId,
+            amount: REFERRER_XP,
+            tx,
+          },
+        );
+
+        const actualReferrerXp =
+          awardResult.awarded && !awardResult.skipped
+            ? (awardResult.amount ?? REFERRER_XP)
+            : 0;
+
+        if (awardResult.skipped) {
+          this.logger.log(
+            `Thưởng giới thiệu cho ${referral.referrerId} (referee ${refereeId}) bị bỏ qua: ${awardResult.skipped}`,
+          );
+        }
+
+        // Vẫn cập nhật referrerAwardedAt kể cả khi bị skip (do daily_cap hoặc duplicate)
+        // để tránh việc các hành động tạo/tham gia chuyến kế tiếp lại liên tục thử trả thưởng lại.
+        await tx.referral.update({
+          where: { id: referral.id },
+          data: {
+            referrerXp: actualReferrerXp,
+            referrerAwardedAt: new Date(),
+          },
+        });
+      });
+    } catch (error) {
+      // Nuốt lỗi để không làm gián đoạn luồng nghiệp vụ tạo/tham gia chuyến của người dùng.
+      this.logger.warn(
+        `Lỗi khi quyết toán thưởng referral cho referee ${refereeId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
 }
+

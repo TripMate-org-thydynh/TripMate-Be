@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { TripsService } from './trips.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EntitlementService } from '../premium/entitlement.service';
+import { ReferralService } from '../premium/referral.service';
 import {
   ConflictException,
   ForbiddenException,
@@ -12,6 +13,7 @@ describe('TripsService', () => {
   let service: TripsService;
   let prisma: any;
   let entitlements: any;
+  let referrals: any;
 
   const mockTrip = {
     id: 'trip-111',
@@ -44,11 +46,16 @@ describe('TripsService', () => {
       assertTripWithin: jest.fn().mockResolvedValue(undefined),
     };
 
+    referrals = {
+      settleReferralReward: jest.fn().mockResolvedValue(undefined),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         TripsService,
         { provide: PrismaService, useValue: prisma },
         { provide: EntitlementService, useValue: entitlements },
+        { provide: ReferralService, useValue: referrals },
       ],
     }).compile();
 

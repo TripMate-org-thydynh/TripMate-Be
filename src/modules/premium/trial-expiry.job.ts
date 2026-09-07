@@ -33,10 +33,38 @@ export class TrialExpiryJob {
       const trials = await this.trials.expireDue();
 
       // Gói đã trả tiền hết hạn: cùng lý do, cùng cách xử lý.
+      // Truy vấn danh sách sắp bị hạ trước khi updateMany để ghi nhận sự kiện đối soát.
+      const now = new Date();
+      const expiredSubs = await this.prisma.subscription.findMany({
+        where: { status: 'ACTIVE', currentPeriodEnd: { lte: now } },
+        select: { id: true, userId: true, plan: true },
+      });
+
       const subs = await this.prisma.subscription.updateMany({
-        where: { status: 'ACTIVE', currentPeriodEnd: { lte: new Date() } },
+        where: { status: 'ACTIVE', currentPeriodEnd: { lte: now } },
         data: { status: 'EXPIRED' },
       });
+
+      // Ghi sự kiện cho từng gói trả phí đã hết hạn. Việc ghi nhật ký là phụ,
+      // bọc try/catch để không làm hỏng tiến trình dọn hạn chính nếu có sự cố.
+      if (expiredSubs.length > 0) {
+        try {
+          await this.prisma.subscriptionEvent.createMany({
+            data: expiredSubs.map((sub) => ({
+              userId: sub.userId,
+              type: 'SUBSCRIPTION_EXPIRED',
+              fromStatus: 'ACTIVE',
+              toStatus: 'EXPIRED',
+              plan: sub.plan,
+              actor: 'job:trial-expiry',
+            })),
+          });
+        } catch (eventError) {
+          this.logger.warn(
+            `Không thể ghi nhật ký SubscriptionEvent cho các gói hết hạn: ${String(eventError)}`,
+          );
+        }
+      }
 
       // Đơn treo quá lâu. `expireStaleOrders` chỉ dọn đơn của chính người vừa
       // bấm mua, nên đơn của người không bao giờ quay lại sẽ nằm `PENDING`

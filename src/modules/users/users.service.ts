@@ -38,6 +38,26 @@ export class UsersService {
   private socialLinks: Record<string, any> = {};
   private userFollowers: Record<string, string[]> = {};
 
+  async findPublicProfile(id: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id, deletedAt: null },
+      select: {
+        id: true,
+        name: true,
+        username: true,
+        avatarUrl: true,
+        bio: true,
+        vibeTags: true,
+        travelScore: true,
+        chaosScore: true,
+        theme: true,
+        _count: { select: { tripMembers: true, moments: true } },
+      },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    return user;
+  }
+
   async findById(id: string) {
     const user = await this.prisma.user.findUnique({
       where: { id, deletedAt: null },

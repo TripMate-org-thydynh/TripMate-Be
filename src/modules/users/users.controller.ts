@@ -173,6 +173,6 @@ export class UsersController {
   @Get(':id')
   @ApiOperation({ summary: 'Xem profile người dùng khác' })
   findOne(@Param('id') id: string) {
-    return this.usersService.findById(id);
+    return this.usersService.findPublicProfile(id);
   }
 }

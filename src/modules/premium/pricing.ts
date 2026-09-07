@@ -30,6 +30,18 @@ export const BILLING_TERMS: { months: number; discount: number }[] = [
   { months: 12, discount: 0.2 },
 ];
 
+/**
+ * Bảng giá niêm yết tường minh cho từng (gói, kỳ hạn) — nguồn sự thật duy nhất.
+ *
+ * Giá niêm yết là quyết định kinh doanh, không nên là sản phẩm phụ của phép làm tròn
+ * (ví dụ -20% của 468.000 ra 374.400 rồi làm tròn thành 374.000). Việc khai báo
+ * tường minh giúp marketing, bảng giá UI và backend luôn thống nhất cùng một con số.
+ */
+export const PLAN_PRICE: Record<PaidPlan, Record<number, number>> = {
+  PLUS: { 1: 39000, 12: 374000 },
+  SQUAD: { 1: 99000, 12: 950000 },
+};
+
 export function isPaidPlan(value: unknown): value is PaidPlan {
   return value === 'PLUS' || value === 'SQUAD';
 }
@@ -37,16 +49,14 @@ export function isPaidPlan(value: unknown): value is PaidPlan {
 /**
  * Giá phải trả cho `plan` trong `months` tháng.
  *
- * Làm tròn tới 1.000đ vì các ví Việt Nam không nhận số lẻ dưới đó, và vì hoá
- * đơn lẻ tới hàng đơn vị trông như lỗi.
+ * Đọc trực tiếp từ bảng giá tường minh PLAN_PRICE thay vì tính động và làm tròn.
  */
 export function priceOf(plan: PaidPlan, months: number): number {
-  const term = BILLING_TERMS.find((t) => t.months === months);
-  if (!term) {
+  const price = PLAN_PRICE[plan]?.[months];
+  if (price === undefined) {
     throw new Error(`Kỳ hạn không bán: ${months} tháng`);
   }
-  const gross = MONTHLY_PRICE[plan] * months;
-  return Math.round((gross * (1 - term.discount)) / 1000) * 1000;
+  return price;
 }
 
 /** Các kỳ hạn hợp lệ, dùng để kiểm tra đầu vào. */
