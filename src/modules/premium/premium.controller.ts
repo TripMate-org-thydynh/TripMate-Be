@@ -1,4 +1,11 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { PremiumService } from './premium.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -35,10 +42,16 @@ export class PremiumController {
   @ApiOperation({ summary: 'Thực hiện thanh toán nâng cấp Premium' })
   checkout(
     @CurrentUser() user: { id: string },
-    @Body('tier') tier: string,
-    @Body('paymentMethod') paymentMethod: string,
+    @Body()
+    body: {
+      plan?: string;
+      tier?: string;
+      months?: number;
+      paymentMethod?: string;
+      redirectUrl?: string;
+    },
   ) {
-    return this.premiumService.checkout(user.id, tier, paymentMethod);
+    return this.premiumService.checkout(user.id, body);
   }
 
   @Post('verify-google-play')
@@ -61,6 +74,15 @@ export class PremiumController {
   @ApiOperation({ summary: 'Lấy lịch sử thanh toán hóa đơn' })
   getBillingHistory(@CurrentUser() user: { id: string }) {
     return this.premiumService.getBillingHistory(user.id);
+  }
+
+  @Get('order-status/:orderCode')
+  @ApiOperation({ summary: 'Kiểm tra trạng thái đơn hàng thời gian thực' })
+  getOrderStatus(
+    @CurrentUser() user: { id: string },
+    @Param('orderCode') orderCode: string,
+  ) {
+    return this.premiumService.getOrderStatus(user.id, orderCode);
   }
 
   @Post('referrals')

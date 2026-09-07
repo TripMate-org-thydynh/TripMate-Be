@@ -909,6 +909,7 @@ enum PaymentProvider {
   MOMO
   VNPAY
   ZALOPAY
+  GOOGLE_PLAY
   BANK_TRANSFER
   CASH
 }

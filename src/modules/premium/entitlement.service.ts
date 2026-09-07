@@ -1,5 +1,5 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
-import { Plan } from '@prisma/client';
+import { Plan, PaymentProvider } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 
 /** Những thứ bản Free bị giới hạn. */
@@ -153,7 +153,7 @@ export class EntitlementService {
     userId: string;
     plan: Exclude<Plan, 'FREE'>;
     months: number;
-    provider: 'MOMO' | 'ZALOPAY' | 'BANK_TRANSFER' | 'CASH' | 'VNPAY';
+    provider: PaymentProvider;
     externalId?: string;
   }) {
     const { userId, plan, months, provider, externalId } = params;

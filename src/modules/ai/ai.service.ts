@@ -131,6 +131,8 @@ export interface SavedPrompt {
   prompt: string;
 }
 
+import { EntitlementService } from '../premium/entitlement.service';
+
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
@@ -139,6 +141,7 @@ export class AiService {
   constructor(
     private prisma: PrismaService,
     private config: ConfigService,
+    private entitlements: EntitlementService,
   ) {
     const apiKey =
       this.config.get<string>('GEMINI_API_KEY') || process.env.GEMINI_API_KEY;
@@ -461,6 +464,14 @@ export class AiService {
     type: AIRequestType,
     prompt: string,
   ) {
+    // Kiểm tra hạn mức AI trong 30 ngày qua
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const currentAiCount = await this.prisma.aIRequest.count({
+      where: { userId, createdAt: { gte: thirtyDaysAgo } },
+    });
+    await this.entitlements.assertWithin(userId, 'aiPerMonth', currentAiCount);
+
     try {
       return await this.runRequest(userId, tripId, type, prompt);
     } catch (e) {

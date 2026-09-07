@@ -12,9 +12,14 @@ function generateInviteCode(): string {
   return crypto.randomBytes(6).toString('base64url').toUpperCase().slice(0, 10);
 }
 
+import { EntitlementService } from '../premium/entitlement.service';
+
 @Injectable()
 export class InvitesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private entitlements: EntitlementService,
+  ) {}
 
   async createInvite(tripId: string, userId: string, dto: CreateInviteDto) {
     // Verify member
@@ -98,6 +103,16 @@ export class InvitesService {
       where: { tripId_userId: { tripId: invite.tripId, userId } },
     });
     if (existing) throw new BadRequestException('Already a trip member');
+
+    // Kiểm tra hạn mức thành viên tối đa theo gói của chủ chuyến
+    const currentMembers = await this.prisma.tripMember.count({
+      where: { tripId: invite.tripId },
+    });
+    await this.entitlements.assertWithin(
+      invite.trip.createdBy,
+      'membersPerTrip',
+      currentMembers,
+    );
 
     // Add member & increment use count
     await this.prisma.$transaction([

@@ -121,11 +121,11 @@ import { AppService } from './app.service';
         // động ở production.
         path: path.join(__dirname, 'i18n'),
         // Watcher chỉ có ích lúc dev; ở prod nó giữ file handle vô ích.
-        watch: process.env.NODE_ENV !== 'production',
+        watch: false,
       },
       resolvers: [
         new QueryResolver(['lang', 'l']),
-        new HeaderResolver(['x-custom-lang', 'accept-language']),
+        new HeaderResolver(['x-custom-lang']),
         AcceptLanguageResolver,
       ],
     }),
