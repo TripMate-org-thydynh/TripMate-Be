@@ -3,6 +3,7 @@ import {
   ExecutionContext,
   ForbiddenException,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -54,14 +55,27 @@ export class ResourceOwnerGuard implements CanActivate {
     const user = request.user;
     const resourceId: string | undefined = request.params[meta.paramName];
 
-    if (!resourceId) return true;
+    // Fail-closed: Thiếu resourceId trong request params -> từ chối truy cập để tránh lọt quyền
+    if (!resourceId) {
+      throw new ForbiddenException('errors.auth.forbidden');
+    }
 
     const ownerField = OWNER_FIELD_MAP[meta.model];
-    if (!ownerField) return true; // unknown model → skip
+    // Fail-closed: Model chưa được khai báo trong OWNER_FIELD_MAP (lỗi cấu hình backend, không được bỏ qua)
+    if (!ownerField) {
+      throw new InternalServerErrorException(
+        `Model ${meta.model} chưa được cấu hình quyền sở hữu trong OWNER_FIELD_MAP`,
+      );
+    }
 
     // Dynamically query the Prisma model
     const delegate = (this.prisma as any)[meta.model];
-    if (!delegate?.findUnique) return true;
+    // Fail-closed: Model không tồn tại trên Prisma hoặc thiếu delegate.findUnique (lỗi cấu hình backend)
+    if (!delegate?.findUnique) {
+      throw new InternalServerErrorException(
+        `Prisma delegate cho model ${meta.model} không hợp lệ`,
+      );
+    }
 
     const resource = await delegate.findUnique({
       where: { id: resourceId },

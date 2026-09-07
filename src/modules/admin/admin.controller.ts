@@ -15,7 +15,9 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AdminService } from './admin.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { AdminGuard } from '../../common/guards/admin.guard';
-import { UserRole } from '@prisma/client';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import type { User } from '@prisma/client';
+import { UserRole, Plan } from '@prisma/client';
 import {
   IsEnum,
   IsBoolean,
@@ -23,9 +25,27 @@ import {
   IsString,
   IsNumber,
   IsDateString,
+  Min,
+  IsNotEmpty,
 } from 'class-validator';
 
 // --- INLINED DTOS ---
+class ExtendSubscriptionDto {
+  @IsNumber()
+  @Min(1)
+  months: number;
+
+  @IsString()
+  @IsNotEmpty({ message: 'Lý do gia hạn không được để trống' })
+  reason: string;
+}
+
+class RevokeSubscriptionDto {
+  @IsString()
+  @IsNotEmpty({ message: 'Lý do thu hồi không được để trống' })
+  reason: string;
+}
+
 class UpdateUserDto {
   @IsEnum(UserRole)
   @IsOptional()
@@ -320,5 +340,63 @@ export class AdminController {
   @ApiOperation({ summary: 'Cập nhật cấu hình hệ thống (admin)' })
   updateConfig(@Param('key') key: string, @Body() dto: UpdateConfigDto) {
     return this.adminService.updateConfig(key, dto.value, dto.description);
+  }
+
+  @Delete('configs/:key')
+  @ApiOperation({ summary: 'Xoá cấu hình hệ thống (admin)' })
+  deleteConfig(@Param('key') key: string) {
+    return this.adminService.deleteConfig(key);
+  }
+
+  // --- SUBSCRIPTION ENDPOINTS ---
+  @Get('subscriptions')
+  @ApiOperation({ summary: 'Xem danh sách gói đăng ký (admin)' })
+  getSubscriptions(
+    @Query('search') search?: string,
+    @Query('plan') plan?: Plan,
+    @Query('status') status?: string,
+    @Query('expiringSoon') expiringSoon?: boolean | string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.adminService.getSubscriptions({
+      search,
+      plan,
+      status,
+      expiringSoon,
+      page,
+      limit,
+    });
+  }
+
+  @Get('subscriptions/:id')
+  @ApiOperation({ summary: 'Xem chi tiết gói đăng ký & danh sách ghế Squad (admin)' })
+  getSubscription(@Param('id') id: string) {
+    return this.adminService.getSubscription(id);
+  }
+
+  @Post('subscriptions/:id/extend')
+  @ApiOperation({ summary: 'Gia hạn thủ công gói đăng ký có ghi log lý do (admin)' })
+  extendSubscription(
+    @Param('id') id: string,
+    @CurrentUser() admin: User,
+    @Body() dto: ExtendSubscriptionDto,
+  ) {
+    return this.adminService.extendSubscription(
+      admin.id,
+      id,
+      dto.months,
+      dto.reason,
+    );
+  }
+
+  @Post('subscriptions/:id/revoke')
+  @ApiOperation({ summary: 'Thu hồi gói đăng ký có ghi log lý do (admin)' })
+  revokeSubscription(
+    @Param('id') id: string,
+    @CurrentUser() admin: User,
+    @Body() dto: RevokeSubscriptionDto,
+  ) {
+    return this.adminService.revokeSubscription(admin.id, id, dto.reason);
   }
 }

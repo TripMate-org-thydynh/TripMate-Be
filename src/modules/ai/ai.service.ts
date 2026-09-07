@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { AIRequestType, AIStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EntitlementService } from '../premium/entitlement.service';
 import { ConfigService } from '@nestjs/config';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as exifr from 'exifr';
@@ -131,8 +132,6 @@ export interface SavedPrompt {
   prompt: string;
 }
 
-import { EntitlementService } from '../premium/entitlement.service';
-
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
@@ -210,7 +209,13 @@ export class AiService {
    * 1) Đọc GPS trong EXIF (chính xác, free). 2) Không có → Gemini vision đoán
    * địa danh. 3) Reverse-geocode toạ độ ra tên đọc được (Nominatim, free).
    */
-  async photoLocation(imageBase64: string, mimeType: string) {
+  async photoLocation(
+    userId: string,
+    imageBase64: string,
+    mimeType: string,
+  ) {
+    await this.assertAiQuota(userId);
+
     const clean = imageBase64.includes(',')
       ? imageBase64.split(',').pop()!
       : imageBase64;
@@ -267,6 +272,13 @@ export class AiService {
         longitude?: number;
         confidence?: number;
       };
+      await this.recordAiUsage(
+        userId,
+        'PHOTO_LOCATION' as AIRequestType,
+        undefined,
+        prompt,
+        parsed,
+      );
       if (parsed.found && typeof parsed.latitude === 'number') {
         return {
           source: 'ai',
@@ -350,9 +362,12 @@ export class AiService {
    * pattern của photoLocation nhưng trả ParsedReservation[].
    */
   async parseBookingImage(
+    userId: string,
     imageBase64: string,
     mimeType: string,
   ): Promise<ParsedReservation[]> {
+    await this.assertAiQuota(userId);
+
     if (!this.genAI) {
       this.logger.warn(
         'Gemini API key is not set, skipping image booking parse.',
@@ -387,6 +402,13 @@ export class AiService {
       const parsed = JSON.parse(result.response.text()) as {
         reservations: ParsedReservation[];
       };
+      await this.recordAiUsage(
+        userId,
+        'BOOKING_PARSE' as AIRequestType,
+        undefined,
+        prompt,
+        parsed,
+      );
       if (!Array.isArray(parsed.reservations)) return [];
       const allowed = new Set([
         'FLIGHT',
@@ -464,13 +486,16 @@ export class AiService {
     type: AIRequestType,
     prompt: string,
   ) {
-    // Kiểm tra hạn mức AI trong 30 ngày qua
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const currentAiCount = await this.prisma.aIRequest.count({
-      where: { userId, createdAt: { gte: thirtyDaysAgo } },
-    });
-    await this.entitlements.assertWithin(userId, 'aiPerMonth', currentAiCount);
+    // Hạn mức lời gọi AI mỗi tháng.
+    //
+    // Đây là hạn mức duy nhất gắn với chi phí biến đổi thật (mỗi lời gọi là
+    // tiền trả cho Gemini), nhưng lại là hạn mức chưa từng được kiểm — bản
+    // Free trước đây gọi AI không giới hạn.
+    //
+    // Đếm theo **tháng dương lịch** chứ không phải 30 ngày trượt: người dùng
+    // hiểu "hết lượt tháng này, đầu tháng có lại", còn cửa sổ trượt thì không
+    // ai đoán được lúc nào lượt hồi.
+    await this.assertAiQuota(userId);
 
     try {
       return await this.runRequest(userId, tripId, type, prompt);
@@ -479,6 +504,74 @@ export class AiService {
         data: { userId, tripId, type, prompt, status: 'FAILED' },
       });
       throw e;
+    }
+  }
+
+  /**
+   * Kiểm tra hạn mức lời gọi AI trong tháng của người dùng.
+   *
+   * Hạn mức tính theo tháng dương lịch hiện tại dựa trên số bản ghi trong bảng
+   * `AIRequest`. Nếu đã đạt hoặc vượt trần (Free: 15 lượt/tháng), ném ngoại lệ
+   * chặn lời gọi tiếp theo.
+   */
+  private async assertAiQuota(userId: string): Promise<void> {
+    await this.entitlements.assertWithin(
+      userId,
+      'aiPerMonth',
+      await this.usageThisMonth(userId),
+    );
+  }
+
+  /**
+   * Số lời gọi AI đã dùng trong tháng dương lịch hiện tại.
+   *
+   * Đếm cả bản ghi `FAILED`: một lời gọi hỏng vẫn đã tiêu tiền ở phía Gemini,
+   * và không đếm chúng thì một client lỗi có thể quay vòng vô hạn.
+   */
+  private async usageThisMonth(userId: string): Promise<number> {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    return this.prisma.aIRequest.count({
+      where: { userId, createdAt: { gte: start } },
+    });
+  }
+
+  /**
+   * Ghi nhận lượt sử dụng AI vào bảng `AIRequest` để tính quota (`usageThisMonth`).
+   *
+   * BẢO VỆ AN TOÀN (TRY/CATCH):
+   * Cơ sở dữ liệu THẬT hiện CHƯA có 5 giá trị enum mới (chưa ai chạy `prisma db push`).
+   * Nếu code ghi thẳng mà DB chưa có enum, Prisma sẽ ném lỗi và LÀM HỎNG tính năng AI đang chạy tốt.
+   * Vì vậy: BẮT BUỘC bọc lệnh ghi `AIRequest` trong `try/catch`, nuốt lỗi và chỉ `this.logger.warn(...)`.
+   * Tuyệt đối KHÔNG để lỗi ghi nhật ký làm đổ kết quả AI mà người dùng đang chờ.
+   *
+   * Comment tiếng Việt: Nuốt lỗi vì DB có thể chưa được `db push` 5 giá trị enum mới;
+   * ghi nhận lượt dùng là việc phụ, không được làm hỏng tính năng chính.
+   */
+  private async recordAiUsage(
+    userId: string,
+    type: AIRequestType,
+    tripId?: string,
+    prompt?: string,
+    response?: any,
+  ): Promise<void> {
+    try {
+      await this.prisma.aIRequest.create({
+        data: {
+          userId,
+          tripId: tripId ?? null,
+          type,
+          prompt: prompt ?? `[${type}]`,
+          status: 'COMPLETED',
+          response: response ?? undefined,
+        },
+      });
+    } catch (e) {
+      // Nuốt lỗi vì DB có thể chưa được `db push` 5 giá trị enum mới;
+      // ghi nhận lượt dùng là việc phụ, không được làm hỏng tính năng chính.
+      this.logger.warn(
+        `[recordAiUsage] Nuốt lỗi ghi nhận AIRequest (${type}) cho user ${userId}: ${toMessage(e)}. Nuốt lỗi vì DB có thể chưa được db push 5 giá trị enum mới; ghi nhận lượt dùng là việc phụ, không được làm hỏng tính năng chính.`,
+      );
     }
   }
 
@@ -726,7 +819,9 @@ export class AiService {
 
   // --- MODULE 10 (AI FLOW) EXTENSIONS ---
 
-  async getPersonalityRoast(tripId: string) {
+  async getPersonalityRoast(userId: string, tripId: string) {
+    await this.assertAiQuota(userId);
+
     const trip = await this.prisma.trip.findUnique({
       where: { id: tripId },
       include: {
@@ -781,11 +876,20 @@ export class AiService {
       `;
       const result =
         await this.callGeminiJSON<PersonalityRoastResponse>(promptText);
+      await this.recordAiUsage(
+        userId,
+        'PERSONALITY_ROAST' as AIRequestType,
+        tripId,
+        promptText,
+        result,
+      );
       return { tripId, squadAnalysis: result.squadAnalysis ?? [] };
     }
   }
 
-  async getSquadMood(tripId: string) {
+  async getSquadMood(userId: string, tripId: string) {
+    await this.assertAiQuota(userId);
+
     const trip = await this.prisma.trip.findUnique({
       where: { id: tripId },
       include: {
@@ -830,6 +934,13 @@ export class AiService {
         }
       `;
       const result = await this.callGeminiJSON<SquadMoodResponse>(promptText);
+      await this.recordAiUsage(
+        userId,
+        'SQUAD_MOOD' as AIRequestType,
+        tripId,
+        promptText,
+        result,
+      );
       return {
         tripId,
         overallMood: result.overallMood,
@@ -839,7 +950,9 @@ export class AiService {
     }
   }
 
-  async getRecommendationTimeline(tripId: string) {
+  async getRecommendationTimeline(userId: string, tripId: string) {
+    await this.assertAiQuota(userId);
+
     const trip = await this.prisma.trip.findUnique({
       where: { id: tripId },
     });
@@ -869,7 +982,16 @@ export class AiService {
         users saw English blurbs here before.
         Ensure the output is exactly a valid JSON array matching the schema!
       `;
-      return await this.callGeminiJSON<RecommendedActivity[]>(promptText);
+      const result =
+        await this.callGeminiJSON<RecommendedActivity[]>(promptText);
+      await this.recordAiUsage(
+        userId,
+        'RECOMMEND_TIMELINE' as AIRequestType,
+        tripId,
+        promptText,
+        result,
+      );
+      return result;
     }
   }
 

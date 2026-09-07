@@ -5,14 +5,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EntitlementService } from '../premium/entitlement.service';
 import { CreateInviteDto } from './dto/create-invite.dto';
 import * as crypto from 'crypto';
 
 function generateInviteCode(): string {
   return crypto.randomBytes(6).toString('base64url').toUpperCase().slice(0, 10);
 }
-
-import { EntitlementService } from '../premium/entitlement.service';
 
 @Injectable()
 export class InvitesService {
@@ -104,33 +103,56 @@ export class InvitesService {
     });
     if (existing) throw new BadRequestException('Already a trip member');
 
-    // Kiểm tra hạn mức thành viên tối đa theo gói của chủ chuyến
-    const currentMembers = await this.prisma.tripMember.count({
+    // Hạn mức chuyến đang hoạt động của người tham gia.
+    const activeTrips = await this.prisma.tripMember.count({
+      where: { userId, trip: { deletedAt: null } },
+    });
+    await this.entitlements.assertWithin(userId, 'activeTrips', activeTrips);
+
+    // Hạn mức số thành viên — cùng chốt chặn như `TripsService.join()`.
+    //
+    // Đây là đường vào chuyến thứ hai. Chặn một đường mà bỏ đường kia thì hạn
+    // mức chỉ là gợi ý: ai cũng lách được bằng cách dùng link mời thay vì mã.
+    const members = await this.prisma.tripMember.count({
       where: { tripId: invite.tripId },
     });
-    await this.entitlements.assertWithin(
-      invite.trip.createdBy,
+    await this.entitlements.assertTripWithin(
+      invite.tripId,
       'membersPerTrip',
-      currentMembers,
+      members,
     );
 
     // Add member & increment use count
-    await this.prisma.$transaction([
-      this.prisma.tripMember.create({
-        data: { tripId: invite.tripId, userId, role: 'MEMBER' },
-      }),
-      this.prisma.tripInvite.update({
-        where: { id: invite.id },
-        data: {
-          useCount: { increment: 1 },
-          // Deactivate if single-use
-          isActive:
-            invite.maxUses !== null && invite.useCount + 1 >= invite.maxUses
-              ? false
-              : true,
+    await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.tripInvite.updateMany({
+        where: {
+          id: invite.id,
+          isActive: true,
+          ...(invite.maxUses !== null
+            ? { useCount: { lt: invite.maxUses } }
+            : {}),
         },
-      }),
-    ]);
+        data: { useCount: { increment: 1 } },
+      });
+
+      if (claimed.count === 0) {
+        throw new BadRequestException('Invite link has reached max uses');
+      }
+
+      if (invite.maxUses !== null) {
+        await tx.tripInvite.updateMany({
+          where: {
+            id: invite.id,
+            useCount: { gte: invite.maxUses },
+          },
+          data: { isActive: false },
+        });
+      }
+
+      await tx.tripMember.create({
+        data: { tripId: invite.tripId, userId, role: 'MEMBER' },
+      });
+    });
 
     return this.prisma.trip.findUnique({
       where: { id: invite.tripId },

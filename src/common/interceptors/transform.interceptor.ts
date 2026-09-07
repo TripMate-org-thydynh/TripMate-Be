@@ -51,8 +51,8 @@ function normalizeDecimals(value: unknown, seen = new WeakSet<object>()): unknow
   if (Buffer.isBuffer(value)) return value;
 
   // Tránh lặp vô hạn nếu có tham chiếu vòng.
-  if (seen.has(value as object)) return value;
-  seen.add(value as object);
+  if (seen.has(value)) return value;
+  seen.add(value);
 
   if (Array.isArray(value)) {
     return value.map((v) => normalizeDecimals(v, seen));

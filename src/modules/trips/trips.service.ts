@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EntitlementService } from '../premium/entitlement.service';
+import { ReferralService } from '../premium/referral.service';
 import { StorageService } from '../storage/storage.service';
 import { CreateTripDto } from './dto/create-trip.dto';
 import { UpdateTripDto } from './dto/update-trip.dto';
@@ -23,6 +24,7 @@ export class TripsService {
   constructor(
     private prisma: PrismaService,
     private entitlements: EntitlementService,
+    private referrals: ReferralService,
   ) {}
 
   async create(userId: string, dto: CreateTripDto) {
@@ -44,7 +46,7 @@ export class TripsService {
         throw new Error('Could not generate unique invite code');
     } while (await this.prisma.trip.findUnique({ where: { inviteCode } }));
 
-    return this.prisma.trip.create({
+    const trip = await this.prisma.trip.create({
       data: {
         name: dto.name,
         description: dto.description,
@@ -70,6 +72,10 @@ export class TripsService {
         _count: { select: { members: true } },
       },
     });
+
+    await this.referrals.settleReferralReward(userId);
+
+    return trip;
   }
 
   async findOne(tripId: string) {
@@ -138,9 +144,35 @@ export class TripsService {
     });
     if (existing) throw new ConflictException('errors.trips.alreadyMember');
 
+    // Hạn mức chuyến đang hoạt động của người tham gia.
+    const activeTrips = await this.prisma.tripMember.count({
+      where: { userId, trip: { deletedAt: null } },
+    });
+    await this.entitlements.assertWithin(userId, 'activeTrips', activeTrips);
+
+    // Hạn mức số thành viên của chuyến.
+    //
+    // `membersPerTrip` được khai báo trong `FREE_LIMITS`/`PAID_LIMITS` từ đầu
+    // nhưng chưa từng được kiểm ở đâu — chỉ `activeTrips` có chốt chặn, nên
+    // người trả tiền thực tế chỉ nhận được đúng một thứ.
+    //
+    // Chặn ở đây chứ không ở lúc tạo lời mời: lời mời có thể nằm im nhiều
+    // ngày, số thành viên chỉ thật sự tăng ở giây phút này.
+    const members = await this.prisma.tripMember.count({
+      where: { tripId: trip.id },
+    });
+    await this.entitlements.assertTripWithin(
+      trip.id,
+      'membersPerTrip',
+      members,
+    );
+
     await this.prisma.tripMember.create({
       data: { tripId: trip.id, userId, role: 'MEMBER' },
     });
+
+    await this.referrals.settleReferralReward(userId);
+
     return this.findOne(trip.id);
   }
 

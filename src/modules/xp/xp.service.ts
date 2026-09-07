@@ -22,6 +22,15 @@ const EARN_RULES: Record<XpReason, { amount: number; dailyCap: number }> = {
   POLL_CREATED: { amount: 20, dailyCap: 3 },
   DOCUMENT_UPLOADED: { amount: 15, dailyCap: 3 },
   GAME_PLAYED: { amount: 50, dailyCap: 10 },
+  // Giới thiệu bạn. Trần ngày ở đây là chốt chặn chống cày: không có nó thì
+  // một người dựng hàng loạt tài khoản và tự nhập mã của mình vào từng cái sẽ
+  // cày XP không giới hạn. `unique(userId, reason, refId)` chặn cộng trùng cho
+  // CÙNG một người được mời, nhưng không chặn được nhiều người được mời khác
+  // nhau — trần ngày mới chặn.
+  REFERRAL_SENT: { amount: 500, dailyCap: 10 },
+  // Chiều nhận chỉ xảy ra một lần trong đời (ràng buộc `@unique` trên
+  // `refereeId`), nên trần ngày ở đây chỉ là thừa cho chắc.
+  REFERRAL_RECEIVED: { amount: 300, dailyCap: 1 },
   // Ba loại dưới là chiều tiêu / chỉnh tay, không áp trần ngày.
   STICKER_PURCHASE: { amount: 0, dailyCap: 0 },
   THEME_PURCHASE: { amount: 0, dailyCap: 0 },
@@ -89,12 +98,31 @@ export class XpService {
   async award(
     userId: string,
     reason: XpReason,
+    opts: {
+      refId?: string;
+      tripId?: string;
+      amount?: number;
+      tx?: Prisma.TransactionClient;
+    } = {},
+  ): Promise<AwardResult> {
+    if (opts.tx) {
+      return this.executeAward(opts.tx, userId, reason, opts);
+    }
+    return this.prisma.$transaction((tx) =>
+      this.executeAward(tx, userId, reason, opts),
+    );
+  }
+
+  private async executeAward(
+    client: Prisma.TransactionClient,
+    userId: string,
+    reason: XpReason,
     opts: { refId?: string; tripId?: string; amount?: number } = {},
   ): Promise<AwardResult> {
     const rule = EARN_RULES[reason];
     const amount = opts.amount ?? rule?.amount ?? 0;
     if (!rule || amount <= 0) {
-      const user = await this.prisma.user.findUnique({
+      const user = await client.user.findUnique({
         where: { id: userId },
         select: { xpBalance: true },
       });
@@ -109,49 +137,48 @@ export class XpService {
     // Trần ngày tính theo mốc 00:00 giờ máy chủ.
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
-    const todayCount = await this.prisma.xpLedger.count({
-      where: {
-        userId,
-        reason,
-        delta: { gt: 0 },
-        createdAt: { gte: startOfDay },
-      },
-    });
-    if (todayCount >= rule.dailyCap) {
-      const user = await this.prisma.user.findUnique({
-        where: { id: userId },
-        select: { xpBalance: true },
-      });
-      return {
-        awarded: false,
-        amount: 0,
-        skipped: 'daily_cap',
-        balance: user?.xpBalance ?? 0,
-      };
-    }
 
     try {
-      return await this.prisma.$transaction(async (tx) => {
-        const user = await tx.user.update({
+      const todayCount = await client.xpLedger.count({
+        where: {
+          userId,
+          reason,
+          delta: { gt: 0 },
+          createdAt: { gte: startOfDay },
+        },
+      });
+      if (todayCount >= rule.dailyCap) {
+        const user = await client.user.findUnique({
           where: { id: userId },
-          data: {
-            xpBalance: { increment: amount },
-            xpEarned: { increment: amount },
-          },
           select: { xpBalance: true },
         });
-        await tx.xpLedger.create({
-          data: {
-            userId,
-            delta: amount,
-            reason,
-            refId: opts.refId ?? null,
-            tripId: opts.tripId ?? null,
-            balanceAfter: user.xpBalance,
-          },
-        });
-        return { awarded: true, amount, balance: user.xpBalance };
+        return {
+          awarded: false,
+          amount: 0,
+          skipped: 'daily_cap',
+          balance: user?.xpBalance ?? 0,
+        };
+      }
+
+      const user = await client.user.update({
+        where: { id: userId },
+        data: {
+          xpBalance: { increment: amount },
+          xpEarned: { increment: amount },
+        },
+        select: { xpBalance: true },
       });
+      await client.xpLedger.create({
+        data: {
+          userId,
+          delta: amount,
+          reason,
+          refId: opts.refId ?? null,
+          tripId: opts.tripId ?? null,
+          balanceAfter: user.xpBalance,
+        },
+      });
+      return { awarded: true, amount, balance: user.xpBalance };
     } catch (e) {
       // P2002 = đụng unique(userId, reason, refId) → đã thưởng cho thực thể này
       // rồi. Đây là đường đi bình thường khi có retry, không phải lỗi.
@@ -159,10 +186,12 @@ export class XpService {
         e instanceof Prisma.PrismaClientKnownRequestError &&
         e.code === 'P2002'
       ) {
-        const user = await this.prisma.user.findUnique({
-          where: { id: userId },
-          select: { xpBalance: true },
-        });
+        const user = await client.user
+          .findUnique({
+            where: { id: userId },
+            select: { xpBalance: true },
+          })
+          .catch(() => null);
         return {
           awarded: false,
           amount: 0,
@@ -178,7 +207,11 @@ export class XpService {
   async awardForActivity(
     userId: string,
     type: ActivityType,
-    opts: { refId?: string; tripId?: string } = {},
+    opts: {
+      refId?: string;
+      tripId?: string;
+      tx?: Prisma.TransactionClient;
+    } = {},
   ): Promise<AwardResult | null> {
     const reason = ACTIVITY_TO_REASON[type];
     if (!reason) return null;
@@ -196,37 +229,51 @@ export class XpService {
     amount: number,
     reason: XpReason,
     refId: string,
+    opts: { tx?: Prisma.TransactionClient } = {},
   ): Promise<{ balance: number }> {
     if (amount <= 0) {
       throw new BadRequestException('errors.xp.invalidAmount');
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      // `updateMany` + điều kiện số dư đủ: nếu hai request cùng chạy thì chỉ một
-      // cái khớp điều kiện, cái còn lại trả count = 0 và bị từ chối.
-      const updated = await tx.user.updateMany({
-        where: { id: userId, xpBalance: { gte: amount } },
-        data: { xpBalance: { decrement: amount } },
-      });
-      if (updated.count === 0) {
-        throw new BadRequestException('errors.xp.notEnough');
-      }
+    if (opts.tx) {
+      return this.executeSpend(opts.tx, userId, amount, reason, refId);
+    }
+    return this.prisma.$transaction((tx) =>
+      this.executeSpend(tx, userId, amount, reason, refId),
+    );
+  }
 
-      const user = await tx.user.findUniqueOrThrow({
-        where: { id: userId },
-        select: { xpBalance: true },
-      });
-      await tx.xpLedger.create({
-        data: {
-          userId,
-          delta: -amount,
-          reason,
-          refId,
-          balanceAfter: user.xpBalance,
-        },
-      });
-      return { balance: user.xpBalance };
+  private async executeSpend(
+    client: Prisma.TransactionClient,
+    userId: string,
+    amount: number,
+    reason: XpReason,
+    refId: string,
+  ): Promise<{ balance: number }> {
+    // `updateMany` + điều kiện số dư đủ: nếu hai request cùng chạy thì chỉ một
+    // cái khớp điều kiện, cái còn lại trả count = 0 và bị từ chối.
+    const updated = await client.user.updateMany({
+      where: { id: userId, xpBalance: { gte: amount } },
+      data: { xpBalance: { decrement: amount } },
     });
+    if (updated.count === 0) {
+      throw new BadRequestException('errors.xp.notEnough');
+    }
+
+    const user = await client.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { xpBalance: true },
+    });
+    await client.xpLedger.create({
+      data: {
+        userId,
+        delta: -amount,
+        reason,
+        refId,
+        balanceAfter: user.xpBalance,
+      },
+    });
+    return { balance: user.xpBalance };
   }
 
   /** Ví của tôi: số dư, tổng đã kiếm, cấp, và vài giao dịch gần nhất. */

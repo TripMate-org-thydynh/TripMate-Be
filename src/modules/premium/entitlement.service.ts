@@ -33,10 +33,12 @@ export const PAID_LIMITS: Record<Quota, number> = {
 
 export interface Entitlement {
   plan: Plan;
-  /** Nguồn quyền: gói của chính mình, hay ghế được squad cấp. */
-  via: 'own' | 'seat' | 'none';
+  /** Nguồn quyền: gói của chính mình, ghế được squad cấp, hay đang dùng thử. */
+  via: 'own' | 'seat' | 'trial' | 'none';
   activeUntil: Date | null;
   limits: Record<Quota, number>;
+  /** Đang trong thời gian dùng thử — client dùng để hiện banner đếm ngược. */
+  isTrial: boolean;
 }
 
 /**
@@ -61,20 +63,38 @@ export class EntitlementService {
   async of(userId: string): Promise<Entitlement> {
     const now = new Date();
 
-    const own = await this.prisma.subscription.findFirst({
-      where: {
-        userId,
-        status: 'ACTIVE',
-        currentPeriodEnd: { gt: now },
-      },
-      orderBy: { currentPeriodEnd: 'desc' },
-    });
+    // `TRIALING` được tính ngang `ACTIVE`.
+    //
+    // Nếu bỏ sót ở đây thì người đang dùng thử vẫn bị chặn ở mọi hạn mức —
+    // tức là "dùng thử bản trả phí" mà không có gì được mở, đúng thứ vô nghĩa
+    // nhất có thể làm.
+    //
+    // Mốc quyết định vẫn chỉ là `currentPeriodEnd`, nên trial hết hạn thì
+    // quyền tự rơi về Free ngay cả khi việc dọn hàng chưa kịp chạy.
+    // Gói đã trả tiền được xét TRƯỚC lần dùng thử còn dở: mua giữa chừng thì
+    // không vì thế mà mất những ngày đã trả tiền.
+    //
+    // Hỏi hai lần thay vì `orderBy` theo `status`: Postgres sắp enum theo thứ
+    // tự khai báo, mà `TRIALING` đứng trước `ACTIVE` trong enum — nên
+    // `orderBy: { status: 'asc' }` cho ra đúng thứ tự ngược lại với thứ mình
+    // cần, một cách âm thầm.
+    const own =
+      (await this.prisma.subscription.findFirst({
+        where: { userId, status: 'ACTIVE', currentPeriodEnd: { gt: now } },
+        orderBy: { currentPeriodEnd: 'desc' },
+      })) ??
+      (await this.prisma.subscription.findFirst({
+        where: { userId, status: 'TRIALING', currentPeriodEnd: { gt: now } },
+        orderBy: { currentPeriodEnd: 'desc' },
+      }));
     if (own) {
+      const isTrial = own.status === 'TRIALING';
       return {
         plan: own.plan,
-        via: 'own',
+        via: isTrial ? 'trial' : 'own',
         activeUntil: own.currentPeriodEnd,
         limits: PAID_LIMITS,
+        isTrial,
       };
     }
 
@@ -85,6 +105,9 @@ export class EntitlementService {
         userId,
         revokedAt: null,
         subscription: {
+          // Chỉ gói đã trả tiền mới cấp ghế: một lần dùng thử ba ngày mà mở
+          // được quyền cho cả nhóm thì mỗi nhóm chỉ cần một người đăng ký mới
+          // là xong, không ai phải trả tiền.
           status: 'ACTIVE',
           currentPeriodEnd: { gt: now },
         },
@@ -98,6 +121,7 @@ export class EntitlementService {
         via: 'seat',
         activeUntil: seat.subscription.currentPeriodEnd,
         limits: PAID_LIMITS,
+        isTrial: false,
       };
     }
 
@@ -106,6 +130,7 @@ export class EntitlementService {
       via: 'none',
       activeUntil: null,
       limits: FREE_LIMITS,
+      isTrial: false,
     };
   }
 
@@ -140,6 +165,33 @@ export class EntitlementService {
   }
 
   /**
+   * Hạn mức của một **chuyến**, lấy theo người tạo chuyến.
+   *
+   * `membersPerTrip` và `momentsPerTrip` là giới hạn của cái chuyến, không của
+   * một người — nên phải chọn entitlement của ai quyết định. Lấy người tạo: họ
+   * dựng ra chuyến và là người chạm giới hạn khi mời thêm bạn, nên đó cũng là
+   * người mà việc nâng cấp có tác dụng ngay và dễ hiểu.
+   *
+   * Đã cân nhắc phương án "chuyến được mức trả phí nếu BẤT KỲ thành viên nào
+   * đang trả tiền" rồi bỏ: nó khiến giới hạn của một chuyến đổi qua đổi lại mỗi
+   * khi có người vào/ra hay hết hạn gói, người dùng không đoán nổi. Muốn cho
+   * người khác dùng ké thì đã có Squad Pass, và nó tường minh.
+   */
+  async assertTripWithin(
+    tripId: string,
+    quota: Quota,
+    current: number,
+  ): Promise<void> {
+    const trip = await this.prisma.trip.findUnique({
+      where: { id: tripId },
+      select: { createdBy: true },
+    });
+    // Không có chuyến thì để lớp gọi tự ném 404 — ở đây không phải chỗ đó.
+    if (!trip) return;
+    await this.assertWithin(trip.createdBy, quota, current);
+  }
+
+  /**
    * Cấp hoặc gia hạn gói sau khi thanh toán thành công.
    *
    * Gia hạn cộng dồn từ **thời điểm còn hạn**, không phải từ hôm nay: trả sớm
@@ -153,7 +205,7 @@ export class EntitlementService {
     userId: string;
     plan: Exclude<Plan, 'FREE'>;
     months: number;
-    provider: PaymentProvider;
+    provider: PaymentProvider | 'MOMO' | 'ZALOPAY' | 'BANK_TRANSFER' | 'CASH' | 'VNPAY';
     externalId?: string;
   }) {
     const { userId, plan, months, provider, externalId } = params;
@@ -165,17 +217,26 @@ export class EntitlementService {
     });
 
     const base = existing?.currentPeriodEnd ?? now;
-    const end = new Date(base);
-    end.setMonth(end.getMonth() + months);
+    // Không dùng thẳng `setMonth` vì JS sẽ tự chuẩn hoá tràn ngày (ví dụ 31/01 + 1 tháng thành 03/03).
+    // Dùng `addMonths` để tự động kẹp về ngày cuối cùng của tháng đích (28/02 hoặc 29/02 năm nhuận).
+    const end = this.addMonths(base, months);
 
     if (existing) {
       return this.prisma.subscription.update({
         where: { id: existing.id },
         data: {
           plan,
+          // Đồng bộ số ghế theo gói mới khi nâng/hạ cấp (ví dụ PLUS -> SQUAD được nâng lên 5 ghế,
+          // tránh tình trạng khách trả tiền lên SQUAD nhưng vẫn bị giữ nguyên seats = 1).
+          seats: plan === 'SQUAD' ? 5 : 1,
           currentPeriodEnd: end,
           cancelAtPeriodEnd: false,
           canceledAt: null,
+          // Ghi nhận mã giao dịch mới nhất khi gia hạn. Không có dòng này thì
+          // ràng buộc @@unique([provider, externalId]) vô dụng ở đường gia hạn,
+          // và webhook gọi lại không tìm thấy gói để bỏ qua. Chỉ ghi đè khi có
+          // externalId (bỏ qua với CASH/trial) để không xoá mất mã giao dịch cũ.
+          ...(externalId ? { externalId, provider } : {}),
         },
       });
     }
@@ -191,6 +252,32 @@ export class EntitlementService {
         seats: plan === 'SQUAD' ? 5 : 1,
       },
     });
+  }
+
+  /**
+   * Cộng tháng vào mốc thời gian và xử lý triệt để lỗi tràn ngày (overflow) của JavaScript Date.
+   *
+   * Vì sao không dùng trực tiếp `date.setMonth(date.getMonth() + months)`:
+   * Khi ngày của mốc ban đầu là 31 (hoặc 29, 30) mà tháng đích có ít ngày hơn (ví dụ 31/01 cộng 1 tháng),
+   * hàm `setMonth` sẽ gán thành 31/02, sau đó JS tự động chuẩn hoá (overflow) sang tháng tiếp theo
+   * thành 03/03 ở năm thường hoặc 02/03 ở năm nhuận — vô tình tặng thêm 2-3 ngày cho người dùng.
+   * Tình trạng tương tự cũng xảy ra với ngày 31 của các tháng 3, 5, 8, 10 khi cộng sang tháng có 30 ngày.
+   *
+   * Giải pháp:
+   * 1. Ghi nhớ ngày trong tháng ban đầu (`expectedDay = base.getDate()`).
+   * 2. Cộng tháng vào bản sao `result`.
+   * 3. Nếu ngày kết quả bị tràn (`result.getDate() !== expectedDay`), gọi `result.setDate(0)` để lùi
+   *    về ngày 0 của tháng bị tràn — tức ngày cuối cùng của tháng đích (ví dụ 28/02 hoặc 29/02 năm nhuận).
+   * 4. Giữ nguyên vẹn giờ, phút, giây, mili-giây của `base`.
+   */
+  private addMonths(base: Date, months: number): Date {
+    const result = new Date(base);
+    const expectedDay = result.getDate();
+    result.setMonth(result.getMonth() + months);
+    if (result.getDate() !== expectedDay) {
+      result.setDate(0);
+    }
+    return result;
   }
 
   /**

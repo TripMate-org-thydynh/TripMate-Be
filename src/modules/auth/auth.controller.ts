@@ -1,6 +1,7 @@
 import type { User } from '@prisma/client';
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -28,12 +29,14 @@ export class AuthController {
     return this.authService.login(dto);
   }
 
+  @Throttle({ default: { limit: 3, ttl: 600000 } })
   @Post('send-otp')
   @ApiOperation({ summary: 'Gửi mã OTP đăng nhập qua SMS Twilio' })
   sendOtp(@Body() dto: SendOtpDto) {
     return this.authService.sendOtp(dto.phoneNumber);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('verify-otp')
   @ApiOperation({
     summary: 'Xác minh mã OTP đăng nhập SMS - nhận JWT hoặc supabaseId',
@@ -50,6 +53,7 @@ export class AuthController {
     return this.authService.registerWithPassword(dto);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('login-password')
   @ApiOperation({ summary: 'Đăng nhập bằng username + mật khẩu - nhận JWT' })
   loginPassword(@Body() dto: LoginPasswordDto) {

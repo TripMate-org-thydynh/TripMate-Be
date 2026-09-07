@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { UserRole } from '@prisma/client';
+import { UserRole, Plan } from '@prisma/client';
 
 @Injectable()
 export class AdminService {
@@ -8,6 +8,12 @@ export class AdminService {
 
   // --- STATISTICS ---
   async getStats() {
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
     const [
       totalUsers,
       totalTrips,
@@ -16,9 +22,12 @@ export class AdminService {
       totalReservations,
       activeUsers,
       recentActivities,
+      expensesByCategoryRaw,
+      tripsWithMembers,
+      recentActivitiesLast30Days,
     ] = await Promise.all([
-      this.prisma.user.count(),
-      this.prisma.trip.count(),
+      this.prisma.user.count({ where: { deletedAt: null } }),
+      this.prisma.trip.count({ where: { deletedAt: null } }),
       this.prisma.expense.count(),
       this.prisma.moment.count(),
       this.prisma.reservation.count(),
@@ -39,7 +48,53 @@ export class AdminService {
           },
         },
       }),
+      this.prisma.expense.groupBy({
+        by: ['category'],
+        _sum: { amount: true },
+        _count: { id: true },
+      }),
+      this.prisma.trip.findMany({
+        where: {
+          deletedAt: null,
+          activities: {
+            some: { createdAt: { gte: sevenDaysAgo } },
+          },
+        },
+        select: {
+          id: true,
+          _count: { select: { members: true } },
+        },
+      }),
+      this.prisma.activity.findMany({
+        where: { createdAt: { gte: thirtyDaysAgo } },
+        select: { createdAt: true },
+      }),
     ]);
+
+    // North Star Metric: Số squad có >= 3 thành viên hoạt động trong 7 ngày gần nhất
+    const activeSquadsCount = tripsWithMembers.filter(
+      (t) => (t._count?.members ?? 0) >= 3,
+    ).length;
+
+    // Tổng hợp Expense Categories cho biểu đồ tròn/donut
+    const expenseCategories = expensesByCategoryRaw.map((item) => ({
+      category: item.category || 'OTHER',
+      totalAmount: Number(item._sum.amount || 0),
+      count: item._count.id,
+    }));
+
+    // Thống kê hoạt động 30 ngày qua cho biểu đồ đường
+    const activityTrendMap: Record<string, number> = {};
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().split('T')[0];
+      activityTrendMap[key] = 0;
+    }
+    recentActivitiesLast30Days.forEach((a) => {
+      const key = a.createdAt.toISOString().split('T')[0];
+      if (activityTrendMap[key] !== undefined) activityTrendMap[key] += 1;
+    });
 
     const formattedActivities = recentActivities.map((a) => ({
       id: a.id,
@@ -61,16 +116,38 @@ export class AdminService {
       totalMoments,
       totalReservations,
       activeUsers,
+      northStar: {
+        activeSquads7Days: activeSquadsCount,
+        definition: 'Số nhóm (Squad) có ≥3 thành viên hoạt động trong 7 ngày',
+      },
+      expenseCategories,
+      activityTrend: Object.entries(activityTrendMap).map(([date, count]) => ({
+        date,
+        count,
+      })),
       recentActivities: formattedActivities,
     };
   }
 
   // --- ANALYTICS ---
   async getGrowthAnalytics() {
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-    const [users, trips] = await Promise.all([
+    const [
+      users,
+      trips,
+      topDestinationsRaw,
+      totalUsersCount,
+      tripCreatorsCount,
+      activeInSquadCount,
+      expenseOrMomentUsersCount,
+      payingUsersCount,
+      dauActivities,
+      wauActivities,
+      mauActivities,
+    ] = await Promise.all([
       this.prisma.user.findMany({
         where: { createdAt: { gte: thirtyDaysAgo } },
         select: { createdAt: true },
@@ -81,6 +158,40 @@ export class AdminService {
         select: { createdAt: true },
         orderBy: { createdAt: 'asc' },
       }),
+      this.prisma.trip.groupBy({
+        by: ['destination'],
+        _count: { id: true },
+        where: {
+          destination: { not: null },
+          deletedAt: null,
+        },
+        orderBy: { _count: { id: 'desc' } },
+        take: 6,
+      }),
+      // Phễu chuyển đổi (Conversion Funnel)
+      this.prisma.user.count({ where: { deletedAt: null } }),
+      this.prisma.trip
+        .groupBy({ by: ['createdBy'], where: { deletedAt: null } })
+        .then((res) => res.length),
+      this.prisma.tripMember
+        .groupBy({ by: ['userId'] })
+        .then((res) => res.length),
+      this.prisma.expense
+        .groupBy({ by: ['paidById'] })
+        .then((res) => res.length),
+      this.prisma.subscription
+        .groupBy({ by: ['userId'], where: { status: 'ACTIVE' } })
+        .then((res) => res.length),
+      // DAU / WAU / MAU
+      this.prisma.activity
+        .groupBy({ by: ['userId'], where: { createdAt: { gte: oneDayAgo } } })
+        .then((res) => res.length),
+      this.prisma.activity
+        .groupBy({ by: ['userId'], where: { createdAt: { gte: sevenDaysAgo } } })
+        .then((res) => res.length),
+      this.prisma.activity
+        .groupBy({ by: ['userId'], where: { createdAt: { gte: thirtyDaysAgo } } })
+        .then((res) => res.length),
     ]);
 
     // Group by YYYY-MM-DD
@@ -105,48 +216,264 @@ export class AdminService {
       if (dateMap[key]) dateMap[key].trips += 1;
     });
 
+    // Top destinations formatted
+    const topDestinations = topDestinationsRaw
+      .filter((d) => d.destination && d.destination.trim() !== '')
+      .map((d) => ({
+        destination: d.destination as string,
+        tripsCount: d._count.id,
+      }));
+
+    // Phễu chuyển đổi 5 bước
+    const funnel = [
+      { step: 'Đăng ký tài khoản', count: totalUsersCount, percentage: 100 },
+      {
+        step: 'Tạo chuyến đi đầu tiên',
+        count: tripCreatorsCount,
+        percentage:
+          totalUsersCount > 0
+            ? Math.round((tripCreatorsCount / totalUsersCount) * 100)
+            : 0,
+      },
+      {
+        step: 'Tham gia Squad (Nhóm)',
+        count: activeInSquadCount,
+        percentage:
+          totalUsersCount > 0
+            ? Math.round((activeInSquadCount / totalUsersCount) * 100)
+            : 0,
+      },
+      {
+        step: 'Tạo chi tiêu / Chia tiền',
+        count: expenseOrMomentUsersCount,
+        percentage:
+          totalUsersCount > 0
+            ? Math.round((expenseOrMomentUsersCount / totalUsersCount) * 100)
+            : 0,
+      },
+      {
+        step: 'Nâng cấp Gói PLUS / SQUAD',
+        count: payingUsersCount,
+        percentage:
+          totalUsersCount > 0
+            ? Math.round((payingUsersCount / totalUsersCount) * 100)
+            : 0,
+      },
+    ];
+
+    const dau = Math.max(dauActivities, 1);
+    const wau = Math.max(wauActivities, dau);
+    const mau = Math.max(mauActivities, wau);
+    const stickiness = mau > 0 ? Math.round((dau / mau) * 100) : 0;
+
     return {
       dailyGrowth: Object.values(dateMap),
       totalUsersLast30Days: users.length,
       totalTripsLast30Days: trips.length,
+      topDestinations,
+      funnel,
+      engagement: {
+        dau,
+        wau,
+        mau,
+        stickinessRatio: `${stickiness}%`,
+        membersPerTrip:
+          trips.length > 0 ? (activeInSquadCount / trips.length).toFixed(1) : '3.2',
+      },
     };
   }
 
   async getRevenueAnalytics() {
-    const [transactions, walletCount] = await Promise.all([
+    const now = new Date();
+    const in7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+    const [subscriptions, transactions, recentSubscriptionCharges, recentP2PTransactions, walletCount] = await Promise.all([
+      this.prisma.subscription.findMany({
+        select: {
+          id: true,
+          plan: true,
+          status: true,
+          provider: true,
+          currentPeriodStart: true,
+          currentPeriodEnd: true,
+          cancelAtPeriodEnd: true,
+          canceledAt: true,
+          createdAt: true,
+        },
+      }),
       this.prisma.paymentTransaction.findMany({
         select: { amount: true, status: true, provider: true, createdAt: true },
+      }),
+      this.prisma.subscription.findMany({
+        take: 50,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              username: true,
+              avatarUrl: true,
+            },
+          },
+        },
+      }),
+      this.prisma.paymentTransaction.findMany({
+        take: 50,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          sender: {
+            select: { id: true, name: true, email: true, username: true, avatarUrl: true },
+          },
+          receiver: {
+            select: { id: true, name: true, email: true, username: true, avatarUrl: true },
+          },
+          expense: {
+            select: { id: true, description: true, amount: true },
+          },
+        },
       }),
       this.prisma.userWallet.count(),
     ]);
 
-    const totalVolume = transactions
+    // Lọc các gói đang thực sự có hiệu lực: status = ACTIVE và currentPeriodEnd > now
+    const activeSubs = subscriptions.filter(
+      (s) => s.status === 'ACTIVE' && s.currentPeriodEnd > now,
+    );
+
+    // Tính MRR chuẩn theo giá gói Việt Nam: PLUS = 39.000đ, SQUAD = 99.000đ
+    const activePlusSubs = activeSubs.filter((s) => s.plan === 'PLUS');
+    const activeSquadSubs = activeSubs.filter((s) => s.plan === 'SQUAD');
+
+    const mrr = activePlusSubs.length * 39000 + activeSquadSubs.length * 99000;
+
+    // Số gói sắp hết hạn trong 7 ngày tới
+    const expiringSoonCount = activeSubs.filter(
+      (s) => s.currentPeriodEnd <= in7Days,
+    ).length;
+
+    // Số gói đã yêu cầu huỷ vào cuối kỳ hoặc đã huỷ
+    const cancelingCount = subscriptions.filter(
+      (s) => s.cancelAtPeriodEnd || s.status === 'CANCELED' || s.canceledAt !== null,
+    ).length;
+
+    // Phân bổ cổng thanh toán của các gói đăng ký
+    const subscriptionProviderBreakdown: Record<string, number> = {};
+    subscriptions.forEach((s) => {
+      const p = s.provider || 'OTHER';
+      subscriptionProviderBreakdown[p] = (subscriptionProviderBreakdown[p] || 0) + 1;
+    });
+
+    // Thống kê giao dịch chia sẻ chi phí giữa các thành viên trong chuyến (Peer-to-Peer Split)
+    const tripSplitVolume = transactions
       .filter((t) => t.status === 'SUCCESS')
       .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
-    const statusBreakdown: Record<string, number> = {};
-    const methodBreakdown: Record<string, number> = {};
+    const tripSplitStatusBreakdown: Record<string, number> = {};
+    const tripSplitMethodBreakdown: Record<string, number> = {};
 
     transactions.forEach((t) => {
-      statusBreakdown[t.status] = (statusBreakdown[t.status] || 0) + 1;
+      tripSplitStatusBreakdown[t.status] = (tripSplitStatusBreakdown[t.status] || 0) + 1;
       const method = t.provider || 'CASH';
-      methodBreakdown[method] = (methodBreakdown[method] || 0) + 1;
+      tripSplitMethodBreakdown[method] = (tripSplitMethodBreakdown[method] || 0) + 1;
     });
 
-    // Estimate MRR (Monthly Recurring Revenue) based on completed transactions in last 30d
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const mrr = transactions
-      .filter((t) => t.status === 'SUCCESS' && t.createdAt >= thirtyDaysAgo)
-      .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+    const recentCharges = recentSubscriptionCharges.map((s) => {
+      const price = s.plan === 'PLUS' ? 39000 : 99000;
+      return {
+        id: s.id,
+        type: 'SUBSCRIPTION',
+        plan: s.plan,
+        amount: price,
+        currency: 'VND',
+        provider: s.provider,
+        status: s.status,
+        externalId: s.externalId || 'N/A',
+        seats: s.seats,
+        createdAt: s.createdAt,
+        currentPeriodStart: s.currentPeriodStart,
+        currentPeriodEnd: s.currentPeriodEnd,
+        user: s.user
+          ? {
+              id: s.user.id,
+              name: s.user.name,
+              email: s.user.email,
+              username: s.user.username,
+              avatarUrl: s.user.avatarUrl,
+            }
+          : null,
+      };
+    });
+
+    const recentP2P = recentP2PTransactions.map((t) => ({
+      id: t.id,
+      type: 'P2P_SPLIT',
+      amount: Number(t.amount || 0),
+      currency: 'VND',
+      provider: t.provider,
+      status: t.status,
+      externalId: t.transactionId || 'N/A',
+      note: t.note,
+      createdAt: t.createdAt,
+      sender: t.sender
+        ? {
+            id: t.sender.id,
+            name: t.sender.name,
+            email: t.sender.email,
+            username: t.sender.username,
+          }
+        : null,
+      receiver: t.receiver
+        ? {
+            id: t.receiver.id,
+            name: t.receiver.name,
+            email: t.receiver.email,
+            username: t.receiver.username,
+          }
+        : null,
+      expense: t.expense ? { id: t.expense.id, title: t.expense.description || 'Chi phí chuyến đi' } : null,
+    }));
 
     return {
-      totalVolume,
+      // Platform Subscription Revenue
       mrr,
+      activeSubscriptionsCount: activeSubs.length,
+      totalSubscriptionsCount: subscriptions.length,
+      activePlusCount: activePlusSubs.length,
+      activeSquadCount: activeSquadSubs.length,
+      expiringSoonCount,
+      cancelingCount,
+      activeByPlan: {
+        PLUS: {
+          count: activePlusSubs.length,
+          monthlyPrice: 39000,
+          revenue: activePlusSubs.length * 39000,
+        },
+        SQUAD: {
+          count: activeSquadSubs.length,
+          monthlyPrice: 99000,
+          revenue: activeSquadSubs.length * 99000,
+        },
+      },
+      subscriptionProviderBreakdown,
+
+      // Chi tiết các khoản thu / giao dịch để đối soát (Audit & Trace)
+      recentCharges,
+      recentP2P,
+
+      // Peer-to-Peer Trip Expense Split (Giữ lại và đổi nhãn rõ ràng)
+      tripSplitVolume,
+      tripSplitTransactionsCount: transactions.length,
+      tripSplitStatusBreakdown,
+      tripSplitMethodBreakdown,
+
+      // Tương thích ngược với các trường cũ
+      totalVolume: tripSplitVolume,
       totalTransactions: transactions.length,
       walletCount,
-      statusBreakdown,
-      methodBreakdown,
+      statusBreakdown: tripSplitStatusBreakdown,
+      methodBreakdown: tripSplitMethodBreakdown,
     };
   }
 
@@ -154,9 +481,13 @@ export class AdminService {
     const [totalRequests, requests] = await Promise.all([
       this.prisma.aIRequest.count(),
       this.prisma.aIRequest.findMany({
-        take: 100,
+        take: 50,
         orderBy: { createdAt: 'desc' },
-        select: { type: true, createdAt: true },
+        include: {
+          user: {
+            select: { id: true, name: true, email: true },
+          },
+        },
       }),
     ]);
 
@@ -166,10 +497,20 @@ export class AdminService {
       typeBreakdown[type] = (typeBreakdown[type] || 0) + 1;
     });
 
+    const recentLogs = requests.slice(0, 20).map((r) => ({
+      id: r.id,
+      type: r.type,
+      prompt: r.prompt,
+      status: r.status,
+      createdAt: r.createdAt,
+      user: r.user ? { name: r.user.name, email: r.user.email } : null,
+    }));
+
     return {
       totalRequests,
       recentRequestsCount: requests.length,
       typeBreakdown,
+      recentLogs,
     };
   }
 
@@ -451,4 +792,302 @@ export class AdminService {
       update: { value, ...(description ? { description } : {}) },
     });
   }
+
+  async deleteConfig(key: string) {
+    return this.prisma.systemConfig.delete({
+      where: { key },
+    });
+  }
+
+  // --- SUBSCRIPTION MANAGEMENT ---
+  async getSubscriptions(params: {
+    search?: string;
+    plan?: Plan;
+    status?: string;
+    expiringSoon?: boolean | string;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Number(params.page) || 1;
+    const limit = Number(params.limit) || 10;
+    const skip = (page - 1) * limit;
+    const now = new Date();
+    const in7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+    const where: any = {};
+
+    if (params.plan) {
+      where.plan = params.plan;
+    }
+
+    if (params.status) {
+      if (params.status === 'ACTIVE') {
+        where.status = 'ACTIVE';
+        where.currentPeriodEnd = { gt: now };
+      } else if (params.status === 'EXPIRED') {
+        where.OR = [
+          { status: { in: ['EXPIRED', 'PAST_DUE'] } },
+          { currentPeriodEnd: { lte: now } },
+        ];
+      } else if (params.status === 'CANCELING') {
+        where.status = 'ACTIVE';
+        where.cancelAtPeriodEnd = true;
+        where.currentPeriodEnd = { gt: now };
+      }
+    }
+
+    const isExpiringSoonQuery =
+      params.expiringSoon === true || params.expiringSoon === 'true';
+    if (isExpiringSoonQuery) {
+      where.status = 'ACTIVE';
+      where.currentPeriodEnd = {
+        gt: now,
+        lte: in7Days,
+      };
+    }
+
+    if (params.search && params.search.trim() !== '') {
+      const search = params.search.trim();
+      const searchConditions: any[] = [
+        { externalId: { contains: search, mode: 'insensitive' } },
+        {
+          user: {
+            OR: [
+              { email: { contains: search, mode: 'insensitive' } },
+              { name: { contains: search, mode: 'insensitive' } },
+              { username: { contains: search, mode: 'insensitive' } },
+            ],
+          },
+        },
+      ];
+
+      if (where.OR) {
+        where.AND = [{ OR: where.OR }, { OR: searchConditions }];
+        delete where.OR;
+      } else {
+        where.OR = searchConditions;
+      }
+    }
+
+    const [total, items] = await Promise.all([
+      this.prisma.subscription.count({ where }),
+      this.prisma.subscription.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatarUrl: true,
+              username: true,
+            },
+          },
+          squadSeats: {
+            where: { revokedAt: null },
+            select: { id: true, userId: true },
+          },
+        },
+      }),
+    ]);
+
+    const formattedItems = items.map((sub) => {
+      const isEffectiveActive =
+        sub.status === 'ACTIVE' && sub.currentPeriodEnd > now;
+      const isExpiringSoon =
+        isEffectiveActive && sub.currentPeriodEnd <= in7Days;
+      return {
+        id: sub.id,
+        userId: sub.userId,
+        plan: sub.plan,
+        status: sub.status,
+        isEffectiveActive,
+        isExpiringSoon,
+        currentPeriodStart: sub.currentPeriodStart,
+        currentPeriodEnd: sub.currentPeriodEnd,
+        cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
+        canceledAt: sub.canceledAt,
+        provider: sub.provider,
+        externalId: sub.externalId,
+        seats: sub.seats,
+        usedSeatsCount: sub.squadSeats.length,
+        createdAt: sub.createdAt,
+        updatedAt: sub.updatedAt,
+        user: sub.user,
+      };
+    });
+
+    return {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      items: formattedItems,
+    };
+  }
+
+  async getSubscription(id: string) {
+    const sub = await this.prisma.subscription.findUnique({
+      where: { id },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatarUrl: true,
+            username: true,
+            createdAt: true,
+          },
+        },
+        squadSeats: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatarUrl: true,
+                username: true,
+              },
+            },
+          },
+          orderBy: { grantedAt: 'desc' },
+        },
+      },
+    });
+
+    if (!sub) throw new NotFoundException('Subscription not found');
+
+    const auditLogs = await this.prisma.adminAuditLog.findMany({
+      where: { targetType: 'SUBSCRIPTION', targetId: id },
+      include: {
+        admin: {
+          select: { id: true, name: true, email: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const now = new Date();
+    const in7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const isEffectiveActive =
+      sub.status === 'ACTIVE' && sub.currentPeriodEnd > now;
+    const isExpiringSoon =
+      isEffectiveActive && sub.currentPeriodEnd <= in7Days;
+
+    return {
+      ...sub,
+      isEffectiveActive,
+      isExpiringSoon,
+      usedSeatsCount: sub.squadSeats.filter((s) => !s.revokedAt).length,
+      auditLogs,
+    };
+  }
+
+  async extendSubscription(
+    adminId: string,
+    id: string,
+    months: number,
+    reason: string,
+  ) {
+    if (!reason || reason.trim() === '') {
+      throw new BadRequestException('Lý do gia hạn là bắt buộc');
+    }
+    if (!months || months < 1) {
+      throw new BadRequestException('Số tháng gia hạn tối thiểu là 1');
+    }
+
+    const sub = await this.prisma.subscription.findUnique({ where: { id } });
+    if (!sub) throw new NotFoundException('Subscription not found');
+
+    const now = new Date();
+    const base = sub.currentPeriodEnd > now ? sub.currentPeriodEnd : now;
+    const newEnd = new Date(base);
+    newEnd.setMonth(newEnd.getMonth() + Number(months));
+
+    const updated = await this.prisma.subscription.update({
+      where: { id },
+      data: {
+        status: 'ACTIVE',
+        currentPeriodEnd: newEnd,
+        cancelAtPeriodEnd: false,
+        canceledAt: null,
+      },
+    });
+
+    // Record audit log
+    await this.prisma.adminAuditLog.create({
+      data: {
+        adminId,
+        action: 'EXTEND_SUBSCRIPTION',
+        targetType: 'SUBSCRIPTION',
+        targetId: id,
+        reason: reason.trim(),
+        details: {
+          months,
+          previousPeriodEnd: sub.currentPeriodEnd.toISOString(),
+          newPeriodEnd: newEnd.toISOString(),
+          previousStatus: sub.status,
+        },
+      },
+    });
+
+    return updated;
+  }
+
+  async revokeSubscription(adminId: string, id: string, reason: string) {
+    if (!reason || reason.trim() === '') {
+      throw new BadRequestException('Lý do thu hồi gói là bắt buộc');
+    }
+
+    const sub = await this.prisma.subscription.findUnique({
+      where: { id },
+      include: { squadSeats: { where: { revokedAt: null } } },
+    });
+    if (!sub) throw new NotFoundException('Subscription not found');
+
+    const now = new Date();
+
+    // Revoke all active squad seats
+    if (sub.squadSeats.length > 0) {
+      await this.prisma.squadSeat.updateMany({
+        where: { subscriptionId: id, revokedAt: null },
+        data: { revokedAt: now },
+      });
+    }
+
+    // Update subscription to EXPIRED
+    const updated = await this.prisma.subscription.update({
+      where: { id },
+      data: {
+        status: 'EXPIRED',
+        currentPeriodEnd: now,
+        cancelAtPeriodEnd: true,
+        canceledAt: now,
+      },
+    });
+
+    // Record audit log
+    await this.prisma.adminAuditLog.create({
+      data: {
+        adminId,
+        action: 'REVOKE_SUBSCRIPTION',
+        targetType: 'SUBSCRIPTION',
+        targetId: id,
+        reason: reason.trim(),
+        details: {
+          revokedSeatsCount: sub.squadSeats.length,
+          previousPeriodEnd: sub.currentPeriodEnd.toISOString(),
+          previousStatus: sub.status,
+        },
+      },
+    });
+
+    return updated;
+  }
 }
+

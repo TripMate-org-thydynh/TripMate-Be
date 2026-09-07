@@ -27,6 +27,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       where: { id: payload.sub, deletedAt: null },
     });
     if (!user) throw new UnauthorizedException('User not found');
+    if (user.isLocked) {
+      throw new UnauthorizedException('errors.auth.user_locked');
+    }
     return user;
   }
 }

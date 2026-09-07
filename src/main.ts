@@ -8,6 +8,8 @@ import { PrismaClientExceptionFilter } from './common/filters/prisma-exception.f
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { I18nValidationPipe, I18nValidationExceptionFilter } from 'nestjs-i18n';
 import { json, urlencoded } from 'express';
+import { MetricsBufferService } from './modules/observability/metrics-buffer.service';
+import { makeMetricsMiddleware } from './modules/observability/metrics.middleware';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -18,6 +20,11 @@ async function bootstrap() {
 
   // Global prefix
   app.setGlobalPrefix('api/v1');
+
+  // Metrics middleware đo lường latency và HTTP status code
+  // Đặt sớm trước helmet, CORS, pipes, filters để bắt được cả request bị chặn (401/403/429) và 404
+  const metricsBuffer = app.get(MetricsBufferService);
+  app.use(makeMetricsMiddleware(metricsBuffer));
 
   // Security headers. Tắt CSP ở dev để Swagger UI hoạt động.
   const isProd = process.env.NODE_ENV === 'production';
@@ -101,4 +108,31 @@ async function bootstrap() {
   console.log(`🚀 TripMate API running on: http://localhost:${port}/api/v1`);
   console.log(`📖 Swagger docs: http://localhost:${port}/docs`);
 }
-bootstrap();
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[UNHANDLED REJECTION]', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[UNCAUGHT EXCEPTION]', err);
+});
+
+process.on('beforeExit', (code) => {
+  console.log(`[PROCESS BEFORE EXIT] code=${code}`);
+});
+
+process.on('exit', (code) => {
+  console.log(`[PROCESS EXIT] code=${code}`);
+});
+
+process.on('SIGINT', () => {
+  console.log('[PROCESS SIGNAL] SIGINT received');
+});
+
+process.on('SIGTERM', () => {
+  console.log('[PROCESS SIGNAL] SIGTERM received');
+});
+
+bootstrap().catch((err) => {
+  console.error('Failed to start server:', err);
+});

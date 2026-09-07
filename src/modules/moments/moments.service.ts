@@ -6,7 +6,6 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { ActivitiesService } from '../activities/activities.service';
 import { CreateMomentDto } from './dto/create-moment.dto';
-
 import { EntitlementService } from '../premium/entitlement.service';
 
 @Injectable()
@@ -18,21 +17,17 @@ export class MomentsService {
   ) {}
 
   async create(tripId: string, userId: string, dto: CreateMomentDto) {
-    const trip = await this.prisma.trip.findUnique({
-      where: { id: tripId },
-      select: { createdBy: true },
-    });
-    if (!trip) throw new NotFoundException('Trip not found');
-
-    // Kiểm tra hạn mức khoảnh khắc tối đa theo gói của chủ chuyến
-    const currentMoments = await this.prisma.moment.count({
-      where: { tripId, deletedAt: null },
-    });
-    await this.entitlements.assertWithin(
-      trip.createdBy,
+    // Hạn mức khoảnh khắc mỗi chuyến.
+    //
+    // Đếm cả moment của mọi thành viên, vì `momentsPerTrip` là giới hạn của
+    // chuyến — chi phí lưu trữ nằm ở chuyến, không ở người đăng.
+    const moments = await this.prisma.moment.count({ where: { tripId } });
+    await this.entitlements.assertTripWithin(
+      tripId,
       'momentsPerTrip',
-      currentMoments,
+      moments,
     );
+
     const row = await this.prisma.moment.create({
       data: {
         tripId,

@@ -78,6 +78,15 @@ export class ExpensesService {
           userId: s.userId,
           shareAmount: new Decimal(s.amount),
         }));
+        const sumShares = splits.reduce(
+          (acc, s) => acc.add(s.shareAmount),
+          new Decimal(0),
+        );
+        if (!sumShares.eq(totalAmount)) {
+          throw new BadRequestException(
+            `Total split amount (${sumShares.toString()}) does not match total expense amount (${totalAmount.toString()})`,
+          );
+        }
       }
     } else {
       splits = [];
@@ -112,18 +121,26 @@ export class ExpensesService {
     });
 
     await this.evictCache(tripId);
-    // Ghi nhật ký hoạt động để feed squad có dữ liệu — trước đây
-    // ActivitiesService.log() không được gọi ở bất kỳ đâu.
-    await this.activities.log(
-      tripId,
-      dto.paidById,
-      'EXPENSE_ADDED',
-      {
-        amount: Number(dto.amount),
-        description: dto.description ?? null,
-      },
-      expense.id,
-    );
+    // Ghi nhật ký hoạt động để feed squad có dữ liệu.
+    // Feed hoạt động là việc phụ, không được làm đổ giao dịch tiền đã ghi thành công
+    // (tránh lỗi 500 khiến người dùng tưởng thất bại rồi bấm tạo lại gây trùng lặp khoản chi).
+    try {
+      await this.activities.log(
+        tripId,
+        dto.paidById,
+        'EXPENSE_ADDED',
+        {
+          amount: Number(dto.amount),
+          description: dto.description ?? null,
+        },
+        expense.id,
+      );
+    } catch (e: any) {
+      console.warn(
+        'Activities log error (ignored to preserve expense creation):',
+        e?.message ?? e,
+      );
+    }
     return expense;
   }
 
@@ -317,6 +334,12 @@ export class ExpensesService {
     });
     if (!split) throw new NotFoundException('Split not found');
 
+    // Nếu khoản chi này đã được đánh dấu thanh toán rồi (isPaid === true), trả về luôn mà không cập nhật lại (idempotent).
+    // Mốc thời gian paidAt đầu tiên là dữ liệu lịch sử phản ánh đúng thời điểm thanh toán thực tế, không được ghi đè.
+    if (split.isPaid) {
+      return split;
+    }
+
     const updatedSplit = await this.prisma.expenseSplit.update({
       where: { expenseId_userId: { expenseId, userId } },
       data: { isPaid: true, paidAt: new Date() },
@@ -360,14 +383,14 @@ export class ExpensesService {
   // --- EXTENSION FOR MODULE 7 (FINANCE FLOW) ---
 
   async getWallet(tripId: string, userId: string) {
-    let wallet = await this.prisma.userWallet.findUnique({
+    // Dùng upsert thay vì findUnique + create (check-then-act) để chống race condition
+    // khi hai request song song (ví dụ client prefetch 2 lần khi mở màn Chi tiêu) cùng khởi tạo ví,
+    // tránh lỗi vi phạm ràng buộc unique P2002 văng HTTP 500 cho người dùng.
+    const wallet = await this.prisma.userWallet.upsert({
       where: { userId },
+      update: {},
+      create: { userId },
     });
-    if (!wallet) {
-      wallet = await this.prisma.userWallet.create({
-        data: { userId },
-      });
-    }
     const banks = await this.getLinkedBanks(userId);
     const cards = await this.getPaymentMethods(userId);
     return {
@@ -516,26 +539,25 @@ export class ExpensesService {
   }
 
   async getBudgetGoal(tripId: string) {
-    let budget = await this.prisma.budgetGoal.findUnique({
+    // Dùng upsert thay vì findUnique + create (check-then-act) để chống race condition
+    // khi nhiều request đồng thời truy cập thông tin ngân sách của cùng một chuyến đi,
+    // tránh lỗi vi phạm ràng buộc unique (tripId) P2002 của Prisma văng HTTP 500.
+    const budget = await this.prisma.budgetGoal.upsert({
       where: { tripId },
+      update: {},
+      create: {
+        tripId,
+        limitAmount: 15000000.0, // 15M VND
+        warningPercentage: 80,
+        categoryLimits: [
+          { category: 'FOOD', amount: 4000000.0 },
+          { category: 'ACCOMMODATION', amount: 5000000.0 },
+          { category: 'TRANSPORT', amount: 3000000.0 },
+          { category: 'ACTIVITIES', amount: 2000000.0 },
+          { category: 'OTHER', amount: 1000000.0 },
+        ],
+      },
     });
-    if (!budget) {
-      // Create a default BudgetGoal in DB for the trip
-      budget = await this.prisma.budgetGoal.create({
-        data: {
-          tripId,
-          limitAmount: 15000000.0, // 15M VND
-          warningPercentage: 80,
-          categoryLimits: [
-            { category: 'FOOD', amount: 4000000.0 },
-            { category: 'ACCOMMODATION', amount: 5000000.0 },
-            { category: 'TRANSPORT', amount: 3000000.0 },
-            { category: 'ACTIVITIES', amount: 2000000.0 },
-            { category: 'OTHER', amount: 1000000.0 },
-          ],
-        },
-      });
-    }
     return {
       tripId,
       limitAmount: Number(budget.limitAmount),

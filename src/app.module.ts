@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { CacheModule } from '@nestjs/cache-manager';
 import { redisStore, redisInsStore } from 'cache-manager-redis-yet';
 import { createClient } from 'redis';
@@ -52,12 +53,15 @@ import {
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import * as path from 'path';
+import { ObservabilityModule } from './modules/observability/observability.module';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
 @Module({
   imports: [
+    // Cần cho job dọn hạn dùng thử/gói/đơn (premium/trial-expiry.job.ts).
+    ScheduleModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: ['.env.local', '.env'],
@@ -76,37 +80,33 @@ import { AppService } from './app.service';
       isGlobal: true,
       inject: [ConfigService],
       useFactory: async (config: ConfigService) => {
-        const client = createClient({
-          url: config.get<string>('redis.url'),
-          socket: {
-            reconnectStrategy: (retries) => {
-              if (retries > 1) {
-                return new Error('Redis connection failed');
-              }
-              return 1000;
-            },
-            connectTimeout: 4000,
-          },
-        });
-        client.on('error', (err) => {
-          console.error('Redis Cache Client socket error:', err);
-        });
-        try {
-          await client.connect();
-        } catch (err) {
-          console.error(
-            'Failed to connect to Redis cache during startup:',
-            err.message || err,
-          );
+        const redisUrl = config.get<string>('redis.url');
+        if (!redisUrl) {
+          return { ttl: 300000 };
         }
-        return {
-          store: redisInsStore(client as any),
-          ttl: 300000,
-        };
+        try {
+          const client = createClient({
+            url: redisUrl,
+            socket: {
+              reconnectStrategy: () => false,
+              connectTimeout: 2000,
+            },
+          });
+          client.on('error', () => {});
+          await client.connect();
+          return {
+            store: redisInsStore(client as any),
+            ttl: 300000,
+          };
+        } catch {
+          console.warn('⚠️ Redis unreachable, using in-memory cache.');
+          return { ttl: 300000 };
+        }
       },
     }),
     ThrottlerModule.forRoot([
       {
+        name: 'default',
         ttl: 60000,
         limit: 100,
       },
@@ -160,6 +160,7 @@ import { AppService } from './app.service';
     JournalModule,
     VacayModule,
     AdminModule,
+    ObservabilityModule,
   ],
   controllers: [AppController],
   providers: [

@@ -9,9 +9,11 @@ import {
   Post,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import { PremiumService } from './premium.service';
 import { RawResponse } from '../../common/interceptors/transform.interceptor';
 
+@SkipThrottle()
 @ApiTags('Payment Webhook')
 @Controller('payment')
 export class PaymentWebhookController {

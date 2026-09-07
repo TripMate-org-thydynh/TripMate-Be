@@ -1,0 +1,112 @@
+# Blueprint triển khai TripMate backend lên Render.
+#
+# Dùng Dockerfile có sẵn thay vì runtime Node của Render: bản build đã có sẵn
+# hai tầng và bước `prisma generate`, nên chạy Docker cho ra đúng thứ đã chạy
+# được ở máy, thay vì một chuỗi lệnh khác phải bảo trì song song.
+#
+# Cách dùng: Render Dashboard → New → Blueprint → chọn repo này.
+# Các biến `sync: false` KHÔNG nằm trong file này và phải nhập tay ở dashboard —
+# commit secret vào repo là làm lộ chúng vĩnh viễn trong lịch sử git.
+services:
+  - type: web
+    name: tripmate-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: singapore
+    plan: free
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Render tự cấp PORT và mong app lắng nghe đúng cổng đó.
+      - key: PORT
+        value: 3000
+
+      # ── Bí mật: nhập ở dashboard, không bao giờ ghi vào file này ──────────
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 7d
+
+      # Redis. Blueprint này tạo sẵn một instance Redis của Render và trỏ vào
+      # đó — URL cũ trong .env trỏ tới một host Redis Labs đã ngừng tồn tại,
+      # mang nguyên sang production là backend tự thoát sau vài chục giây.
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: tripmate-redis
+          property: connectionString
+
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_FROM_NAME
+        value: TripMate
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: CLOUDINARY_FOLDER
+        value: tripmate
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+
+      # Muối cho các tín hiệu chống lạm dụng dùng thử. Đặt MỘT LẦN rồi không
+      # đổi: đổi muối là mọi bản ghi cũ không đối chiếu được nữa, và ai đã dùng
+      # thử sẽ dùng thử lại được.
+      - key: TRIAL_SIGNAL_SALT
+        generateValue: true
+
+      # URL công khai để cổng thanh toán gọi IPN về. Điền lại bằng chính URL
+      # Render cấp cho service này sau lần deploy đầu.
+      - key: PUBLIC_API_URL
+        sync: false
+      - key: PAYMENT_RETURN_URL
+        value: tripmate://premium/return
+
+      # Cổng thanh toán — chưa có tài khoản merchant thì để trống. Backend tự
+      # trả `gateways: []` và app hiện "chưa mở bán" thay vì một nút mua hỏng.
+      - key: MOMO_PARTNER_CODE
+        sync: false
+      - key: MOMO_ACCESS_KEY
+        sync: false
+      - key: MOMO_SECRET_KEY
+        sync: false
+      - key: ZALOPAY_APP_ID
+        sync: false
+      - key: ZALOPAY_KEY1
+        sync: false
+      - key: ZALOPAY_KEY2
+        sync: false
+
+      # Tên miền được phép gọi API. Điền domain Vercel của TripMate_web.
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+  - type: redis
+    name: tripmate-redis
+    region: singapore
+    plan: free
+    # Không mở ra ngoài: chỉ service trong cùng workspace kết nối được.
+    ipAllowList: []
