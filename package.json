@@ -21,6 +21,8 @@
     "test:api-e2e": "node test/e2e/api-e2e.mjs",
     "test:entitlement": "node test/e2e/entitlement-e2e.mjs",
     "test:webhook": "node test/e2e/webhook-e2e.mjs",
+    "test:checkout": "node test/e2e/checkout-e2e.mjs",
+    "test:sepay": "node test/e2e/sepay-e2e.mjs",
     "test:payment": "node test/e2e/payment-e2e.mjs",
     "test:gating": "node test/e2e/gating-e2e.mjs",
     "test:trial": "node test/e2e/trial-e2e.mjs",

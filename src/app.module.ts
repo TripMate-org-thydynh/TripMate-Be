@@ -120,6 +120,7 @@ import { AppService } from './app.service';
         // ngay khi output đổi từ dist/src/ sang dist/, làm app crash lúc khởi
         // động ở production.
         path: path.join(__dirname, 'i18n'),
+        // Watcher chỉ có ích lúc dev; ở prod nó giữ file handle vô ích.
         watch: false,
       },
       resolvers: [
