@@ -15,7 +15,7 @@ export type PaidPlan = Exclude<Plan, 'FREE'>;
  */
 export const MONTHLY_PRICE: Record<PaidPlan, number> = {
   PLUS: 39000,
-  SQUAD: 10000,
+  SQUAD: 99000,
 };
 
 /** Số ghế đi kèm mỗi gói. Gói cá nhân luôn là 1. */
@@ -39,7 +39,7 @@ export const BILLING_TERMS: { months: number; discount: number }[] = [
  */
 export const PLAN_PRICE: Record<PaidPlan, Record<number, number>> = {
   PLUS: { 1: 39000, 12: 374000 },
-  SQUAD: { 1: 10000, 12: 950000 },
+  SQUAD: { 1: 99000, 12: 950000 },
 };
 
 export function isPaidPlan(value: unknown): value is PaidPlan {

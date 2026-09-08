@@ -170,7 +170,7 @@ export class PremiumService {
     } else if (normPlan === 'SQUAD' || normPlan === 'SQUAD_MONTHLY') {
       plan = 'SQUAD';
       months = months > 0 ? months : 1;
-      amount = 10000 * months;
+      amount = 99000 * months;
     } else if (normPlan === 'PLUS' || normPlan === 'PLUS_MONTHLY') {
       plan = 'PLUS';
       months = months > 0 ? months : 1;
