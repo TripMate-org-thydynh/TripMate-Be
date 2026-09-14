@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { Plan, PromoCode } from '@prisma/client';
+import { PromoCode, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaidPlan } from './pricing';
 
@@ -155,8 +155,9 @@ export class PromoService {
     userId: string;
     orderId: string;
     discountApplied: number;
+    tx?: Prisma.TransactionClient;
   }) {
-    return this.prisma.$transaction(async (tx) => {
+    const runInTx = async (tx: Prisma.TransactionClient) => {
       const promo = await tx.promoCode.findUnique({
         where: { code: params.code.toUpperCase() },
       });
@@ -218,7 +219,12 @@ export class PromoService {
         // `@unique(orderId)`: webhook gọi lại. Không phải lỗi.
         this.logger.log(`Lượt dùng mã của đơn ${params.orderId} đã được ghi`);
       }
-    });
+    };
+
+    if (params.tx) {
+      return runInTx(params.tx);
+    }
+    return this.prisma.$transaction(runInTx);
   }
 
   /** Các mã đang chạy, để màn khuyến mãi hiện thay vì để người dùng đoán. */

@@ -3,7 +3,7 @@ import {
   Injectable,
   Logger,
 } from '@nestjs/common';
-import { Plan, SubStatus } from '@prisma/client';
+import { Plan, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   TrialEligibilityService,
@@ -316,17 +316,23 @@ export class TrialService {
    * tín hiệu quan trọng nhất để biết trial có tác dụng hay không, mà không ghi
    * lại thì không đo được.
    */
-  async markConverted(userId: string) {
-    const updated = await this.prisma.trialClaim.updateMany({
+  async markConverted(userId: string, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma;
+    const updated = await db.trialClaim.updateMany({
       where: { userId, outcome: 'RUNNING' },
       data: { outcome: 'CONVERTED', endedAt: new Date() },
     });
     if (updated.count > 0) {
-      await this.log(userId, 'TRIAL_CONVERTED', {
-        actor: 'webhook',
-        fromStatus: 'TRIALING',
-        toStatus: 'ACTIVE',
-      });
+      await this.log(
+        userId,
+        'TRIAL_CONVERTED',
+        {
+          actor: 'webhook',
+          fromStatus: 'TRIALING',
+          toStatus: 'ACTIVE',
+        },
+        tx,
+      );
     }
   }
 
@@ -346,8 +352,10 @@ export class TrialService {
       plan?: Plan;
       meta?: Record<string, unknown>;
     },
+    tx?: Prisma.TransactionClient,
   ) {
-    await this.prisma.subscriptionEvent.create({
+    const db = tx ?? this.prisma;
+    await db.subscriptionEvent.create({
       data: {
         userId,
         type,
