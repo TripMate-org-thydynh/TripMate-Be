@@ -274,7 +274,7 @@ export class AiService {
       };
       await this.recordAiUsage(
         userId,
-        'PHOTO_LOCATION' as AIRequestType,
+        'PHOTO_LOCATION',
         undefined,
         prompt,
         parsed,
@@ -404,7 +404,7 @@ export class AiService {
       };
       await this.recordAiUsage(
         userId,
-        'BOOKING_PARSE' as AIRequestType,
+        'BOOKING_PARSE',
         undefined,
         prompt,
         parsed,
@@ -878,7 +878,7 @@ export class AiService {
         await this.callGeminiJSON<PersonalityRoastResponse>(promptText);
       await this.recordAiUsage(
         userId,
-        'PERSONALITY_ROAST' as AIRequestType,
+        'PERSONALITY_ROAST',
         tripId,
         promptText,
         result,
@@ -936,7 +936,7 @@ export class AiService {
       const result = await this.callGeminiJSON<SquadMoodResponse>(promptText);
       await this.recordAiUsage(
         userId,
-        'SQUAD_MOOD' as AIRequestType,
+        'SQUAD_MOOD',
         tripId,
         promptText,
         result,
@@ -986,7 +986,7 @@ export class AiService {
         await this.callGeminiJSON<RecommendedActivity[]>(promptText);
       await this.recordAiUsage(
         userId,
-        'RECOMMEND_TIMELINE' as AIRequestType,
+        'RECOMMEND_TIMELINE',
         tripId,
         promptText,
         result,

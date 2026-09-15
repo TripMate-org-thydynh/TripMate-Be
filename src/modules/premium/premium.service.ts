@@ -4,7 +4,8 @@ import {
   ServiceUnavailableException,
   Logger,
 } from '@nestjs/common';
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createHmac, randomInt, timingSafeEqual } from 'crypto';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EntitlementService } from './entitlement.service';
 import { TrialService } from './trial.service';
@@ -23,6 +24,7 @@ import {
   isPaidPlan,
   priceOf,
 } from './pricing';
+import { playProductOf, playProductIdFor } from './google-play';
 
 export interface BillingItem {
   id: string;
@@ -126,7 +128,21 @@ export class PremiumService {
     return res;
   }
 
-  /// Thanh toán khởi tạo cho MoMo và ZaloPay.
+  /// Đường vào cũ của app (`POST /premium/checkout`).
+  ///
+  /// Giữ lại vì các bản app đã phát hành vẫn gọi nó, nhưng **không còn logic
+  /// riêng**: nó chuẩn hoá tham số rồi giao hết cho `createOrder`.
+  ///
+  /// Trước đây hàm này mang **một bảng giá thứ hai** tự viết trong thân hàm —
+  /// PLUS 12 tháng tính 299.000đ trong khi bảng giá thật (`PLAN_PRICE`) là
+  /// 374.000đ, còn SQUAD 12 tháng tính `99.000 × 12 = 1.188.000đ` thay vì
+  /// 950.000đ. App lấy giá từ `/premium/plans` để hiển thị, rồi thanh toán qua
+  /// đường này, nên **số tiền trên mã QR không khớp số tiền người dùng vừa
+  /// nhìn thấy**. Nó cũng nhận mọi số tháng (3 tháng, 7 tháng...) là những kỳ
+  /// hạn không hề được bán, và bỏ qua sạch mã giảm giá.
+  ///
+  /// Một bảng giá thì không thể lệch với chính nó. Đó là toàn bộ lý do hàm này
+  /// bây giờ chỉ còn là lớp chuyển tiếp.
   async checkout(
     userId: string,
     tierOrDto:
@@ -136,6 +152,8 @@ export class PremiumService {
           tier?: string;
           months?: number;
           paymentMethod?: string;
+          provider?: string;
+          promoCode?: string;
           redirectUrl?: string;
         },
     paymentMethodArg?: string,
@@ -143,126 +161,40 @@ export class PremiumService {
   ) {
     let planInput = 'PLUS';
     let monthsInput = 1;
-    let methodInput = 'MOMO';
-    let redirectUrlInput: string | undefined = undefined;
+    let methodInput = 'SEPAY';
+    let promoCode: string | undefined;
 
     if (typeof tierOrDto === 'object' && tierOrDto !== null) {
       planInput = tierOrDto.plan || tierOrDto.tier || 'PLUS';
       monthsInput = tierOrDto.months ?? 1;
-      methodInput = tierOrDto.paymentMethod || 'MOMO';
-      redirectUrlInput = tierOrDto.redirectUrl;
+      methodInput =
+        tierOrDto.paymentMethod || tierOrDto.provider || 'SEPAY';
+      promoCode = tierOrDto.promoCode;
     } else {
       planInput = tierOrDto || 'PLUS';
       monthsInput = monthsArg ?? 1;
-      methodInput = paymentMethodArg || 'MOMO';
+      methodInput = paymentMethodArg || 'SEPAY';
     }
 
-    const normMethod = methodInput.trim().toUpperCase();
-    let plan: 'PLUS' | 'SQUAD' = 'PLUS';
-    let months = monthsInput;
-    let amount = 39000;
-
+    // App cũ gửi gói và kỳ hạn dính làm một (`PLUS_YEARLY`). Tách ra ở đây,
+    // đúng một chỗ, thay vì để mỗi nhánh thanh toán tự đoán lại.
     const normPlan = planInput.trim().toUpperCase();
-    if (normPlan === 'PLUS_YEARLY' || (normPlan === 'PLUS' && months === 12)) {
-      plan = 'PLUS';
+    let plan = normPlan;
+    let months = monthsInput;
+    if (normPlan.endsWith('_YEARLY') || normPlan.endsWith('_ANNUAL')) {
+      plan = normPlan.replace(/_(YEARLY|ANNUAL)$/, '');
       months = 12;
-      amount = 299000;
-    } else if (normPlan === 'SQUAD' || normPlan === 'SQUAD_MONTHLY') {
-      plan = 'SQUAD';
-      months = months > 0 ? months : 1;
-      amount = 99000 * months;
-    } else if (normPlan === 'PLUS' || normPlan === 'PLUS_MONTHLY') {
-      plan = 'PLUS';
-      months = months > 0 ? months : 1;
-      amount = months === 12 ? 299000 : 39000 * months;
-    } else {
-      throw new BadRequestException(
-        `Gói ${planInput} không hợp lệ! Vui lòng chọn PLUS hoặc SQUAD.`,
-      );
+    } else if (normPlan.endsWith('_MONTHLY')) {
+      plan = normPlan.replace(/_MONTHLY$/, '');
+      months = 1;
     }
 
-    this.logger.log(
-      `Khởi tạo thanh toán: user=${userId}, plan=${plan}, months=${months}, amount=${amount}, method=${normMethod}`,
-    );
+    // `VIETQR` và `BANK_TRANSFER` là tên cũ của cùng một thứ.
+    const method = methodInput.trim().toUpperCase();
+    const provider =
+      method === 'VIETQR' || method === 'BANK_TRANSFER' ? 'SEPAY' : method;
 
-    if (normMethod === 'MOMO') {
-      return this.createMomoPayment(
-        userId,
-        plan,
-        months,
-        amount,
-        redirectUrlInput,
-      );
-    } else if (normMethod === 'ZALOPAY') {
-      return this.createZaloPayPayment(
-        userId,
-        plan,
-        months,
-        amount,
-        redirectUrlInput,
-      );
-    } else if (
-      normMethod === 'SEPAY' ||
-      normMethod === 'VIETQR' ||
-      normMethod === 'BANK_TRANSFER'
-    ) {
-      return this.createSepayPayment(userId, plan, months, amount);
-    } else {
-      throw new BadRequestException(
-        `Phương thức thanh toán ${normMethod} không được hỗ trợ. Chỉ hỗ trợ MOMO, ZALOPAY, hoặc SEPAY.`,
-      );
-    }
-  }
-
-  private async createSepayPayment(
-    userId: string,
-    plan: 'PLUS' | 'SQUAD',
-    months: number,
-    amount: number,
-  ) {
-    const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
-    let randomPart = '';
-    for (let i = 0; i < 6; i++) {
-      randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    const orderCode = `TM${randomPart}`;
-
-    await this.prisma.paymentTransaction.create({
-      data: {
-        senderId: userId,
-        receiverId: userId,
-        amount,
-        provider: 'BANK_TRANSFER',
-        status: 'PENDING',
-        transactionId: orderCode,
-        note: JSON.stringify({ plan, months, userId, createdAt: Date.now() }),
-      },
-    });
-
-    const accountNumber = process.env.SEPAY_ACCOUNT_NUMBER || '0949064234';
-    const bankCode = process.env.SEPAY_BANK_CODE || 'MBBank';
-    const accountName = process.env.SEPAY_ACCOUNT_NAME || 'CHAU THANH TRUNG';
-
-    const qrUrl = `https://qr.sepay.vn/img?acc=${encodeURIComponent(accountNumber)}&bank=${encodeURIComponent(bankCode)}&amount=${amount}&des=${encodeURIComponent(orderCode)}&template=compact`;
-    const vietqrUrl = `https://vietqr.app/img?bank=${encodeURIComponent(bankCode)}&acc=${encodeURIComponent(accountNumber)}&amount=${amount}&des=${encodeURIComponent(orderCode)}&template=compact&showinfo=true&holder=${encodeURIComponent(accountName)}`;
-    const payUrl = `https://qr.sepay.vn/gateway?acc=${encodeURIComponent(accountNumber)}&bank=${encodeURIComponent(bankCode)}&amount=${amount}&des=${encodeURIComponent(orderCode)}`;
-
-    return {
-      provider: 'SEPAY',
-      orderId: orderCode,
-      orderCode,
-      amount,
-      payUrl,
-      qrUrl,
-      vietqrUrl,
-      bankInfo: {
-        bankCode,
-        accountNumber,
-        accountName,
-        amount,
-        transferContent: orderCode,
-      },
-    };
+    return this.createOrder(userId, plan, months, provider, promoCode);
   }
 
   private async createMomoPayment(
@@ -326,7 +258,7 @@ export class PremiumService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const data = (await res.json()) as any;
+      const data = (await res.json());
       if (data.resultCode !== 0) {
         this.logger.error(
           `MoMo create payment failed: code=${data.resultCode}, msg=${data.message}`,
@@ -415,7 +347,7 @@ export class PremiumService {
           Object.entries(zaloBody).map(([k, v]) => [k, String(v)]),
         ),
       });
-      const data = (await res.json()) as any;
+      const data = (await res.json());
       if (data.return_code !== 1) {
         this.logger.error(
           `ZaloPay create payment failed: code=${data.return_code}, msg=${data.return_message}`,
@@ -441,14 +373,76 @@ export class PremiumService {
     }
   }
 
-  /// Bảng giá công khai — client vẽ màn chọn gói từ đây, không tự chép số.
+  /// Kênh phân phối của bản app đang gọi.
   ///
-  /// `gateways` rỗng nghĩa là chưa cấu hình cổng nào: UI phải nói "chưa mở
-  /// bán" thay vì vẽ nút mua rồi để người dùng bấm vào một lỗi.
-  plans() {
+  /// `play`  — bản tải từ CH Play. Chính sách Payments của Google bắt buộc mọi
+  ///           hàng hoá số tiêu thụ trong app phải qua Play Billing.
+  /// `direct`— APK tải thẳng từ web TripMate, không qua CH Play.
+  /// `web`   — dùng trên trình duyệt.
+  ///
+  /// Bản `play` **không** được bày SePay cạnh Play Billing: chương trình "User
+  /// Choice Billing" của Google chưa mở cho Việt Nam, nên bày song song là
+  /// đường ngắn nhất tới việc bị gỡ app. Khi nào VN được mở, bật
+  /// `USER_CHOICE_BILLING=true` là hiện cả hai — không phải sửa dòng code nào.
+  private clientChannel(raw?: string): 'play' | 'direct' | 'web' {
+    const v = (raw ?? '').trim().toLowerCase();
+    if (v === 'play' || v === 'direct' || v === 'web') return v;
+    // Không khai thì coi như `play` — chọn phía an toàn về chính sách. Đoán sai
+    // theo hướng này thì người dùng thiếu một lựa chọn thanh toán; đoán sai theo
+    // hướng kia thì app bị gỡ khỏi cửa hàng.
+    return 'play';
+  }
+
+  /// Google Play Billing đã đủ cấu hình để bán chưa.
+  private playBillingReady(): boolean {
+    if (process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON) return true;
+    return (
+      process.env.NODE_ENV !== 'production' &&
+      process.env.MOCK_GOOGLE_PLAY === 'true'
+    );
+  }
+
+  /// SePay đã đủ cấu hình để nhận tiền chưa.
+  ///
+  /// Đòi đủ **cả ba** biến tài khoản. Trước đây chúng có giá trị mặc định là số
+  /// tài khoản cá nhân của một thành viên trong nhóm — thiếu cấu hình lúc lên
+  /// thật thì tiền của khách chảy thẳng vào tài khoản đó mà không ai nhận ra.
+  private sepayReady(): boolean {
+    return Boolean(
+      process.env.SEPAY_ACCOUNT_NUMBER &&
+        process.env.SEPAY_BANK_CODE &&
+        process.env.SEPAY_ACCOUNT_NAME,
+    );
+  }
+
+  /// Danh sách cổng được phép hiện cho kênh phân phối này.
+  gatewaysFor(channel: 'play' | 'direct' | 'web'): string[] {
+    const out: string[] = [];
+    if (channel === 'play') {
+      if (this.playBillingReady()) out.push('GOOGLE_PLAY');
+      if (process.env.USER_CHOICE_BILLING === 'true' && this.sepayReady()) {
+        out.push('SEPAY');
+      }
+      return out;
+    }
+    // Ngoài CH Play thì Play Billing không tồn tại (không có thư viện billing để
+    // gọi), nên chỉ còn chuyển khoản và ví.
+    if (this.sepayReady()) out.push('SEPAY');
+    out.push(...this.gateways.availableGateways());
+    return out;
+  }
+
+  /// Bảng giá, các cổng đang mở, và mã sản phẩm Play tương ứng từng kỳ hạn.
+  ///
+  /// `channelHeader` lấy từ `X-Client-Channel`. Client khai được, nhưng khai sai
+  /// cũng không mở thêm được đường nào: mọi cổng đều tự xác thực lại lúc thanh
+  /// toán. Header này chỉ quyết định **bày cái gì**, không quyết định cho phép.
+  plans(channelHeader?: string) {
+    const channel = this.clientChannel(channelHeader);
     return {
       currency: 'VND',
-      gateways: this.gateways.availableGateways(),
+      channel,
+      gateways: this.gatewaysFor(channel),
       plans: (Object.keys(MONTHLY_PRICE) as PaidPlan[]).map((plan) => ({
         plan,
         monthlyPrice: MONTHLY_PRICE[plan],
@@ -459,6 +453,10 @@ export class PremiumService {
           total: priceOf(plan, t.months),
           /// Giá quy về mỗi tháng — con số người dùng thật sự so sánh.
           perMonth: Math.round(priceOf(plan, t.months) / t.months),
+          /// Mã sản phẩm để app gọi Play Billing. Giá hiển thị lúc mua là giá
+          /// Google trả về, không phải con số này — Play tự quy đổi tiền tệ và
+          /// tự cộng thuế theo nước của người mua.
+          playProductId: playProductIdFor(plan, t.months),
         })),
       })),
     };
@@ -493,14 +491,21 @@ export class PremiumService {
         sellable: SELLABLE_MONTHS,
       });
     }
-    if (provider !== 'MOMO' && provider !== 'ZALOPAY') {
+    if (provider !== 'MOMO' && provider !== 'ZALOPAY' && provider !== 'SEPAY') {
       throw new BadRequestException({
         code: 'INVALID_PROVIDER',
         message: 'errors.premium.invalidProvider',
       });
     }
     const gateway = provider;
-    if (!this.gateways.availableGateways().includes(gateway)) {
+    // GOOGLE_PLAY cố tình KHÔNG có ở đây: Play Billing không tạo đơn phía mình.
+    // Google giữ tiền, giữ giá, và trả về một biên lai — đường vào của nó là
+    // `verifyGooglePlayPurchase`, không phải `createOrder`.
+    const ready =
+      gateway === 'SEPAY'
+        ? this.sepayReady()
+        : this.gateways.availableGateways().includes(gateway);
+    if (!ready) {
       throw new ServiceUnavailableException({
         code: 'GATEWAY_NOT_CONFIGURED',
         message: 'errors.premium.gatewayNotConfigured',
@@ -535,7 +540,16 @@ export class PremiumService {
       appliedCode = applied.code;
     }
 
-    const orderId = PremiumService.buildOrderId(userId, plan, m);
+    // SePay nhận diện đơn bằng **nội dung chuyển khoản** do người dùng gõ tay
+    // hoặc do QR điền sẵn — mà ô đó ngắn và nhiều ngân hàng lọc mất dấu chấm.
+    // Mã `tmsub.<uuid>.PLUS.12.<ts>` không lọt qua được, nên đơn SePay dùng mã
+    // ngắn `TM######`. Nó vẫn là `orderId` của cùng bảng `PaymentOrder`, nên
+    // toàn bộ đường xử lý phía sau (`fulfill`, lịch sử hoá đơn, dọn đơn treo)
+    // dùng chung một lối, không phải nhánh riêng.
+    const orderId =
+      gateway === 'SEPAY'
+        ? await this.newSepayOrderCode()
+        : PremiumService.buildOrderId(userId, plan, m);
     const description = `TripMate ${plan} ${m} thang`;
 
     // Ghi đơn TRƯỚC khi gọi cổng: gọi cổng xong mới ghi thì một lần crash giữa
@@ -619,9 +633,27 @@ export class PremiumService {
       };
     }
 
+    // SePay không phải cổng thanh toán mà là dịch vụ đọc biến động số dư ngân
+    // hàng. Không có đơn nào để tạo ở phía họ — mình chỉ dựng mã QR trỏ vào tài
+    // khoản của mình với nội dung là mã đơn, rồi chờ webhook báo tiền về.
+    if (gateway === 'SEPAY') {
+      return {
+        orderId,
+        orderCode: orderId,
+        plan,
+        months: m,
+        amount,
+        baseAmount,
+        discount,
+        promoCode: appliedCode,
+        provider: gateway,
+        ...this.sepayQr(orderId, Number(amount)),
+      };
+    }
+
     try {
       const created = await this.gateways.create({
-        gateway,
+        gateway: gateway,
         orderId,
         amount,
         description,
@@ -694,28 +726,79 @@ export class PremiumService {
 
 
 
-  /// Xác thực biên lai Google Play.
+  /// Xác thực biên lai Google Play và cấp quyền.
+  ///
+  /// Dùng **Subscriptions v2** (`purchases/subscriptionsv2/tokens/{token}`)
+  /// thay vì v1. Khác biệt quan trọng: v2 tra cứu **chỉ bằng token**, và trả về
+  /// mã sản phẩm thật trong `lineItems[].productId`. Nghĩa là gói và số tháng
+  /// suy ra từ thứ Google xác nhận đã bán, **không phải** từ `productId` do
+  /// client tự khai. Client chỉ còn cầm token — thứ nó không tự bịa được.
   async verifyGooglePlayPurchase(
     userId: string,
     token: string,
-    productId: string,
+    productId?: string,
   ) {
-    if (!token || !productId) {
-      throw new BadRequestException('Mã token và productId là bắt buộc! 🤪');
+    if (!token) {
+      throw new BadRequestException({
+        code: 'MISSING_TOKEN',
+        message: 'errors.premium.missingPurchaseToken',
+      });
     }
 
-    let plan: 'PLUS' | 'SQUAD' = 'PLUS';
-    let months = 1;
-    const prod = productId.toLowerCase();
-    if (prod.includes('squad')) {
-      plan = 'SQUAD';
-      months = 1;
-    } else if (prod.includes('yearly') || prod.includes('annual')) {
-      plan = 'PLUS';
-      months = 12;
-    } else {
-      plan = 'PLUS';
-      months = 1;
+    // Biên lai đã dùng rồi thì trả về kết quả cũ, KHÔNG cộng thêm hạn.
+    //
+    // Chốt này phải đứng **trước** mọi nhánh cấp quyền, kể cả nhánh giả lập lúc
+    // dev. Đặt nó sau thì đường giả lập đi vòng qua và mỗi lần gửi lại cùng một
+    // biên lai lại cộng thêm một kỳ hạn — đúng lỗi đã tự tay tạo ra ở bản trước
+    // và chỉ lộ ra khi gọi thật hai lần liên tiếp.
+    //
+    // Google gửi lại cùng một token nhiều lần một cách hoàn toàn bình thường:
+    // app khôi phục giao dịch lúc khởi động, `restorePurchases()`, và mọi lần
+    // cài lại máy. Không chặn ở đây thì mỗi lần mở app lại cộng thêm một kỳ hạn.
+    const existingOrder =
+      typeof this.prisma.paymentOrder?.findFirst === 'function'
+        ? await this.prisma.paymentOrder.findFirst({
+            where: { provider: 'GOOGLE_PLAY', externalId: token },
+          })
+        : null;
+    if (existingOrder) {
+      if (existingOrder.userId !== userId) {
+        this.logger.warn(
+          `Biên lai Play đã thuộc user khác: token dùng bởi ${existingOrder.userId}, nay ${userId} đòi`,
+        );
+        throw new BadRequestException({
+          code: 'RECEIPT_ALREADY_USED',
+          message: 'errors.premium.receiptAlreadyUsed',
+        });
+      }
+      return {
+        success: true,
+        plan: existingOrder.plan,
+        alreadyProcessed: true,
+      };
+    }
+
+    const seen = await this.prisma.subscription.findFirst({
+      where: { provider: 'GOOGLE_PLAY', externalId: token },
+    });
+    if (seen) {
+      if (seen.userId !== userId) {
+        // Cùng một biên lai không thể thuộc hai tài khoản. Đây là dấu hiệu
+        // chia sẻ token để nhân bản gói.
+        this.logger.warn(
+          `Biên lai Play đã thuộc user khác: token dùng bởi ${seen.userId}, nay ${userId} đòi`,
+        );
+        throw new BadRequestException({
+          code: 'RECEIPT_ALREADY_USED',
+          message: 'errors.premium.receiptAlreadyUsed',
+        });
+      }
+      return {
+        success: true,
+        plan: seen.plan,
+        alreadyProcessed: true,
+        currentPeriodEnd: seen.currentPeriodEnd,
+      };
     }
 
     const serviceAccountJson = process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON;
@@ -724,64 +807,265 @@ export class PremiumService {
         process.env.NODE_ENV !== 'production' &&
         process.env.MOCK_GOOGLE_PLAY === 'true'
       ) {
+        // Ở chế độ giả lập KHÔNG có Google để hỏi, nên đành tin `productId` —
+        // nhưng vẫn bắt nó nằm trong danh mục, để mã sai lộ ra ngay lúc dev
+        // chứ không phải lúc đã lên thật.
+        const mock = playProductOf(productId);
+        if (!mock) {
+          throw new BadRequestException({
+            code: 'UNKNOWN_PRODUCT',
+            message: 'errors.premium.unknownProduct',
+          });
+        }
         this.logger.warn(
-          `MOCK_GOOGLE_PLAY=true: cấp quyền giả lập cho user=${userId} prod=${productId}`,
+          `MOCK_GOOGLE_PLAY=true: cấp quyền giả lập user=${userId} prod=${productId}`,
         );
-        await this.entitlements.grant({
-          userId,
-          plan,
-          months,
-          provider: 'GOOGLE_PLAY',
-          externalId: token,
-        });
-        return { success: true, plan, months, via: 'own' };
+        const amount = priceOf(mock.plan, mock.months);
+        const playOrderId = `play.mock.${token.slice(-16).replace(/[^a-zA-Z0-9]/g, '')}.${Date.now()}`;
+        const runMockGrant = async (tx: any) => {
+          await tx.paymentOrder.create({
+            data: {
+              orderId: playOrderId,
+              userId,
+              plan: mock.plan,
+              months: mock.months,
+              amount,
+              baseAmount: amount,
+              discountAmount: 0,
+              provider: 'GOOGLE_PLAY',
+              status: 'SUCCESS',
+              externalId: token,
+              paidAt: new Date(),
+            },
+          });
+          await this.entitlements.grant({
+            userId,
+            plan: mock.plan,
+            months: mock.months,
+            provider: 'GOOGLE_PLAY',
+            externalId: token,
+            tx,
+          });
+        };
+
+        if (typeof this.prisma.$transaction === 'function') {
+          await this.prisma.$transaction(runMockGrant);
+        } else {
+          await runMockGrant(this.prisma);
+        }
+
+        return {
+          success: true,
+          plan: mock.plan,
+          months: mock.months,
+          mocked: true,
+        };
       }
       this.logger.warn(
-        `Chưa cấu hình xác thực Google Play — từ chối: user=${userId} product=${productId}`,
+        `Chưa cấu hình xác thực Google Play — từ chối: user=${userId}`,
       );
-      throw new ServiceUnavailableException(
-        'errors.premium.verifyNotConfigured',
-      );
+      throw new ServiceUnavailableException({
+        code: 'VERIFY_NOT_CONFIGURED',
+        message: 'errors.premium.verifyNotConfigured',
+      });
     }
 
+    const packageName = process.env.ANDROID_PACKAGE_NAME || 'com.tripmate.app';
+    let accessToken: string | null | undefined;
+    let data: any;
     try {
       const { GoogleAuth } = await import('google-auth-library');
-      const credentials = JSON.parse(serviceAccountJson);
       const auth = new GoogleAuth({
-        credentials,
+        credentials: JSON.parse(serviceAccountJson),
         scopes: ['https://www.googleapis.com/auth/androidpublisher'],
       });
       const client = await auth.getClient();
-      const tokenRes = await client.getAccessToken();
-      const accessToken = tokenRes.token;
+      accessToken = (await client.getAccessToken()).token;
 
-      const packageName =
-        process.env.ANDROID_PACKAGE_NAME || 'com.tripmate.app';
-      const url = `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${packageName}/purchases/subscriptions/${productId}/tokens/${token}`;
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      const data = (await res.json()) as any;
-
-      if (data.paymentState === 1 || data.paymentState === 2) {
-        await this.entitlements.grant({
-          userId,
-          plan,
-          months,
-          provider: 'GOOGLE_PLAY',
-          externalId: token,
-        });
-        return { success: true, plan, months, via: 'own' };
-      } else {
-        throw new BadRequestException(
-          'Biên lai Google Play không hợp lệ hoặc chưa thanh toán.',
+      const res = await fetch(
+        `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${packageName}/purchases/subscriptionsv2/tokens/${encodeURIComponent(token)}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      data = await res.json();
+      if (!res.ok) {
+        this.logger.error(
+          `Google từ chối tra biên lai (${res.status}): ${JSON.stringify(data?.error ?? data)}`,
         );
+        throw new BadRequestException({
+          code: 'RECEIPT_INVALID',
+          message: 'errors.premium.receiptInvalid',
+        });
       }
     } catch (err: any) {
       if (err instanceof BadRequestException) throw err;
-      this.logger.error(`Google Play verify error: ${err.message}`);
-      throw new BadRequestException('errors.premium.verifyFailed');
+      // Không gọi được Google KHÁC với biên lai giả. Trả 503 để client biết
+      // đường thử lại; trả 400 thì app coi như hỏng hẳn và vứt luôn biên lai
+      // hợp lệ mà người dùng đã trả tiền.
+      this.logger.error(`Không tra được biên lai Play: ${err?.message}`);
+      throw new ServiceUnavailableException({
+        code: 'VERIFY_UNREACHABLE',
+        message: 'errors.premium.verifyUnreachable',
+      });
     }
+
+    // Trạng thái phải là đang hoạt động hoặc đang trong thời gian gia hạn treo.
+    // Gói đã huỷ nhưng còn hạn thì Google vẫn trả ACTIVE, nên không cần liệt kê riêng.
+    const state = data?.subscriptionState;
+    if (
+      state !== 'SUBSCRIPTION_STATE_ACTIVE' &&
+      state !== 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD'
+    ) {
+      this.logger.warn(`Biên lai Play chưa dùng được: state=${state}`);
+      throw new BadRequestException({
+        code: 'RECEIPT_NOT_ACTIVE',
+        message: 'errors.premium.receiptNotActive',
+      });
+    }
+
+    // Mã sản phẩm THẬT, do Google trả về.
+    const line = Array.isArray(data?.lineItems) ? data.lineItems[0] : null;
+    const realProductId: string | undefined = line?.productId;
+    const product = playProductOf(realProductId);
+    if (!product) {
+      // Sản phẩm có thật trên Play nhưng server chưa khai — thiếu sót cấu hình
+      // của mình, không phải lỗi người mua. Ghi rõ để sửa nhanh.
+      this.logger.error(
+        `Biên lai Play hợp lệ nhưng sản phẩm "${realProductId}" không có trong PLAY_PRODUCTS`,
+      );
+      throw new ServiceUnavailableException({
+        code: 'PRODUCT_NOT_MAPPED',
+        message: 'errors.premium.productNotMapped',
+      });
+    }
+    if (productId && productId !== realProductId) {
+      // Không chặn — Google mới là bên nói đúng, và mình đã dùng số của Google.
+      // Nhưng lệch thì đáng ghi lại: hoặc client có lỗi, hoặc ai đó đang dò.
+      this.logger.warn(
+        `Client khai productId="${productId}" nhưng Google nói "${realProductId}" (user=${userId})`,
+      );
+    }
+
+    // Ràng biên lai vào đúng tài khoản đã bấm mua.
+    //
+    // App truyền `applicationUserName` khi mở luồng mua, Google lưu lại thành
+    // `obfuscatedExternalAccountId`. Thiếu bước này thì một biên lai mua bằng
+    // tài khoản Google bất kỳ đều đổi được thành Premium cho bất kỳ tài khoản
+    // TripMate nào — chỉ cần gửi token sang.
+    const boundTo =
+      data?.externalAccountIdentifiers?.obfuscatedExternalAccountId;
+    if (boundTo && boundTo !== userId) {
+      this.logger.warn(
+        `Biên lai Play gắn với tài khoản ${boundTo}, không phải ${userId}`,
+      );
+      throw new BadRequestException({
+        code: 'RECEIPT_ACCOUNT_MISMATCH',
+        message: 'errors.premium.receiptAccountMismatch',
+      });
+    }
+
+    const amount = priceOf(product.plan, product.months);
+    const playOrderId = `play.${token.slice(-16).replace(/[^a-zA-Z0-9]/g, '')}.${Date.now()}`;
+
+    const runPlayGrant = async (tx: Prisma.TransactionClient) => {
+      // Ghi nhận PaymentOrder để lịch sử hoá đơn hiển thị giao dịch Google Play
+      await tx.paymentOrder.create({
+        data: {
+          orderId: playOrderId,
+          userId,
+          plan: product.plan,
+          months: product.months,
+          amount,
+          baseAmount: amount,
+          discountAmount: 0,
+          provider: 'GOOGLE_PLAY',
+          status: 'SUCCESS',
+          externalId: token,
+          paidAt: new Date(),
+        },
+      });
+
+      await this.entitlements.grant({
+        userId,
+        plan: product.plan,
+        months: product.months,
+        provider: 'GOOGLE_PLAY',
+        externalId: token,
+        tx,
+      });
+
+      await this.trials.markConverted(userId, tx);
+
+      await this.trials.log(
+        userId,
+        'SUBSCRIPTION_GRANTED',
+        {
+          actor: 'google_play',
+          toStatus: 'ACTIVE',
+          plan: product.plan,
+          meta: { externalId: token, months: product.months },
+        },
+        tx,
+      );
+
+      if ((tx as any).notification?.create) {
+        await (tx as any).notification.create({
+          data: {
+            userId,
+            type: 'PAYMENT_RECEIVED',
+            title: 'Nâng cấp thành công qua Google Play',
+            body: `Gói ${product.plan === 'SQUAD' ? 'Squad Pass' : 'TripMate+'} (${product.months} tháng) của bạn đã được kích hoạt!`,
+            data: { provider: 'GOOGLE_PLAY', plan: product.plan, months: product.months },
+          },
+        });
+      }
+    };
+
+    try {
+      if (typeof this.prisma.$transaction === 'function') {
+        await this.prisma.$transaction(runPlayGrant);
+      } else {
+        await runPlayGrant(this.prisma);
+      }
+    } catch (err: any) {
+      if (err?.code === 'P2002' || err?.message?.includes('Unique constraint')) {
+        return { success: true, plan: product.plan, alreadyProcessed: true };
+      }
+      throw err;
+    }
+
+    // Xác nhận đã giao hàng. **Bắt buộc**: biên lai không được acknowledge
+    // trong 3 ngày sẽ bị Google tự động hoàn tiền và huỷ gói — khách mất
+    // Premium mà mình không hề biết, vì phía mình đã cấp xong từ lâu.
+    //
+    // Đặt SAU `grant()` và nuốt lỗi: acknowledge hỏng thì tệ nhất là bị hoàn
+    // tiền, còn để nó ném ra thì khách đã trả tiền mà không nhận được gói.
+    if (data?.acknowledgementState === 'ACKNOWLEDGEMENT_STATE_PENDING') {
+      try {
+        const ack = await fetch(
+          `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${packageName}/purchases/subscriptions/${encodeURIComponent(realProductId as string)}/tokens/${encodeURIComponent(token)}:acknowledge`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({}),
+          },
+        );
+        if (!ack.ok) {
+          this.logger.error(
+            `Acknowledge biên lai Play thất bại (${ack.status}) cho user=${userId} — Google sẽ hoàn tiền sau 3 ngày nếu không xử lý`,
+          );
+        }
+      } catch (e) {
+        this.logger.error(`Acknowledge biên lai Play lỗi: ${String(e)}`);
+      }
+    }
+
+    this.logger.log(
+      `Google Play: cấp ${product.plan} ${product.months} tháng cho user=${userId} (product=${realProductId})`,
+    );
+    return { success: true, plan: product.plan, months: product.months };
   }
 
   /// Lịch sử thanh toán của chính người dùng.
@@ -819,25 +1103,45 @@ export class PremiumService {
     return { userId, history };
   }
 
+  /// Trạng thái một đơn của **chính người đang hỏi**.
+  ///
+  /// Màn QR gọi hàm này vài giây một lần trong lúc chờ tiền về.
+  ///
+  /// Bản trước gọi thẳng sang `getPublicOrderStatus(orderCode)` và **vứt bỏ
+  /// `userId`** — endpoint có đăng nhập nhưng không dùng danh tính để làm gì,
+  /// nên ai cũng tra được đơn của người khác. Nay lọc theo `userId`, và đơn của
+  /// người khác trả về `NOT_FOUND` y như đơn không tồn tại: phân biệt hai
+  /// trường hợp đó là tự xác nhận mã đơn nào có thật.
   async getOrderStatus(userId: string, orderCode: string) {
-    return this.getPublicOrderStatus(orderCode);
-  }
-
-  async getPublicOrderStatus(orderCode: string) {
-    const tx = await this.prisma.paymentTransaction.findFirst({
-      where: {
-        transactionId: orderCode,
-      },
+    const order = await this.prisma.paymentOrder.findFirst({
+      where: { orderId: orderCode, userId },
     });
-    if (!tx) {
-      return { status: 'NOT_FOUND', isPaid: false };
-    }
+    if (!order) return { status: 'NOT_FOUND', isPaid: false };
     return {
       orderCode,
-      status: tx.status,
-      isPaid: tx.status === 'SUCCESS',
-      amount: Number(tx.amount),
+      status: order.status,
+      isPaid: order.status === 'SUCCESS',
+      plan: order.plan,
+      months: order.months,
+      amount: Number(order.amount),
+      paidAt: order.paidAt,
     };
+  }
+
+  /// Trạng thái đơn **không cần đăng nhập** — dùng cho trang web người dùng bị
+  /// ví đẩy về sau khi trả tiền, lúc đó chưa chắc còn phiên đăng nhập.
+  ///
+  /// Trả về đúng một bit: đã trả tiền hay chưa. Không kèm số tiền, không kèm
+  /// gói, không kèm mã người dùng. Endpoint này không có guard và lại
+  /// `@SkipThrottle`, nên bất cứ thứ gì trả ra đây đều là thứ dò được hàng loạt
+  /// bằng cách thử mã đơn. Bản trước trả cả số tiền.
+  async getPublicOrderStatus(orderCode: string) {
+    const order = await this.prisma.paymentOrder.findUnique({
+      where: { orderId: orderCode },
+      select: { status: true },
+    });
+    if (!order) return { status: 'NOT_FOUND', isPaid: false };
+    return { orderCode, status: order.status, isPaid: order.status === 'SUCCESS' };
   }
 
   /// Nhập mã giới thiệu của bạn bè.
@@ -916,6 +1220,74 @@ export class PremiumService {
       themesOwned: themes,
       /// `spend()` ghi số âm vào sổ cái, nên đảo dấu để ra số đã tiêu.
       xpSpent: Math.abs(Number(spent._sum.delta ?? 0)),
+    };
+  }
+
+  /// Mã đơn ngắn cho SePay, dạng `TM` + 6 ký tự.
+  ///
+  /// Bảng chữ cái bỏ `0 O 1 I` — người dùng phải **đọc mã này và gõ tay** vào ô
+  /// nội dung chuyển khoản khi quét QR bằng app ngân hàng không tự điền được.
+  /// Nhầm số 0 với chữ O là tiền vào tài khoản mà không đơn nào khớp.
+  ///
+  /// Dùng `randomInt` của `crypto` chứ không phải `Math.random()`: mã đơn quyết
+  /// định gói nào được cấp cho ai, nên nó là giá trị nhạy cảm. Với `Math.random()`
+  /// người ta đoán được mã đơn của người khác từ mã của chính mình và chiếm
+  /// khoản chuyển tiền đang chờ.
+  private async newSepayOrderCode(): Promise<string> {
+    const ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+    // Va chạm là chuyện thật: 32^6 ≈ 1 tỉ mã, nhưng chỉ cần trùng với MỘT đơn
+    // còn treo là `orderId @unique` ném P2002 giữa lúc người dùng đang mua.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      let code = 'TM';
+      for (let i = 0; i < 6; i++) {
+        code += ALPHABET[randomInt(ALPHABET.length)];
+      }
+      const taken = await this.prisma.paymentOrder.findUnique({
+        where: { orderId: code },
+        select: { id: true },
+      });
+      if (!taken) return code;
+    }
+    throw new ServiceUnavailableException({
+      code: 'ORDER_CODE_EXHAUSTED',
+      message: 'errors.premium.orderCodeExhausted',
+    });
+  }
+
+  /// Mã QR VietQR trỏ vào tài khoản nhận tiền, nội dung là mã đơn.
+  ///
+  /// Không có giá trị mặc định cho số tài khoản. Bản trước mặc định về số tài
+  /// khoản cá nhân của một thành viên trong nhóm, nghĩa là quên đặt biến môi
+  /// trường lúc lên thật thì tiền của khách chảy vào đó và không ai biết cho
+  /// tới lúc đối soát. Thiếu cấu hình phải là **không bán được**, không phải là
+  /// bán vào nhầm túi.
+  private sepayQr(orderCode: string, amount: number) {
+    const accountNumber = process.env.SEPAY_ACCOUNT_NUMBER;
+    const bankCode = process.env.SEPAY_BANK_CODE;
+    const accountName = process.env.SEPAY_ACCOUNT_NAME;
+    if (!accountNumber || !bankCode || !accountName) {
+      this.logger.error(
+        'Thiếu SEPAY_ACCOUNT_NUMBER/SEPAY_BANK_CODE/SEPAY_ACCOUNT_NAME — không dựng được QR',
+      );
+      throw new ServiceUnavailableException({
+        code: 'GATEWAY_NOT_CONFIGURED',
+        message: 'errors.premium.gatewayNotConfigured',
+      });
+    }
+    const acc = encodeURIComponent(accountNumber);
+    const bank = encodeURIComponent(bankCode);
+    const des = encodeURIComponent(orderCode);
+    return {
+      payUrl: `https://qr.sepay.vn/gateway?acc=${acc}&bank=${bank}&amount=${amount}&des=${des}`,
+      qrUrl: `https://qr.sepay.vn/img?acc=${acc}&bank=${bank}&amount=${amount}&des=${des}&template=compact`,
+      vietqrUrl: `https://vietqr.app/img?bank=${bank}&acc=${acc}&amount=${amount}&des=${des}&template=compact&showinfo=true&holder=${encodeURIComponent(accountName)}`,
+      bankInfo: {
+        bankCode,
+        accountNumber,
+        accountName,
+        amount,
+        transferContent: orderCode,
+      },
     };
   }
 
@@ -1045,116 +1417,82 @@ export class PremiumService {
     return { return_code: 1, return_message: 'Success' };
   }
 
-  /// Webhook SePay (Chuyển khoản VietQR tự động).
+  /// Webhook SePay — báo biến động số dư tài khoản ngân hàng.
   ///
-  /// SePay gửi thông báo biến động số dư tài khoản ngân hàng tức thì.
-  /// Hệ thống trích xuất mã đơn TM... từ nội dung chuyển khoản, kiểm tra số tiền
-  /// và kích hoạt gói cước ngay lập tức.
+  /// SePay không phải cổng thanh toán: nó chỉ đọc thông báo của ngân hàng rồi
+  /// gọi sang đây. Nghĩa là **không có chữ ký nào để kiểm** — chỉ có một token
+  /// dùng chung ở header. Token đó vì thế là toàn bộ hàng rào: lộ nó ra là bất
+  /// kỳ ai cũng tự cấp Premium cho mình bằng một request rỗng.
+  ///
+  /// Bản trước để sẵn giá trị mặc định `'MY_SEPAY_SECRET_0406'` trong mã nguồn.
+  /// Một bí mật nằm trong repo thì không còn là bí mật, và nó lại còn là giá
+  /// trị **mặc định** — quên đặt biến môi trường là chạy thẳng với cái token ai
+  /// cũng đọc được. Nay thiếu cấu hình thì từ chối nhận webhook.
   async handleSepayWebhook(payload: any, authHeader?: string) {
-    const expectedToken = process.env.SEPAY_WEBHOOK_TOKEN || 'MY_SEPAY_SECRET_0406';
-    if (expectedToken) {
-      let providedToken = '';
-      if (authHeader) {
-        const parts = authHeader.trim().split(' ');
-        providedToken =
-          parts.length > 1 ? parts.slice(1).join(' ').trim() : parts[0].trim();
-      }
-      if (!providedToken || !this.safeEqual(expectedToken, providedToken)) {
-        this.logger.warn(`SePay IPN sai token xác thực`);
-        throw new BadRequestException('errors.premium.badSignature');
-      }
+    const expectedToken = process.env.SEPAY_WEBHOOK_TOKEN;
+    if (!expectedToken) {
+      this.logger.error('Thiếu SEPAY_WEBHOOK_TOKEN — từ chối webhook SePay');
+      throw new ServiceUnavailableException({
+        code: 'GATEWAY_NOT_CONFIGURED',
+        message: 'errors.premium.gatewayNotConfigured',
+      });
     }
 
+    // Chấp nhận cả `Authorization: Apikey <token>` lẫn token trần ở `X-Api-Key`.
+    const parts = (authHeader ?? '').trim().split(' ');
+    const providedToken =
+      parts.length > 1 ? parts.slice(1).join(' ').trim() : parts[0].trim();
+    if (!providedToken || !this.safeEqual(expectedToken, providedToken)) {
+      this.logger.warn('Webhook SePay sai token xác thực');
+      throw new BadRequestException('errors.premium.badSignature');
+    }
+
+    // Tiền đi RA khỏi tài khoản thì không liên quan gì tới đơn hàng.
     if (payload?.transferType === 'out') {
       return { success: true, message: 'Ignored outbound transaction' };
     }
 
+    // Mã đơn nằm trong nội dung chuyển khoản. Ngân hàng thường viết hoa toàn bộ
+    // và chèn thêm chữ, nên phải dò chứ không so bằng.
     let orderCode = String(payload?.code || '').trim().toUpperCase();
-    if (!orderCode || !orderCode.startsWith('TM')) {
-      const content = String(payload?.content || '');
-      const match =
-        content.match(/TM[2-9A-HJ-NP-Z0-9]{4,10}/i) ||
-        content.match(/TM[A-Z0-9]{4,10}/i);
-      if (match) {
-        orderCode = match[0].toUpperCase();
-      }
+    if (!orderCode.startsWith('TM')) {
+      const content = String(payload?.content || '').toUpperCase();
+      const match = content.match(/TM[2-9A-HJ-NP-Z]{6}/);
+      orderCode = match ? match[0] : '';
     }
-
     if (!orderCode) {
+      // Người khác chuyển tiền vào tài khoản vì lý do không liên quan là chuyện
+      // bình thường. Trả 200 để SePay thôi gửi lại.
       this.logger.log(
-        `SePay transaction ${payload?.id} ignored: no orderCode in content "${payload?.content}"`,
+        `Bỏ qua giao dịch SePay ${payload?.id}: không có mã đơn trong "${payload?.content}"`,
       );
       return { success: true, message: 'No TripMate order code found' };
-    }
-
-    const tx = await this.prisma.paymentTransaction.findFirst({
-      where: {
-        transactionId: orderCode,
-        provider: 'BANK_TRANSFER',
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    if (!tx) {
-      this.logger.warn(`SePay order ${orderCode} not found`);
-      return { success: false, message: `Order ${orderCode} not found` };
-    }
-
-    if (tx.status === 'SUCCESS') {
-      this.logger.log(`SePay order ${orderCode} already fulfilled`);
-      return { success: true, message: 'Order already fulfilled' };
     }
 
     const transferAmount = Number(
       payload?.transferAmount ?? payload?.amount ?? 0,
     );
-    const expectedAmount = Number(tx.amount);
-    if (transferAmount < expectedAmount) {
-      this.logger.warn(
-        `SePay underpayment for ${orderCode}: got ${transferAmount}, expected ${expectedAmount}`,
-      );
-      await this.prisma.paymentTransaction.update({
-        where: { id: tx.id },
-        data: {
-          status: 'FAILED',
-          note: `${tx.note ?? ''} [UNDERPAID: got ${transferAmount}, expected ${expectedAmount}]`,
-        },
-      });
-      return { success: false, message: 'Underpaid amount' };
-    }
-
-    let plan: 'PLUS' | 'SQUAD' = 'PLUS';
-    let months = 1;
-    try {
-      const meta = JSON.parse(tx.note || '{}');
-      if (meta.plan === 'SQUAD' || meta.plan === 'PLUS') plan = meta.plan;
-      if (meta.months && meta.months > 0) months = meta.months;
-    } catch {
-      // fallback
-    }
-
-    const externalId = String(payload?.id ?? payload?.referenceCode ?? orderCode);
-
-    await this.prisma.paymentTransaction.update({
-      where: { id: tx.id },
-      data: {
-        status: 'SUCCESS',
-        note: `${tx.note ?? ''} [SEPAY_ID:${externalId}]`,
-      },
-    });
-
-    await this.entitlements.grant({
-      userId: tx.senderId,
-      plan,
-      months,
-      provider: 'BANK_TRANSFER',
-      externalId,
-    });
-
-    this.logger.log(
-      `SePay: Cấp ${plan} ${months} tháng cho user=${tx.senderId} (order=${orderCode}, sepayId=${externalId})`,
+    const externalId = String(
+      payload?.id ?? payload?.referenceCode ?? orderCode,
     );
-    return { success: true, message: 'Subscription granted successfully' };
+
+    // Đi chung `fulfill()` với Momo/ZaloPay: giành quyền xử lý bằng một lệnh
+    // cập nhật nguyên tử, đối chiếu số tiền, chống cấp trùng, ghi lượt dùng mã
+    // giảm giá, đóng lần dùng thử. Trước đây nhánh SePay tự làm lại tất cả
+    // những việc đó bằng tay và làm thiếu: đọc `plan`/`months` từ chuỗi JSON
+    // nhét trong trường ghi chú, không có bước giành quyền nên hai webhook về
+    // cùng lúc là cộng hạn hai lần, và ghi vào bảng `PaymentTransaction` mà
+    // lịch sử hoá đơn không hề đọc tới — người trả tiền bằng QR không bao giờ
+    // thấy hoá đơn của mình.
+    //
+    // `allowOverpay`: chuyển khoản là gõ tay, trả thừa vài nghìn thì vẫn giao.
+    await this.fulfill(orderCode, 'SEPAY', externalId, transferAmount, true);
+
+    const order = await this.prisma.paymentOrder.findUnique({
+      where: { orderId: orderCode },
+      select: { status: true },
+    });
+    return { success: order?.status === 'SUCCESS', orderCode };
   }
 
   /// So sánh chữ ký theo thời gian hằng định.
@@ -1175,13 +1513,16 @@ export class PremiumService {
   /// vẫn không nhận được gì.
   private async fulfill(
     orderId: string | undefined,
-    provider: 'MOMO' | 'ZALOPAY',
+    provider: 'MOMO' | 'ZALOPAY' | 'SEPAY',
     externalId: string,
     paidAmount?: number,
+    /// Cho phép trả DƯ. Chuyển khoản ngân hàng thì người ta gõ tay số tiền, trả
+    /// thừa vài nghìn là chuyện thường và không có lý do gì để từ chối giao
+    /// hàng. Ví điện tử thì số tiền do cổng chốt nên phải khớp tuyệt đối.
+    allowOverpay = false,
   ) {
-    const parsed = this.parseOrderId(orderId);
-    if (!parsed) {
-      this.logger.warn(`Bỏ qua IPN: mã đơn không hợp lệ "${orderId}"`);
+    if (!orderId) {
+      this.logger.warn('Bỏ qua IPN: không có mã đơn');
       return;
     }
 
@@ -1190,7 +1531,7 @@ export class PremiumService {
     // được một giao dịch 1.000đ mang mã `tmsub.<id>.SQUAD.12` là nhận trọn một
     // năm Squad.
     const order = await this.prisma.paymentOrder.findUnique({
-      where: { orderId: orderId as string },
+      where: { orderId: orderId },
     });
     if (!order) {
       this.logger.warn(`Bỏ qua IPN: không có đơn "${orderId}"`);
@@ -1215,14 +1556,33 @@ export class PremiumService {
 
     // Số tiền phải khớp đơn. Đây là chốt chặn duy nhất giữa "trả 1.000đ" và
     // "nhận gói năm" — mã đơn không tự bảo vệ được điều đó.
-    if (paidAmount !== undefined && Number(order.amount) !== paidAmount) {
+    const expectedAmount = Number(order.amount);
+    const amountWrong =
+      paidAmount !== undefined &&
+      (allowOverpay ? paidAmount < expectedAmount : paidAmount !== expectedAmount);
+    if (amountWrong) {
       this.logger.error(
         `IPN sai số tiền: đơn ${orderId} cần ${order.amount.toString()}, cổng báo ${paidAmount}`,
       );
-      await this.prisma.paymentOrder.update({
-        where: { orderId: order.orderId },
-        data: { status: 'FAILED', failureReason: 'AMOUNT_MISMATCH', externalId },
-      });
+      // Chuyển khoản trả thiếu thì **giữ đơn ở PENDING**, không đánh hỏng.
+      //
+      // Ví điện tử chốt số tiền trong link thanh toán, nên lệch số tiền ở đó là
+      // dấu hiệu có người sửa giữa đường — đóng đơn lại là đúng. Còn chuyển
+      // khoản ngân hàng thì người dùng **gõ tay số tiền**, và gõ thiếu một số 0
+      // là chuyện xảy ra thật. Đánh đơn thành FAILED lúc đó nghĩa là tiền đã ra
+      // khỏi tài khoản của họ mà mã đơn thì chết hẳn, chuyển bù thêm cũng không
+      // cứu được. Để PENDING thì lần chuyển đúng số tiếp theo vẫn hoàn tất được
+      // chính đơn đó.
+      if (!allowOverpay) {
+        await this.prisma.paymentOrder.update({
+          where: { orderId: order.orderId },
+          data: {
+            status: 'FAILED',
+            failureReason: 'AMOUNT_MISMATCH',
+            externalId,
+          },
+        });
+      }
       return;
     }
 
@@ -1233,7 +1593,36 @@ export class PremiumService {
       return;
     }
 
-    // `@@unique([provider, externalId])` ở tầng database chặn cấp trùng khi
+    // 1. Kiểm tra đối soát idempotency lịch sử qua PaymentOrder:
+    // Tránh mất dấu idempotency khi người dùng gia hạn nhiều lần (khiến externalId trong Subscription bị ghi đè).
+    const existingOrder =
+      typeof this.prisma.paymentOrder?.findFirst === 'function'
+        ? await this.prisma.paymentOrder.findFirst({
+            where: { provider, externalId, status: 'SUCCESS' },
+          })
+        : null;
+    if (existingOrder) {
+      if (existingOrder.userId === order.userId) {
+        this.logger.log(`IPN trùng, giao dịch đã được xử lý thành công trước đó: ${provider}/${externalId}`);
+        if (order.status === 'PENDING') {
+          await this.prisma.paymentOrder.update({
+            where: { orderId: order.orderId },
+            data: { status: 'SUCCESS', externalId, paidAt: new Date() },
+          });
+        }
+        return;
+      }
+      this.logger.error(
+        `Mã giao dịch ${provider}/${externalId} đã thuộc về người khác — từ chối đơn ${order.orderId}`,
+      );
+      await this.prisma.paymentOrder.update({
+        where: { orderId: order.orderId },
+        data: { status: 'FAILED', failureReason: 'EXTERNAL_ID_CONFLICT' },
+      });
+      return;
+    }
+
+    // 2. `@@unique([provider, externalId])` ở tầng database chặn cấp trùng khi
     // cổng gọi lại webhook bằng một mã đơn khác cho cùng giao dịch.
     const existing = await this.prisma.subscription.findFirst({
       where: { provider, externalId },
@@ -1263,78 +1652,109 @@ export class PremiumService {
       return;
     }
 
-    // Giành quyền xử lý bằng atomic update (chuyển PENDING -> SUCCESS trước khi
-    // thực hiện side-effects). Vì enum PaymentStatus không có 'PROCESSING', việc
-    // cập nhật có điều kiện `where: { status: 'PENDING' }` tận dụng cơ chế khóa
-    // hàng (row-level lock) của database để đảm bảo chỉ đúng MỘT tiến trình
-    // giành được quyền xử lý, loại bỏ hoàn toàn race condition check-then-act.
-    const claimed = await this.prisma.paymentOrder.updateMany({
-      where: { orderId: order.orderId, status: 'PENDING' },
-      data: { status: 'SUCCESS', externalId, paidAt: new Date() },
-    });
-    if (claimed.count === 0) {
-      this.logger.log(
-        `IPN trùng hoặc đơn đang được xử lý bởi tiến trình khác: ${orderId}`,
-      );
-      return;
-    }
+    const runFulfillTx = async (tx: Prisma.TransactionClient) => {
+      // Giành quyền xử lý bằng atomic update (chuyển PENDING -> SUCCESS trước khi
+      // thực hiện side-effects). Vì enum PaymentStatus không có 'PROCESSING', việc
+      // cập nhật có điều kiện `where: { status: 'PENDING' }` tận dụng cơ chế khóa
+      // hàng (row-level lock) của database để đảm bảo chỉ đúng MỘT tiến trình
+      // giành được quyền xử lý, loại bỏ hoàn toàn race condition check-then-act.
+      const claimed = await tx.paymentOrder.updateMany({
+        where: { orderId: order.orderId, status: 'PENDING' },
+        data: { status: 'SUCCESS', externalId, paidAt: new Date() },
+      });
+      if (claimed.count === 0) {
+        this.logger.log(
+          `IPN trùng hoặc đơn đang được xử lý bởi tiến trình khác: ${orderId}`,
+        );
+        return;
+      }
 
-    try {
       await this.entitlements.grant({
         userId: order.userId,
-        plan: order.plan,
+        plan: order.plan as PaidPlan,
         months: order.months,
         provider,
         externalId,
+        tx,
       });
 
       // Ghi lượt dùng mã giảm giá — chỉ ở đây, khi tiền đã thật sự vào.
-      //
-      // Ghi lúc tạo đơn thì mọi đơn bị bỏ giữa chừng đều đốt một suất, và một
-      // người bấm mua rồi thoát vài lần là tự khoá mình khỏi mã.
       if (order.promoCode && Number(order.discountAmount) > 0) {
         await this.promos.redeem({
           code: order.promoCode,
           userId: order.userId,
           orderId: order.orderId,
           discountApplied: Number(order.discountAmount),
+          tx,
         });
       }
 
-      // Mua trong lúc còn dùng thử là tín hiệu quan trọng nhất để biết trial có
-      // tác dụng hay không — đóng lần dùng thử lại với kết cục CONVERTED thay vì
-      // để nó hết hạn như thể người dùng đã bỏ đi.
-      await this.trials.markConverted(order.userId);
+      // Mua trong lúc còn dùng thử: đóng lần dùng thử lại với kết cục CONVERTED
+      await this.trials.markConverted(order.userId, tx);
 
-      await this.trials.log(order.userId, 'SUBSCRIPTION_GRANTED', {
-        actor: `webhook:${provider}`,
-        toStatus: 'ACTIVE',
-        plan: order.plan,
-        meta: { orderId: order.orderId, externalId, months: order.months },
-      });
+      await this.trials.log(
+        order.userId,
+        'SUBSCRIPTION_GRANTED',
+        {
+          actor: `webhook:${provider}`,
+          toStatus: 'ACTIVE',
+          plan: order.plan,
+          meta: { orderId: order.orderId, externalId, months: order.months },
+        },
+        tx,
+      );
+
+      // In-App Notification (Outbox Pattern)
+      if ((tx as any).notification?.create) {
+        await (tx as any).notification.create({
+          data: {
+            userId: order.userId,
+            type: 'PAYMENT_RECEIVED',
+            title: 'Nâng cấp gói thành công',
+            body: `Gói ${order.plan === 'SQUAD' ? 'Squad Pass' : 'TripMate+'} (${order.months} tháng) của bạn đã được kích hoạt!`,
+            data: { orderId: order.orderId, provider, plan: order.plan, months: order.months },
+          },
+        });
+      }
 
       this.logger.log(
         `Đã cấp ${order.plan} ${order.months} tháng cho ${order.userId} qua ${provider}`,
       );
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      const stack = error instanceof Error ? error.stack : undefined;
-      // Nếu cấp quyền hoặc xử lý hậu kỳ thất bại, hoàn trả trạng thái đơn về PENDING
-      // để lượt IPN retry tiếp theo từ cổng thanh toán có cơ hội xử lý lại,
-      // tránh việc đơn bị chốt 'SUCCESS' oan trong khi người dùng chưa nhận được gói.
-      this.logger.error(
-        `Lỗi khi cấp quyền cho đơn ${order.orderId}, hoàn lại PENDING để webhook retry: ${message}`,
-        stack,
-      );
-      await this.prisma.paymentOrder.update({
-        where: { orderId: order.orderId },
-        data: {
-          status: 'PENDING',
-          paidAt: null,
-          failureReason: `GRANT_FAILED: ${message}`,
-        },
-      });
-      throw error;
+    };
+
+    if (typeof this.prisma.$transaction === 'function') {
+      try {
+        await this.prisma.$transaction(runFulfillTx);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        const stack = error instanceof Error ? error.stack : undefined;
+        this.logger.error(
+          `Transaction thất bại khi cấp quyền cho đơn ${order.orderId}, database tự động rollback: ${message}`,
+          stack,
+        );
+        throw error;
+      }
+    } else {
+      // Fallback cho môi trường unit test khi prisma mock không cung cấp $transaction
+      try {
+        await runFulfillTx(this.prisma);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        const stack = error instanceof Error ? error.stack : undefined;
+        this.logger.error(
+          `Lỗi khi cấp quyền cho đơn ${order.orderId}, hoàn lại PENDING để webhook retry: ${message}`,
+          stack,
+        );
+        await this.prisma.paymentOrder.update({
+          where: { orderId: order.orderId },
+          data: {
+            status: 'PENDING',
+            paidAt: null,
+            failureReason: `GRANT_FAILED: ${message}`,
+          },
+        });
+        throw error;
+      }
     }
   }
 

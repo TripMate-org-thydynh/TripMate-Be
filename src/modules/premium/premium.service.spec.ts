@@ -79,6 +79,7 @@ describe('PremiumService — đơn hàng và webhook', () => {
       paymentOrder: {
         create: jest.fn(async ({ data }: any) => data),
         findUnique: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(null),
         update: jest.fn(async (a: any) => a),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findMany: jest.fn().mockResolvedValue([]),

@@ -1,5 +1,5 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
-import { Plan, PaymentProvider } from '@prisma/client';
+import { Plan, PaymentProvider, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 
 /** Những thứ bản Free bị giới hạn. */
@@ -207,11 +207,13 @@ export class EntitlementService {
     months: number;
     provider: PaymentProvider | 'MOMO' | 'ZALOPAY' | 'BANK_TRANSFER' | 'CASH' | 'VNPAY';
     externalId?: string;
+    tx?: Prisma.TransactionClient;
   }) {
-    const { userId, plan, months, provider, externalId } = params;
+    const { userId, plan, months, provider, externalId, tx } = params;
+    const db = tx ?? this.prisma;
     const now = new Date();
 
-    const existing = await this.prisma.subscription.findFirst({
+    const existing = await db.subscription.findFirst({
       where: { userId, status: 'ACTIVE', currentPeriodEnd: { gt: now } },
       orderBy: { currentPeriodEnd: 'desc' },
     });
@@ -222,7 +224,7 @@ export class EntitlementService {
     const end = this.addMonths(base, months);
 
     if (existing) {
-      return this.prisma.subscription.update({
+      return db.subscription.update({
         where: { id: existing.id },
         data: {
           plan,
@@ -241,7 +243,7 @@ export class EntitlementService {
       });
     }
 
-    return this.prisma.subscription.create({
+    return db.subscription.create({
       data: {
         userId,
         plan,

@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   Ip,
   Param,
   Post,
@@ -72,8 +73,12 @@ export class PremiumController {
 
   @Get('plans')
   @ApiOperation({ summary: 'Bảng giá và các cổng thanh toán đang mở' })
-  plans() {
-    return this.premiumService.plans();
+  plans(@Headers('x-client-channel') channel?: string) {
+    // Kênh phân phối quyết định BÀY cổng nào, không quyết định cho phép cổng
+    // nào: bản tải từ CH Play chỉ thấy Play Billing (chính sách Payments của
+    // Google), bản APK/web thấy VietQR và ví. Client khai sai header cũng
+    // không mở thêm đường nào — mọi cổng vẫn tự xác thực lúc thanh toán.
+    return this.premiumService.plans(channel);
   }
 
   @Post('orders')
