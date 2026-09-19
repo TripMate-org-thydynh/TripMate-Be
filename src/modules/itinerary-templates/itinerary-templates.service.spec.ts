@@ -58,7 +58,19 @@ describe('ItineraryTemplatesService', () => {
         findUnique: jest.fn(),
         update: jest.fn().mockReturnValue('increment'),
       },
-      $transaction: jest.fn().mockResolvedValue([]),
+      itineraryTemplateUse: {
+        upsert: jest.fn().mockReturnValue('use'),
+        findUnique: jest.fn(),
+      },
+      itineraryTemplateRating: {
+        upsert: jest.fn(),
+        aggregate: jest
+          .fn()
+          .mockResolvedValue({ _avg: { stars: 4.25 }, _count: 4 }),
+      },
+      $transaction: jest.fn((arg) =>
+        typeof arg === 'function' ? arg(prisma) : Promise.resolve([]),
+      ),
     };
     trips = { create: jest.fn().mockResolvedValue({ id: 'newTrip' }) };
     cache = { del: jest.fn() };
@@ -159,13 +171,17 @@ describe('ItineraryTemplatesService', () => {
       await svc.duplicate('t1', 'u2', {});
       expect(prisma.$transaction.mock.calls[0][0]).toEqual([
         'createMany',
+        'use',
         'increment',
       ]);
     });
 
     it('tác giả tự nhân bản → KHÔNG tăng lượt dùng', async () => {
       await svc.duplicate('t1', 'author', {});
-      expect(prisma.$transaction.mock.calls[0][0]).toEqual(['createMany']);
+      expect(prisma.$transaction.mock.calls[0][0]).toEqual([
+        'createMany',
+        'use',
+      ]);
     });
 
     it('chép vào chuyến mà mình không phải thành viên → 403', async () => {
@@ -192,6 +208,33 @@ describe('ItineraryTemplatesService', () => {
       expect(prisma.trip.delete).toHaveBeenCalledWith({
         where: { id: 'newTrip' },
       });
+    });
+  });
+
+  describe('rate', () => {
+    beforeEach(() =>
+      prisma.itineraryTemplate.findUnique.mockResolvedValue(template()),
+    );
+
+    it('tác giả không tự chấm mẫu của mình', async () => {
+      await expect(
+        svc.rate('t1', 'author', { stars: 5 }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('chưa dùng mẫu thì không được chấm', async () => {
+      prisma.itineraryTemplateUse.findUnique.mockResolvedValue(null);
+      await expect(svc.rate('t1', 'u2', { stars: 5 })).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(prisma.itineraryTemplateRating.upsert).not.toHaveBeenCalled();
+    });
+
+    it('đã dùng → lưu và tính lại trung bình từ bảng đánh giá', async () => {
+      prisma.itineraryTemplateUse.findUnique.mockResolvedValue({});
+      prisma.itineraryTemplate.update.mockImplementation((a: any) => a.data);
+      const res: any = await svc.rate('t1', 'u2', { stars: 4 });
+      expect(res).toEqual({ ratingAvg: 4.3, ratingCount: 4 });
     });
   });
 });

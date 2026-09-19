@@ -10,6 +10,7 @@ import { EntitlementService } from '../premium/entitlement.service';
 import { ConfigService } from '@nestjs/config';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as exifr from 'exifr';
+import { GeocodingService } from '../itineraries/geocoding.service';
 
 /** Lấy message an toàn từ giá trị `catch` (kiểu `unknown`). */
 function toMessage(e: unknown): string {
@@ -132,6 +133,18 @@ export interface SavedPrompt {
   prompt: string;
 }
 
+export interface PhotoCandidate {
+  placeName: string;
+  region: string | null;
+  precision: 'exact' | 'area' | 'city';
+  confidence: number;
+  reason: string | null;
+  latitude: number;
+  longitude: number;
+  /** 'map' = toạ độ tra từ bản đồ; 'ai_estimate' = số AI tự nêu, kém tin cậy. */
+  coordSource: 'map' | 'ai_estimate';
+}
+
 export interface CustomizedItinerary {
   summary: string;
   estimatedTotal: number | null;
@@ -157,6 +170,7 @@ export class AiService {
     private prisma: PrismaService,
     private config: ConfigService,
     private entitlements: EntitlementService,
+    private geocoding: GeocodingService,
   ) {
     const apiKey =
       this.config.get<string>('GEMINI_API_KEY') || process.env.GEMINI_API_KEY;
@@ -225,8 +239,26 @@ export class AiService {
    * 1) Đọc GPS trong EXIF (chính xác, free). 2) Không có → Gemini vision đoán
    * địa danh. 3) Reverse-geocode toạ độ ra tên đọc được (Nominatim, free).
    */
-  async photoLocation(userId: string, imageBase64: string, mimeType: string) {
+  async photoLocation(
+    userId: string,
+    imageBase64: string,
+    mimeType: string,
+    tripId?: string,
+  ) {
     await this.assertAiQuota(userId);
+    // Điểm đến của chuyến đang mở — chỉ là gợi ý cho AI; chỉ lấy khi user là thành viên.
+    const hint = tripId
+      ? ((
+          await this.prisma.trip.findFirst({
+            where: {
+              id: tripId,
+              deletedAt: null,
+              members: { some: { userId } },
+            },
+            select: { destination: true },
+          })
+        )?.destination ?? null)
+      : null;
 
     const clean = imageBase64.includes(',')
       ? imageBase64.split(',').pop()!
@@ -268,42 +300,88 @@ export class AiService {
         model: 'gemini-2.5-flash',
         generationConfig: { responseMimeType: 'application/json' },
       });
-      const prompt =
-        'Bạn là chuyên gia nhận diện địa danh. Nhìn ảnh và đoán nơi chụp. ' +
-        'Chỉ trả JSON: {"found": boolean, "placeName": string (tên địa điểm/thành phố/quốc gia, tiếng Việt nếu được), ' +
-        '"latitude": number, "longitude": number, "confidence": number (0..1)}. ' +
-        'Nếu không đủ manh mối, found=false.';
+      const prompt = `Bạn là chuyên gia xác định nơi chụp ảnh (geo-guessing) cho app du lịch Việt Nam.
+${hint ? `Gợi ý ngữ cảnh: người dùng đang có chuyến đi tới "${hint}" — ưu tiên khu vực này NẾU manh mối khớp, không ép nếu không khớp.` : ''}
+Bước 1 — liệt kê manh mối NHÌN THẤY ĐƯỢC trong ảnh: chữ trên biển hiệu/biển báo (chép nguyên văn), số điện thoại (đầu số, mã vùng), biển số xe, ngôn ngữ, kiến trúc, cây cối/khí hậu, địa hình, địa danh nổi tiếng.
+Bước 2 — đưa tối đa 3 phương án nơi chụp, xếp theo khả năng. Mỗi phương án có "searchQuery" là chuỗi để tra bản đồ (tên địa điểm + huyện/tỉnh + quốc gia), cụ thể nhất có thể nhưng KHÔNG bịa tên quán/đường không có manh mối.
+"precision": "exact" (đúng một địa điểm cụ thể), "area" (một khu/xã/đoạn đường), "city" (chỉ đoán được tỉnh/thành).
+Không đủ manh mối → found=false.
+Chỉ trả JSON: {"found": boolean, "clues": string[], "candidates": [{"placeName": string, "searchQuery": string, "region": string, "precision": "exact"|"area"|"city", "confidence": number, "latitude": number, "longitude": number, "reason": string}]}`;
       const result = await model.generateContent([
         prompt,
         { inlineData: { mimeType: mimeType || 'image/jpeg', data: clean } },
       ]);
       const parsed = JSON.parse(result.response.text()) as {
-        found: boolean;
-        placeName?: string;
-        latitude?: number;
-        longitude?: number;
-        confidence?: number;
+        found?: boolean;
+        clues?: unknown;
+        candidates?: unknown;
       };
       await this.recordAiUsage(
         userId,
         'PHOTO_LOCATION',
         undefined,
-        prompt,
+        '[photo-location v2]',
         parsed,
       );
-      if (parsed.found && typeof parsed.latitude === 'number') {
+
+      const clues = (Array.isArray(parsed.clues) ? parsed.clues : [])
+        .map((c) => String(c).trim())
+        .filter(Boolean)
+        .slice(0, 8);
+      const raw = (
+        Array.isArray(parsed.candidates) ? parsed.candidates : []
+      ).slice(0, 3) as Record<string, unknown>[];
+
+      // Toạ độ Gemini tự nêu thường lệch vài km tới vài chục km. Tra tên phương
+      // án trên bản đồ để lấy toạ độ thật; chỉ khi tra không ra mới dùng số
+      // của AI và đánh dấu là ước lượng.
+      const candidates: PhotoCandidate[] = [];
+      for (const c of raw) {
+        const name = String(c.placeName ?? '').trim();
+        if (!name) continue;
+        const query = String(c.searchQuery ?? name).trim();
+        const hit = await this.geocoding.locate(query, null);
+        const lat = Number(c.latitude);
+        const lng = Number(c.longitude);
+        const aiOk =
+          Number.isFinite(lat) &&
+          Number.isFinite(lng) &&
+          !(lat === 0 && lng === 0);
+        if (!hit && !aiOk) continue;
+        const prec = String(c.precision ?? 'area');
+        candidates.push({
+          placeName: name,
+          region: String(c.region ?? '').trim() || null,
+          precision: (['exact', 'area', 'city'].includes(prec)
+            ? prec
+            : 'area') as PhotoCandidate['precision'],
+          confidence: Math.min(Math.max(Number(c.confidence) || 0.3, 0), 1),
+          reason: String(c.reason ?? '').trim() || null,
+          latitude: hit ? hit.latitude : lat,
+          longitude: hit ? hit.longitude : lng,
+          coordSource: hit ? 'map' : 'ai_estimate',
+        });
+      }
+
+      if (parsed.found !== false && candidates.length > 0) {
+        const best = candidates[0];
         return {
           source: 'ai',
           found: true,
-          latitude: parsed.latitude,
-          longitude: parsed.longitude,
-          placeName: parsed.placeName ?? 'Địa điểm (AI đoán)',
-          confidence: parsed.confidence ?? 0.5,
+          latitude: best.latitude,
+          longitude: best.longitude,
+          placeName: best.placeName,
+          confidence: best.confidence,
+          precision: best.precision,
+          coordSource: best.coordSource,
+          clues,
+          candidates,
         };
       }
       return {
         source: 'ai',
         found: false,
+        clues,
         message: 'Không nhận ra địa điểm từ ảnh.',
       };
     } catch (e) {

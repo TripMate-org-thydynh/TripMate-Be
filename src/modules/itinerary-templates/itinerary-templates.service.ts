@@ -13,6 +13,7 @@ import { TripsService } from '../trips/trips.service';
 import { AiService } from '../ai/ai.service';
 import { ItinerariesService } from '../itineraries/itineraries.service';
 import {
+  RateTemplateDto,
   CustomizeTemplateDto,
   DuplicateTemplateDto,
   ListTemplatesQuery,
@@ -119,6 +120,7 @@ export class ItineraryTemplatesService {
         dayCount: Math.max(...days),
         stopCount: trip.itineraries.length,
         isPublic: dto.isPublic ?? true,
+        tags: dto.tags ?? [],
         items: {
           create: trip.itineraries.map((i) => ({
             day: i.day,
@@ -144,6 +146,7 @@ export class ItineraryTemplatesService {
       isPublic: true,
       deletedAt: null,
       ...(q.days ? { dayCount: q.days } : {}),
+      ...(q.tag ? { tags: { has: q.tag } } : {}),
       ...(term
         ? {
             OR: [
@@ -160,7 +163,9 @@ export class ItineraryTemplatesService {
         orderBy:
           q.sort === 'new'
             ? [{ createdAt: 'desc' }]
-            : [{ useCount: 'desc' }, { createdAt: 'desc' }],
+            : q.sort === 'top'
+              ? [{ ratingAvg: 'desc' }, { ratingCount: 'desc' }]
+              : [{ useCount: 'desc' }, { createdAt: 'desc' }],
         take: q.limit ?? 20,
         skip: q.offset ?? 0,
         include: { author: AUTHOR_SELECT },
@@ -201,6 +206,7 @@ export class ItineraryTemplatesService {
         title: dto.title?.trim(),
         description: dto.description?.trim(),
         isPublic: dto.isPublic,
+        tags: dto.tags,
       },
       include: { author: AUTHOR_SELECT },
     });
@@ -292,6 +298,12 @@ export class ItineraryTemplatesService {
             category: i.category,
           })),
         }),
+        // Ghi nhận người này đã dùng mẫu — điều kiện để được chấm sao.
+        this.prisma.itineraryTemplateUse.upsert({
+          where: { templateId_userId: { templateId: t.id, userId } },
+          create: { templateId: t.id, userId },
+          update: {},
+        }),
         // Tác giả tự nhân bản mẫu của mình không tính là lượt dùng.
         ...(t.authorId !== userId
           ? [
@@ -322,6 +334,109 @@ export class ItineraryTemplatesService {
       void this.itineraries.geocodeMissing(tripId!).catch(() => undefined);
     }
     return { tripId, createdTrip, copiedStops: source.length };
+  }
+
+  /**
+   * Mục "Mẫu nổi bật": mẫu admin ghim trước, rồi mẫu có điểm cao.
+   *
+   * Điểm dùng trung bình có trọng số (Bayes, m=3, trung bình gốc 3.5): một mẫu
+   * chỉ có MỘT lượt 5 sao không vượt được mẫu có hai chục lượt 4.6 sao.
+   */
+  async featured(limit = 6) {
+    const pool = await this.prisma.itineraryTemplate.findMany({
+      where: {
+        isPublic: true,
+        deletedAt: null,
+        OR: [
+          { isFeatured: true },
+          { ratingCount: { gte: 1 } },
+          { useCount: { gte: 1 } },
+        ],
+      },
+      include: { author: AUTHOR_SELECT },
+      take: 100,
+    });
+    const m = 3;
+    const prior = 3.5;
+    const score = (t: (typeof pool)[number]) =>
+      (t.isFeatured ? 100 : 0) +
+      (t.ratingCount * t.ratingAvg + m * prior) / (t.ratingCount + m) +
+      Math.log10(1 + t.useCount) * 0.3;
+    return pool.sort((a, b) => score(b) - score(a)).slice(0, limit);
+  }
+
+  /**
+   * Chấm sao một mẫu. Chỉ người ĐÃ DÙNG mẫu (nhân bản ít nhất một lần) mới
+   * chấm được, và tác giả không tự chấm mẫu của mình — không thì điểm vô nghĩa.
+   * Chấm lại thì sửa lượt cũ, không cộng thêm.
+   */
+  async rate(id: string, userId: string, dto: RateTemplateDto) {
+    const t = await this.findOne(id, userId);
+    if (t.authorId === userId) {
+      throw new ForbiddenException('errors.templates.cannotRateOwn');
+    }
+    const used = await this.prisma.itineraryTemplateUse.findUnique({
+      where: { templateId_userId: { templateId: id, userId } },
+    });
+    if (!used) throw new ForbiddenException('errors.templates.mustUseFirst');
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.itineraryTemplateRating.upsert({
+        where: { templateId_userId: { templateId: id, userId } },
+        create: {
+          templateId: id,
+          userId,
+          stars: dto.stars,
+          comment: dto.comment?.trim() || null,
+        },
+        update: { stars: dto.stars, comment: dto.comment?.trim() || null },
+      });
+      // Tính lại từ bảng đánh giá thay vì cộng dồn — không bao giờ lệch.
+      const agg = await tx.itineraryTemplateRating.aggregate({
+        where: { templateId: id },
+        _avg: { stars: true },
+        _count: true,
+      });
+      return tx.itineraryTemplate.update({
+        where: { id },
+        data: {
+          ratingAvg: Math.round((agg._avg.stars ?? 0) * 10) / 10,
+          ratingCount: agg._count,
+        },
+        select: { id: true, ratingAvg: true, ratingCount: true },
+      });
+    });
+  }
+
+  /** Trạng thái của người đang xem với mẫu: đã dùng chưa, đã chấm mấy sao. */
+  async myState(id: string, userId: string) {
+    const [use, rating] = await Promise.all([
+      this.prisma.itineraryTemplateUse.findUnique({
+        where: { templateId_userId: { templateId: id, userId } },
+      }),
+      this.prisma.itineraryTemplateRating.findUnique({
+        where: { templateId_userId: { templateId: id, userId } },
+      }),
+    ]);
+    return { used: !!use, myStars: rating?.stars ?? null };
+  }
+
+  async recentRatings(id: string) {
+    return this.prisma.itineraryTemplateRating.findMany({
+      where: { templateId: id, comment: { not: null } },
+      orderBy: { updatedAt: 'desc' },
+      take: 10,
+      include: { user: { select: { id: true, name: true, avatarUrl: true } } },
+    });
+  }
+
+  /** Admin ghim/bỏ ghim mẫu nổi bật. */
+  async setFeatured(id: string, isFeatured: boolean) {
+    return this.prisma.itineraryTemplate.update({
+      where: { id },
+      data: { isFeatured },
+      select: { id: true, isFeatured: true },
+    });
   }
 
   private async ensureAuthor(id: string, userId: string) {

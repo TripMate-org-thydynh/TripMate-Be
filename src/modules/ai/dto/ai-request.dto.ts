@@ -22,6 +22,6 @@ export class CreateAIRequestDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsUUID()
+  @IsUUID('loose')
   tripId?: string;
 }

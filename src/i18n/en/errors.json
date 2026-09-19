@@ -59,6 +59,8 @@
   "templates": {
     "notFound": "Itinerary template not found",
     "notAuthor": "Only the author can change this template",
-    "emptyItinerary": "This trip has no stops to publish as a template"
+    "emptyItinerary": "This trip has no stops to publish as a template",
+    "cannotRateOwn": "You can't rate your own template",
+    "mustUseFirst": "Use this template for a trip before rating it"
   }
 }

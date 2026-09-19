@@ -22,6 +22,6 @@ export class CreatePackingItemDto {
   quantity?: number;
 
   @IsOptional()
-  @IsUUID()
+  @IsUUID('loose')
   assignedTo?: string;
 }

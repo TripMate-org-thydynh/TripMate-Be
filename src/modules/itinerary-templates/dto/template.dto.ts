@@ -1,9 +1,23 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
+
+/** Bộ thẻ cố định: 6 vibe + 3 mức ngân sách/người. Thẻ tự do thì không lọc được. */
+export const TEMPLATE_TAGS = [
+  'CHILL',
+  'ADVENTURE',
+  'FOODIE',
+  'PARTY',
+  'CULTURE',
+  'NATURE',
+  'BUDGET_LOW',
+  'BUDGET_MID',
+  'BUDGET_HIGH',
+] as const;
 import {
   IsBoolean,
   IsDateString,
   IsArray,
+  ArrayUnique,
   IsIn,
   ArrayMaxSize,
   ArrayMinSize,
@@ -38,6 +52,14 @@ export class PublishTemplateDto {
   @IsBoolean()
   isPublic?: boolean;
 
+  @ApiPropertyOptional({ enum: TEMPLATE_TAGS, isArray: true })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(5)
+  @ArrayUnique()
+  @IsIn(TEMPLATE_TAGS, { each: true })
+  tags?: string[];
+
   /// Ghi chú riêng của nhóm (số phòng, SĐT...) có thể nhạy cảm — mặc định KHÔNG chép.
   @ApiPropertyOptional({ default: false })
   @IsOptional()
@@ -63,6 +85,14 @@ export class UpdateTemplateDto {
   @IsOptional()
   @IsBoolean()
   isPublic?: boolean;
+
+  @ApiPropertyOptional({ enum: TEMPLATE_TAGS, isArray: true })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(5)
+  @ArrayUnique()
+  @IsIn(TEMPLATE_TAGS, { each: true })
+  tags?: string[];
 }
 
 export class ListTemplatesQuery {
@@ -80,10 +110,15 @@ export class ListTemplatesQuery {
   @Max(60)
   days?: number;
 
-  @ApiPropertyOptional({ enum: ['popular', 'new'], default: 'popular' })
+  @ApiPropertyOptional({ enum: ['popular', 'new', 'top'], default: 'popular' })
   @IsOptional()
-  @IsIn(['popular', 'new'])
-  sort?: 'popular' | 'new';
+  @IsIn(['popular', 'new', 'top'])
+  sort?: 'popular' | 'new' | 'top';
+
+  @ApiPropertyOptional({ enum: TEMPLATE_TAGS })
+  @IsOptional()
+  @IsIn(TEMPLATE_TAGS)
+  tag?: string;
 
   @ApiPropertyOptional({ default: 20 })
   @IsOptional()
@@ -172,7 +207,7 @@ export class DuplicateTemplateDto {
   /// Chép vào chuyến đang có (phải là thành viên). Bỏ trống → tạo chuyến mới.
   @ApiPropertyOptional()
   @IsOptional()
-  @IsUUID()
+  @IsUUID('loose')
   tripId?: string;
 
   /// Tên chuyến mới. Mặc định lấy tiêu đề mẫu.
@@ -198,4 +233,23 @@ export class DuplicateTemplateDto {
   @ValidateNested({ each: true })
   @Type(() => CustomItemDto)
   items?: CustomItemDto[];
+}
+
+export class RateTemplateDto {
+  @ApiPropertyOptional({ minimum: 1, maximum: 5 })
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  stars: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  comment?: string;
+}
+
+export class FeatureTemplateDto {
+  @IsBoolean()
+  isFeatured: boolean;
 }

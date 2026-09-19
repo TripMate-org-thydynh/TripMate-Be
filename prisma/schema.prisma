@@ -9,36 +9,36 @@ datasource db {
 }
 
 model User {
-  id                 String               @id @default(uuid()) @db.Uuid
-  supabaseId         String               @unique @map("supabase_id") @db.Uuid
-  email              String               @unique
+  id                 String                    @id @default(uuid()) @db.Uuid
+  supabaseId         String                    @unique @map("supabase_id") @db.Uuid
+  email              String                    @unique
   name               String
-  username           String?              @unique
-  passwordHash       String?              @map("password_hash")
-  avatarUrl          String?              @map("avatar_url")
+  username           String?                   @unique
+  passwordHash       String?                   @map("password_hash")
+  avatarUrl          String?                   @map("avatar_url")
   bio                String?
-  vibeTags           String[]             @map("vibe_tags")
-  theme              String?              @default("dark")
-  role               UserRole             @default(USER)
-  isLocked           Boolean              @default(false) @map("is_locked")
-  travelScore        Int                  @default(0) @map("travel_score")
-  chaosScore         Int                  @default(0) @map("chaos_score")
+  vibeTags           String[]                  @map("vibe_tags")
+  theme              String?                   @default("dark")
+  role               UserRole                  @default(USER)
+  isLocked           Boolean                   @default(false) @map("is_locked")
+  travelScore        Int                       @default(0) @map("travel_score")
+  chaosScore         Int                       @default(0) @map("chaos_score")
   /// Số XP còn tiêu được. Giảm khi mua sticker/theme.
-  xpBalance          Int                  @default(0) @map("xp_balance")
+  xpBalance          Int                       @default(0) @map("xp_balance")
   /// Tổng XP đã kiếm trong đời. KHÔNG giảm khi tiêu — dùng để tính cấp,
   /// nên mua đồ không bao giờ làm tụt cấp.
-  xpEarned           Int                  @default(0) @map("xp_earned")
-  createdAt          DateTime             @default(now()) @map("created_at")
-  updatedAt          DateTime             @updatedAt @map("updated_at")
-  deletedAt          DateTime?            @map("deleted_at")
+  xpEarned           Int                       @default(0) @map("xp_earned")
+  createdAt          DateTime                  @default(now()) @map("created_at")
+  updatedAt          DateTime                  @updatedAt @map("updated_at")
+  deletedAt          DateTime?                 @map("deleted_at")
   activities         Activity[]
   subscriptions      Subscription[]
   paymentOrders      PaymentOrder[]
   trialClaims        TrialClaim[]
   subscriptionEvents SubscriptionEvent[]
   referralCode       ReferralCode?
-  referralsMade      Referral[]           @relation("Referrer")
-  referralReceived   Referral?            @relation("Referee")
+  referralsMade      Referral[]                @relation("Referrer")
+  referralReceived   Referral?                 @relation("Referee")
   promoRedemptions   PromoRedemption[]
   squadSeats         SquadSeat[]
   aiRequests         AIRequest[]
@@ -53,26 +53,28 @@ model User {
   moments            Moment[]
   notifications      Notification[]
   paymentCards       PaymentCard[]
-  paymentsReceived   PaymentTransaction[] @relation("PaymentReceiver")
-  paymentsSent       PaymentTransaction[] @relation("PaymentSender")
+  paymentsReceived   PaymentTransaction[]      @relation("PaymentReceiver")
+  paymentsSent       PaymentTransaction[]      @relation("PaymentSender")
   pollVotes          PollVote[]
   pollsCreated       Poll[]
   tripMembers        TripMember[]
-  tripsCreated       Trip[]               @relation("TripCreator")
+  tripsCreated       Trip[]                    @relation("TripCreator")
   presence           UserPresence?
   wallet             UserWallet?
   fundContributions  FundContribution[]
   wishlistItems      WishlistItem[]
-  packingAdded       PackingItem[]        @relation("PackingAddedBy")
-  packingAssigned    PackingItem[]        @relation("PackingAssignee")
+  packingAdded       PackingItem[]             @relation("PackingAddedBy")
+  packingAssigned    PackingItem[]             @relation("PackingAssignee")
   bucketItems        BucketItem[]
   reservations       Reservation[]
   xpLedger           XpLedger[]
   stickersOwned      UserSticker[]
   itineraryTemplates ItineraryTemplate[]
+  templateRatings    ItineraryTemplateRating[]
+  templateUses       ItineraryTemplateUse[]
   themesOwned        UserTheme[]
-  todosAdded         TodoItem[]           @relation("TodoAddedBy")
-  todosAssigned      TodoItem[]           @relation("TodoAssignee")
+  todosAdded         TodoItem[]                @relation("TodoAddedBy")
+  todosAssigned      TodoItem[]                @relation("TodoAssignee")
   invitesCreated     TripInvite[]
   notes              TripNote[]
   checkins           DayCheckin[]
@@ -1413,24 +1415,32 @@ model SloTarget {
 /// Là BẢN CHỤP tại lúc đăng: tác giả sửa chuyến gốc sau đó không làm đổi mẫu,
 /// và người đã nhân bản mẫu không bị ảnh hưởng khi tác giả sửa/xoá mẫu.
 model ItineraryTemplate {
-  id           String                  @id @default(uuid()) @db.Uuid
-  authorId     String                  @map("author_id") @db.Uuid
-  sourceTripId String?                 @map("source_trip_id") @db.Uuid
+  id           String                    @id @default(uuid()) @db.Uuid
+  authorId     String                    @map("author_id") @db.Uuid
+  sourceTripId String?                   @map("source_trip_id") @db.Uuid
   title        String
   description  String?
   destination  String?
-  coverImage   String?                 @map("cover_image")
+  coverImage   String?                   @map("cover_image")
   vibe         String?
-  dayCount     Int                     @map("day_count")
-  stopCount    Int                     @map("stop_count")
-  isPublic     Boolean                 @default(true) @map("is_public")
-  useCount     Int                     @default(0) @map("use_count")
-  createdAt    DateTime                @default(now()) @map("created_at")
-  updatedAt    DateTime                @updatedAt @map("updated_at")
-  deletedAt    DateTime?               @map("deleted_at")
-  author       User                    @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  sourceTrip   Trip?                   @relation("TemplateSource", fields: [sourceTripId], references: [id], onDelete: SetNull)
+  dayCount     Int                       @map("day_count")
+  stopCount    Int                       @map("stop_count")
+  isPublic     Boolean                   @default(true) @map("is_public")
+  useCount     Int                       @default(0) @map("use_count")
+  /// Thẻ từ bộ cố định (vibe + mức ngân sách) — xem TEMPLATE_TAGS ở BE.
+  tags         String[]                  @default([])
+  /// Admin ghim lên mục "Mẫu nổi bật".
+  isFeatured   Boolean                   @default(false) @map("is_featured")
+  ratingAvg    Float                     @default(0) @map("rating_avg")
+  ratingCount  Int                       @default(0) @map("rating_count")
+  createdAt    DateTime                  @default(now()) @map("created_at")
+  updatedAt    DateTime                  @updatedAt @map("updated_at")
+  deletedAt    DateTime?                 @map("deleted_at")
+  author       User                      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  sourceTrip   Trip?                     @relation("TemplateSource", fields: [sourceTripId], references: [id], onDelete: SetNull)
   items        ItineraryTemplateItem[]
+  ratings      ItineraryTemplateRating[]
+  uses         ItineraryTemplateUse[]
 
   @@index([isPublic, deletedAt, useCount])
   @@index([authorId])
@@ -1453,4 +1463,31 @@ model ItineraryTemplateItem {
 
   @@index([templateId, day])
   @@map("itinerary_template_items")
+}
+
+/// Ai đã dùng (nhân bản) mẫu nào — điều kiện để được chấm sao.
+model ItineraryTemplateUse {
+  templateId String            @map("template_id") @db.Uuid
+  userId     String            @map("user_id") @db.Uuid
+  createdAt  DateTime          @default(now()) @map("created_at")
+  template   ItineraryTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([templateId, userId])
+  @@map("itinerary_template_uses")
+}
+
+/// Đánh giá sao — mỗi người một lượt mỗi mẫu, sửa được.
+model ItineraryTemplateRating {
+  templateId String            @map("template_id") @db.Uuid
+  userId     String            @map("user_id") @db.Uuid
+  stars      Int
+  comment    String?
+  createdAt  DateTime          @default(now()) @map("created_at")
+  updatedAt  DateTime          @updatedAt @map("updated_at")
+  template   ItineraryTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([templateId, userId])
+  @@map("itinerary_template_ratings")
 }

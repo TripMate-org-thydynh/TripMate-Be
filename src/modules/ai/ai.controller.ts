@@ -31,12 +31,13 @@ export class AiController {
   })
   photoLocation(
     @CurrentUser() user: User,
-    @Body() dto: { imageBase64: string; mimeType?: string },
+    @Body() dto: { imageBase64: string; mimeType?: string; tripId?: string },
   ) {
     return this.aiService.photoLocation(
       user.id,
       dto.imageBase64,
       dto.mimeType ?? 'image/jpeg',
+      typeof dto.tripId === 'string' ? dto.tripId : undefined,
     );
   }
 
@@ -51,10 +52,7 @@ export class AiController {
   @Get('trips/:tripId/personality')
   @UseGuards(TripMemberGuard)
   @ApiOperation({ summary: 'Phân tích tính cách phượt thủ của cả nhóm' })
-  getPersonality(
-    @CurrentUser() user: User,
-    @Param('tripId') tripId: string,
-  ) {
+  getPersonality(@CurrentUser() user: User, @Param('tripId') tripId: string) {
     return this.aiService.getPersonalityRoast(user.id, tripId);
   }
 
@@ -68,10 +66,7 @@ export class AiController {
   @Get('trips/:tripId/timeline')
   @UseGuards(TripMemberGuard)
   @ApiOperation({ summary: 'Dòng thời gian gợi ý hành trình tự động bằng AI' })
-  getTimeline(
-    @CurrentUser() user: User,
-    @Param('tripId') tripId: string,
-  ) {
+  getTimeline(@CurrentUser() user: User, @Param('tripId') tripId: string) {
     return this.aiService.getRecommendationTimeline(user.id, tripId);
   }
 

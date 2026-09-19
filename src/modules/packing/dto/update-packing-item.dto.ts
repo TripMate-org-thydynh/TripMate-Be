@@ -27,7 +27,7 @@ export class UpdatePackingItemDto {
   isPacked?: boolean;
 
   @IsOptional()
-  @IsUUID()
+  @IsUUID('loose')
   assignedTo?: string | null;
 
   /** Client sends the last-known updatedAt for optimistic concurrency. Optional for backward compat. */

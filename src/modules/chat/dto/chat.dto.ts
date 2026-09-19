@@ -15,7 +15,7 @@ export class SendMessageDto {
   @IsEnum(MessageType)
   type?: MessageType;
 
-  @ApiPropertyOptional() @IsOptional() @IsUUID() replyToId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsUUID('loose') replyToId?: string;
 }
 
 export class ReactionDto {

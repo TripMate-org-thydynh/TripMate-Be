@@ -15,7 +15,10 @@ import type { User } from '@prisma/client';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
+import { AdminGuard } from '../../common/guards/admin.guard';
 import {
+  FeatureTemplateDto,
+  RateTemplateDto,
   CustomizeTemplateDto,
   DuplicateTemplateDto,
   ListTemplatesQuery,
@@ -37,6 +40,12 @@ export class ItineraryTemplatesController {
     return this.service.listPublic(q);
   }
 
+  @Get('featured')
+  @ApiOperation({ summary: 'Mẫu nổi bật (admin ghim + điểm cao)' })
+  featured() {
+    return this.service.featured();
+  }
+
   @Get('mine')
   @ApiOperation({ summary: 'Lịch trình mẫu tôi đã đăng' })
   mine(@CurrentUser() user: User) {
@@ -47,6 +56,40 @@ export class ItineraryTemplatesController {
   @ApiOperation({ summary: 'Chi tiết lịch trình mẫu kèm điểm dừng' })
   findOne(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: User) {
     return this.service.findOne(id, user.id);
+  }
+
+  @Get(':id/me')
+  @ApiOperation({ summary: 'Tôi đã dùng mẫu này chưa, đã chấm mấy sao' })
+  me(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: User) {
+    return this.service.myState(id, user.id);
+  }
+
+  @Get(':id/ratings')
+  @ApiOperation({ summary: 'Nhận xét gần đây của mẫu' })
+  ratings(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.recentRatings(id);
+  }
+
+  @Post(':id/rating')
+  @ApiOperation({
+    summary: 'Chấm sao mẫu (phải đã dùng mẫu, không phải tác giả)',
+  })
+  rate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+    @Body() dto: RateTemplateDto,
+  ) {
+    return this.service.rate(id, user.id, dto);
+  }
+
+  @Patch(':id/featured')
+  @UseGuards(AdminGuard)
+  @ApiOperation({ summary: 'Admin ghim/bỏ ghim mẫu nổi bật' })
+  setFeatured(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: FeatureTemplateDto,
+  ) {
+    return this.service.setFeatured(id, dto.isFeatured);
   }
 
   @Patch(':id')

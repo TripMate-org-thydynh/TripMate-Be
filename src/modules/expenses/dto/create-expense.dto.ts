@@ -15,7 +15,7 @@ import { Type } from 'class-transformer';
 
 export class SplitMemberDto {
   @ApiProperty()
-  @IsUUID()
+  @IsUUID('loose')
   userId: string;
 
   @ApiProperty({ example: 150000 })
@@ -44,7 +44,7 @@ export class CreateExpenseDto {
   splitType: SplitType;
 
   @ApiProperty({ description: 'User ID who paid' })
-  @IsUUID()
+  @IsUUID('loose')
   paidById: string;
 
   @ApiPropertyOptional({
