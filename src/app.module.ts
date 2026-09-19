@@ -20,6 +20,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { TripsModule } from './modules/trips/trips.module';
 import { ItinerariesModule } from './modules/itineraries/itineraries.module';
+import { ItineraryTemplatesModule } from './modules/itinerary-templates/itinerary-templates.module';
 import { ExpensesModule } from './modules/expenses/expenses.module';
 import { MomentsModule } from './modules/moments/moments.module';
 import { GamesModule } from './modules/games/games.module';
@@ -134,6 +135,7 @@ import { AppService } from './app.service';
     UsersModule,
     TripsModule,
     ItinerariesModule,
+    ItineraryTemplatesModule,
     ExpensesModule,
     MomentsModule,
     XpModule,
