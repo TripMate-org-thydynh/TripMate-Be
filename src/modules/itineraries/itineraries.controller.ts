@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -38,6 +39,18 @@ export class ItinerariesController {
   @ApiOperation({ summary: 'Lấy toàn bộ lịch trình theo ngày' })
   findAll(@Param('tripId') tripId: string) {
     return this.itinerariesService.findAll(tripId);
+  }
+
+  @Post('geocode')
+  @ApiOperation({
+    summary: 'Bù toạ độ cho các điểm dừng chưa có (để vẽ bản đồ lộ trình)',
+  })
+  geocode(@Param('tripId') tripId: string, @Query('day') day?: string) {
+    const d = day ? Number(day) : undefined;
+    return this.itinerariesService.geocodeMissing(
+      tripId,
+      Number.isInteger(d) && d! > 0 ? d : undefined,
+    );
   }
 
   @Get(':id')
