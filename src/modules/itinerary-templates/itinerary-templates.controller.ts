@@ -16,6 +16,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import {
+  CustomizeTemplateDto,
   DuplicateTemplateDto,
   ListTemplatesQuery,
   PublishTemplateDto,
@@ -62,6 +63,18 @@ export class ItineraryTemplatesController {
   @ApiOperation({ summary: 'Gỡ lịch trình mẫu (tác giả)' })
   remove(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: User) {
     return this.service.remove(id, user.id);
+  }
+
+  @Post(':id/customize')
+  @ApiOperation({
+    summary: 'AI chỉnh mẫu theo nhóm (xem trước, không ghi) — tính hạn mức AI',
+  })
+  customize(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+    @Body() dto: CustomizeTemplateDto,
+  ) {
+    return this.service.customize(id, user.id, dto);
   }
 
   @Post(':id/duplicate')

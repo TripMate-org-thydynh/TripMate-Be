@@ -10,7 +10,10 @@ import type { Cache } from 'cache-manager';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TripsService } from '../trips/trips.service';
+import { AiService } from '../ai/ai.service';
+import { ItinerariesService } from '../itineraries/itineraries.service';
 import {
+  CustomizeTemplateDto,
   DuplicateTemplateDto,
   ListTemplatesQuery,
   PublishTemplateDto,
@@ -27,7 +30,63 @@ export class ItineraryTemplatesService {
     private readonly prisma: PrismaService,
     private readonly trips: TripsService,
     @Inject(CACHE_MANAGER) private readonly cache: Cache,
+    private readonly ai: AiService,
+    private readonly itineraries: ItinerariesService,
   ) {}
+
+  /**
+   * AI chỉnh mẫu theo nhóm (số người, ngân sách, số ngày, sở thích).
+   *
+   * Chỉ là BẢN XEM TRƯỚC — không ghi gì. Tính vào hạn mức AI/tháng. Điểm nào
+   * trùng tên với mẫu thì mang theo toạ độ của mẫu.
+   */
+  async customize(id: string, userId: string, dto: CustomizeTemplateDto) {
+    const t = await this.findOne(id, userId);
+    const res = await this.ai.customizeItinerary(userId, {
+      title: t.title,
+      destination: t.destination,
+      dayCount: t.dayCount,
+      items: t.items.map((i) => ({
+        day: i.day,
+        startTime: i.startTime,
+        placeName: i.placeName,
+        placeAddress: i.placeAddress,
+        durationMinutes: i.durationMinutes,
+        category: i.category,
+      })),
+      request: dto.request,
+      groupSize: dto.groupSize,
+      budget: dto.budget,
+      days: dto.days,
+    });
+    const coords = this.coordsByName(t.items);
+    return {
+      ...res,
+      items: res.items.map((i) => ({
+        ...i,
+        ...(coords.get(i.placeName.toLowerCase()) ?? {
+          latitude: null,
+          longitude: null,
+        }),
+        fromTemplate: coords.has(i.placeName.toLowerCase()),
+      })),
+    };
+  }
+
+  private coordsByName(
+    items: { placeName: string; latitude: unknown; longitude: unknown }[],
+  ) {
+    const m = new Map<string, { latitude: number; longitude: number }>();
+    for (const i of items) {
+      if (i.latitude != null && i.longitude != null) {
+        m.set(i.placeName.toLowerCase(), {
+          latitude: Number(i.latitude),
+          longitude: Number(i.longitude),
+        });
+      }
+    }
+    return m;
+  }
 
   /**
    * Chụp lịch trình hiện tại của chuyến thành một mẫu.
@@ -169,6 +228,26 @@ export class ItineraryTemplatesService {
   async duplicate(id: string, userId: string, dto: DuplicateTemplateDto) {
     const t = await this.findOne(id, userId);
 
+    // Bản AI đã chỉnh (người dùng đã xem trước) thay cho điểm của mẫu. Điểm trùng
+    // tên với mẫu giữ toạ độ; điểm mới để backend tự tìm sau.
+    const coords = this.coordsByName(t.items);
+    const source = dto.items?.length
+      ? dto.items.map((i) => ({
+          day: i.day,
+          startTime: i.startTime,
+          placeName: i.placeName.trim(),
+          placeAddress: i.placeAddress?.trim() || null,
+          latitude:
+            coords.get(i.placeName.trim().toLowerCase())?.latitude ?? null,
+          longitude:
+            coords.get(i.placeName.trim().toLowerCase())?.longitude ?? null,
+          durationMinutes: i.durationMinutes,
+          notes: i.notes?.trim() || null,
+          category: i.category ?? 'OTHER',
+        }))
+      : t.items;
+    const dayCount = Math.max(...source.map((i) => i.day), 1);
+
     let tripId = dto.tripId;
     let createdTrip = false;
     if (tripId) {
@@ -183,7 +262,7 @@ export class ItineraryTemplatesService {
       const start = dto.startDate
         ? new Date(dto.startDate)
         : new Date(Date.now() + 7 * 86400000);
-      const end = new Date(start.getTime() + (t.dayCount - 1) * 86400000);
+      const end = new Date(start.getTime() + (dayCount - 1) * 86400000);
       const trip = await this.trips.create(userId, {
         name: dto.name?.trim() || t.title,
         description: t.description ?? undefined,
@@ -200,7 +279,7 @@ export class ItineraryTemplatesService {
     try {
       await this.prisma.$transaction([
         this.prisma.itineraryItem.createMany({
-          data: t.items.map((i) => ({
+          data: source.map((i) => ({
             tripId: tripId!,
             day: i.day,
             startTime: i.startTime,
@@ -238,7 +317,11 @@ export class ItineraryTemplatesService {
     } catch {
       // Cache chỉ là tối ưu; lỗi xoá cache không làm hỏng dữ liệu.
     }
-    return { tripId, createdTrip, copiedStops: t.items.length };
+    if (source.some((i) => i.latitude == null)) {
+      // Tìm toạ độ chạy nền (Nominatim 1 req/giây) — không bắt người dùng chờ.
+      void this.itineraries.geocodeMissing(tripId!).catch(() => undefined);
+    }
+    return { tripId, createdTrip, copiedStops: source.length };
   }
 
   private async ensureAuthor(id: string, userId: string) {

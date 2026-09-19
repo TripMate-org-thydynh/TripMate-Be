@@ -3,7 +3,12 @@ import { Type } from 'class-transformer';
 import {
   IsBoolean,
   IsDateString,
+  IsArray,
   IsIn,
+  ArrayMaxSize,
+  ArrayMinSize,
+  Matches,
+  ValidateNested,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -96,6 +101,73 @@ export class ListTemplatesQuery {
   offset?: number;
 }
 
+export class CustomizeTemplateDto {
+  @ApiPropertyOptional({ example: 'Nhóm 6 người, thích ăn uống, ít leo núi' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  request: string;
+
+  @ApiPropertyOptional({ example: 6 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  groupSize?: number;
+
+  @ApiPropertyOptional({
+    example: 3000000,
+    description: 'Tổng ngân sách cả nhóm (VND)',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  budget?: number;
+
+  @ApiPropertyOptional({ example: 3 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(14)
+  days?: number;
+}
+
+/** Một điểm dừng trong bản đã chỉnh (do AI đề xuất, người dùng đã xem). */
+export class CustomItemDto {
+  @IsInt()
+  @Min(1)
+  @Max(30)
+  day: number;
+
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  startTime: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  placeName: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  placeAddress?: string;
+
+  @IsInt()
+  @Min(5)
+  @Max(1440)
+  durationMinutes: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  notes?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  category?: string;
+}
+
 export class DuplicateTemplateDto {
   /// Chép vào chuyến đang có (phải là thành viên). Bỏ trống → tạo chuyến mới.
   @ApiPropertyOptional()
@@ -116,4 +188,14 @@ export class DuplicateTemplateDto {
   @IsOptional()
   @IsDateString()
   startDate?: string;
+
+  /// Bản đã chỉnh bằng AI (xem trước ở /customize). Có thì dùng thay cho điểm của mẫu.
+  @ApiPropertyOptional({ type: [CustomItemDto] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(80)
+  @ValidateNested({ each: true })
+  @Type(() => CustomItemDto)
+  items?: CustomItemDto[];
 }

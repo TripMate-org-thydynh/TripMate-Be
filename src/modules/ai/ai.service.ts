@@ -132,6 +132,22 @@ export interface SavedPrompt {
   prompt: string;
 }
 
+export interface CustomizedItinerary {
+  summary: string;
+  estimatedTotal: number | null;
+  dayCount: number;
+  items: {
+    day: number;
+    startTime: string;
+    placeName: string;
+    placeAddress: string | null;
+    durationMinutes: number;
+    category: string;
+    estimatedCost: number | null;
+    note: string | null;
+  }[];
+}
+
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
@@ -209,11 +225,7 @@ export class AiService {
    * 1) Đọc GPS trong EXIF (chính xác, free). 2) Không có → Gemini vision đoán
    * địa danh. 3) Reverse-geocode toạ độ ra tên đọc được (Nominatim, free).
    */
-  async photoLocation(
-    userId: string,
-    imageBase64: string,
-    mimeType: string,
-  ) {
+  async photoLocation(userId: string, imageBase64: string, mimeType: string) {
     await this.assertAiQuota(userId);
 
     const clean = imageBase64.includes(',')
@@ -1035,6 +1047,134 @@ export class AiService {
       progress: r.status === 'COMPLETED' ? 100 : r.status === 'FAILED' ? 0 : 50,
       createdAt: r.createdAt,
     }));
+  }
+
+  /**
+   * Chỉnh một lịch trình (thường là lịch trình mẫu) theo yêu cầu của nhóm:
+   * số người, ngân sách, số ngày, sở thích.
+   *
+   * Chỉ trả về BẢN XEM TRƯỚC — không ghi gì vào chuyến. Người dùng xem rồi mới
+   * quyết định tạo chuyến từ bản này.
+   *
+   * Đầu ra của AI được kiểm lại từng trường: giờ phải là HH:MM, ngày trong
+   * khoảng yêu cầu, thời lượng hợp lý. Dòng hỏng bị bỏ chứ không đoán.
+   */
+  async customizeItinerary(
+    userId: string,
+    input: {
+      title: string;
+      destination?: string | null;
+      dayCount: number;
+      items: {
+        day: number;
+        startTime: string;
+        placeName: string;
+        placeAddress?: string | null;
+        durationMinutes: number;
+        category?: string | null;
+      }[];
+      request: string;
+      groupSize?: number;
+      budget?: number;
+      days?: number;
+    },
+  ): Promise<CustomizedItinerary> {
+    await this.assertAiQuota(userId);
+    const days = Math.min(Math.max(input.days ?? input.dayCount, 1), 14);
+
+    const prompt = `
+Bạn là trợ lý lập lịch trình du lịch cho nhóm bạn trẻ Việt Nam.
+Dưới đây là một lịch trình mẫu "${input.title}"${input.destination ? ` ở ${input.destination}` : ''}, ${input.dayCount} ngày:
+${JSON.stringify(input.items)}
+
+Yêu cầu của nhóm:
+- Mô tả: ${JSON.stringify(input.request)}
+${input.groupSize ? `- Số người: ${input.groupSize}` : ''}
+${input.budget ? `- Tổng ngân sách cả nhóm: ${input.budget} VND` : ''}
+- Số ngày mong muốn: ${days}
+
+Hãy chỉnh lịch trình cho hợp yêu cầu. Quy tắc:
+1. Giữ các điểm của mẫu nếu còn hợp; thay/thêm/bớt khi yêu cầu cần. Chỉ dùng địa điểm CÓ THẬT ở điểm đến, ghi đúng tên và địa chỉ; không bịa quán.
+2. Đúng ${days} ngày, đánh số ngày từ 1 đến ${days}. Giờ dạng HH:MM, tăng dần trong ngày, có thời gian di chuyển hợp lý.
+3. Nếu có ngân sách: ước tính chi phí mỗi điểm cho CẢ NHÓM (VND, số nguyên) và giữ tổng trong ngân sách.
+4. "note" ngắn (tối đa 1 câu) giải thích vì sao chọn/đổi điểm đó.
+5. "summary": 1-2 câu tiếng Việt tóm tắt đã chỉnh gì so với mẫu.
+
+Trả về JSON đúng dạng:
+{"summary": string, "estimatedTotal": number | null,
+ "items": [{"day": number, "startTime": "HH:MM", "placeName": string, "placeAddress": string, "durationMinutes": number, "category": "FOOD"|"COFFEE"|"ACTIVITIES"|"ACCOMMODATION"|"OTHER", "estimatedCost": number | null, "note": string}]}
+`;
+
+    const raw = await this.callGeminiJSON<{
+      summary?: unknown;
+      estimatedTotal?: unknown;
+      items?: unknown;
+    }>(prompt);
+
+    const allowedCat = new Set([
+      'FOOD',
+      'COFFEE',
+      'ACTIVITIES',
+      'ACCOMMODATION',
+      'OTHER',
+    ]);
+    const items = (Array.isArray(raw.items) ? raw.items : [])
+      .map((r: any) => {
+        const day = Number(r?.day);
+        const time = String(r?.startTime ?? '').trim();
+        const name = String(r?.placeName ?? '').trim();
+        const dur = Number(r?.durationMinutes);
+        if (!Number.isInteger(day) || day < 1 || day > days) return null;
+        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return null;
+        if (!name || name.length > 200) return null;
+        const cost = Number(r?.estimatedCost);
+        const cat = String(r?.category ?? 'OTHER').toUpperCase();
+        return {
+          day,
+          startTime: time,
+          placeName: name,
+          placeAddress:
+            String(r?.placeAddress ?? '')
+              .trim()
+              .slice(0, 300) || null,
+          durationMinutes:
+            Number.isFinite(dur) && dur >= 15 && dur <= 720
+              ? Math.round(dur)
+              : 60,
+          category: allowedCat.has(cat) ? cat : 'OTHER',
+          estimatedCost:
+            Number.isFinite(cost) && cost >= 0 ? Math.round(cost) : null,
+          note:
+            String(r?.note ?? '')
+              .trim()
+              .slice(0, 300) || null,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null)
+      .sort((a, b) => a.day - b.day || a.startTime.localeCompare(b.startTime));
+
+    if (items.length === 0) this.aiUnavailable();
+
+    const total = Number(raw.estimatedTotal);
+    const result: CustomizedItinerary = {
+      summary: String(raw.summary ?? '')
+        .trim()
+        .slice(0, 500),
+      estimatedTotal:
+        Number.isFinite(total) && total > 0 ? Math.round(total) : null,
+      dayCount: days,
+      items,
+    };
+    await this.recordAiUsage(
+      userId,
+      'ITINERARY_PLAN',
+      undefined,
+      input.request,
+      {
+        itemCount: items.length,
+      },
+    );
+    return result;
   }
 
   async scanReceiptImage(receiptUrlOrBase64: string) {

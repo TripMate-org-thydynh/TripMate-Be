@@ -44,6 +44,8 @@ describe('ItineraryTemplatesService', () => {
   let prisma: any;
   let trips: any;
   let cache: any;
+  let ai: any;
+  let itins: any;
   let svc: ItineraryTemplatesService;
 
   beforeEach(() => {
@@ -60,7 +62,9 @@ describe('ItineraryTemplatesService', () => {
     };
     trips = { create: jest.fn().mockResolvedValue({ id: 'newTrip' }) };
     cache = { del: jest.fn() };
-    svc = new ItineraryTemplatesService(prisma, trips, cache);
+    ai = { customizeItinerary: jest.fn() };
+    itins = { geocodeMissing: jest.fn().mockResolvedValue({}) };
+    svc = new ItineraryTemplatesService(prisma, trips, cache, ai, itins);
   });
 
   describe('publish', () => {
@@ -76,7 +80,7 @@ describe('ItineraryTemplatesService', () => {
 
     it('chụp đủ điểm dừng, dayCount là ngày lớn nhất', async () => {
       prisma.trip.findUnique.mockResolvedValue(trip([item(1), item(4)]));
-      const res = await svc.publish('trip1', 'u1', {});
+      const res: any = await svc.publish('trip1', 'u1', {});
       expect(res.data.dayCount).toBe(4);
       expect(res.data.stopCount).toBe(2);
       expect(res.data.title).toBe('Chuyến gốc');
@@ -85,13 +89,13 @@ describe('ItineraryTemplatesService', () => {
 
     it('mặc định KHÔNG chép ghi chú riêng của nhóm', async () => {
       prisma.trip.findUnique.mockResolvedValue(trip([item(1)]));
-      const res = await svc.publish('trip1', 'u1', {});
+      const res: any = await svc.publish('trip1', 'u1', {});
       expect(res.data.items.create[0].notes).toBeNull();
     });
 
     it('chép ghi chú khi người đăng chủ động bật includeNotes', async () => {
       prisma.trip.findUnique.mockResolvedValue(trip([item(1)]));
-      const res = await svc.publish('trip1', 'u1', { includeNotes: true });
+      const res: any = await svc.publish('trip1', 'u1', { includeNotes: true });
       expect(res.data.items.create[0].notes).toBe('Phòng 204, SĐT chủ nhà');
     });
 
