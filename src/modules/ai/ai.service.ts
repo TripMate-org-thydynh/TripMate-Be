@@ -139,10 +139,11 @@ export interface PhotoCandidate {
   precision: 'exact' | 'area' | 'city';
   confidence: number;
   reason: string | null;
-  latitude: number;
-  longitude: number;
-  /** 'map' = toạ độ tra từ bản đồ; 'ai_estimate' = số AI tự nêu, kém tin cậy. */
-  coordSource: 'map' | 'ai_estimate';
+  /** null khi chưa tra được vị trí — vẫn hiện tên để người dùng tự kiểm. */
+  latitude: number | null;
+  longitude: number | null;
+  /** 'map' = tra từ bản đồ; 'ai_estimate' = số AI nêu; 'none' = chưa có toạ độ. */
+  coordSource: 'map' | 'ai_estimate' | 'none';
 }
 
 export interface CustomizedItinerary {
@@ -296,31 +297,73 @@ export class AiService {
       };
     }
     try {
-      const model = this.genAI.getGenerativeModel({
-        model: 'gemini-2.5-flash',
-        generationConfig: { responseMimeType: 'application/json' },
-      });
-      const prompt = `Bạn là chuyên gia xác định nơi chụp ảnh (geo-guessing) cho app du lịch Việt Nam.
-${hint ? `Gợi ý ngữ cảnh: người dùng đang có chuyến đi tới "${hint}" — ưu tiên khu vực này NẾU manh mối khớp, không ép nếu không khớp.` : ''}
-Bước 1 — liệt kê manh mối NHÌN THẤY ĐƯỢC trong ảnh: chữ trên biển hiệu/biển báo (chép nguyên văn), số điện thoại (đầu số, mã vùng), biển số xe, ngôn ngữ, kiến trúc, cây cối/khí hậu, địa hình, địa danh nổi tiếng.
-Bước 2 — đưa tối đa 3 phương án nơi chụp, xếp theo khả năng. Mỗi phương án có "searchQuery" là chuỗi để tra bản đồ (tên địa điểm + huyện/tỉnh + quốc gia), cụ thể nhất có thể nhưng KHÔNG bịa tên quán/đường không có manh mối.
-"precision": "exact" (đúng một địa điểm cụ thể), "area" (một khu/xã/đoạn đường), "city" (chỉ đoán được tỉnh/thành).
-Không đủ manh mối → found=false.
-Chỉ trả JSON: {"found": boolean, "clues": string[], "candidates": [{"placeName": string, "searchQuery": string, "region": string, "precision": "exact"|"area"|"city", "confidence": number, "latitude": number, "longitude": number, "reason": string}]}`;
-      const result = await model.generateContent([
-        prompt,
-        { inlineData: { mimeType: mimeType || 'image/jpeg', data: clean } },
-      ]);
-      const parsed = JSON.parse(result.response.text()) as {
+      // Bước 1 — phân tích CÓ TRA CỨU.
+      //
+      // Bắt buộc dùng Google Search: chữ trên biển hiệu, số điện thoại, biển báo
+      // là manh mối tra được, còn model tự đoán thì hay bịa. Có tools thì không
+      // ép JSON được, nên bước 2 mới chuyển sang JSON.
+      const hintLine = hint
+        ? `Người dùng đang có chuyến đi tới "${hint}". CHỈ dùng thông tin này để chọn giữa các phương án ĐÃ ngang nhau về manh mối. TUYỆT ĐỐI không vì nó mà kết luận ảnh chụp ở đó, và không vì nó mà tăng độ tin cậy.`
+        : 'Không có thông tin chuyến đi. Chỉ dựa vào ảnh.';
+      const analysisPrompt = `Bạn xác định nơi chụp một tấm ảnh (geo-guessing) cho app du lịch Việt Nam.
+${hintLine}
+
+Làm theo thứ tự:
+1. Chép NGUYÊN VĂN mọi chữ và số nhìn thấy: biển hiệu, biển báo, số điện thoại, biển số xe, bảng tên đường.
+2. Mô tả biển báo giao thông (mã biển nếu biết), kiến trúc, thảm thực vật, địa hình, đường dây điện, mặt đường.
+3. BẮT BUỘC dùng công cụ tìm kiếm Google cho các chuỗi đặc trưng ở bước 1 (ví dụ số điện thoại kèm "kiểm lâm"/"PCCC rừng", tên quán, tên đường) để xác định khu vực. Nêu rõ tìm được gì.
+4. Nếu thấy địa danh/công trình nhận ra được (núi, cầu, tháp, tượng, bờ biển đặc trưng), nêu tên.
+5. Kết luận tối đa 3 phương án, xếp theo khả năng. Nói rõ mức chắc chắn: đúng một địa điểm, một khu vực, hay chỉ biết tỉnh/quốc gia.
+
+Trung thực quan trọng hơn cụ thể: manh mối chung chung (rừng, đường nhựa, biển báo phổ thông) thì chỉ được kết luận ở mức tỉnh/quốc gia.
+
+Kết thúc câu trả lời bằng khối:
+KẾT QUẢ TRA CỨU:
+- <mỗi dòng một điều tra được, ghi rõ tra chuỗi nào ra gì; không tra được thì ghi "không tìm thấy">`;
+
+      let analysis = '';
+      try {
+        const searchModel = this.genAI.getGenerativeModel({
+          model: 'gemini-2.5-flash',
+          tools: [{ googleSearch: {} } as never],
+        });
+        const r = await searchModel.generateContent([
+          analysisPrompt,
+          { inlineData: { mimeType: mimeType || 'image/jpeg', data: clean } },
+        ]);
+        analysis = r.response.text();
+      } catch (e) {
+        // Không tra cứu được (hết hạn mức, mạng) → vẫn đoán bằng ảnh ở bước 2.
+        this.logger.warn(`Grounded search loi: ${toMessage(e)}`);
+      }
+
+      // Bước 2 — ép kết quả về JSON.
+      const prompt = `Dưới đây là phân tích một tấm ảnh để đoán nơi chụp:
+"""
+${analysis || '(không có phân tích — hãy tự nhìn ảnh)'}
+"""
+Chuyển thành JSON đúng dạng, KHÔNG thêm phỏng đoán mới:
+{"found": boolean, "clues": string[], "candidates": [{"placeName": string, "searchQuery": string, "region": string, "precision": "exact"|"area"|"city", "confidence": number, "latitude": number, "longitude": number, "reason": string}]}
+
+Quy tắc chấm "confidence":
+- Chỉ > 0.8 khi có manh mối GỌI TÊN nơi đó (chữ trên biển, địa danh nhận ra chắc chắn).
+- 0.4–0.7 khi suy từ manh mối gián tiếp (kiến trúc, biển báo, cây cối).
+- < 0.4 khi chỉ đoán theo cảm tính.
+- "precision": "city" khi chỉ biết tới tỉnh/thành, "area" khi biết một khu, "exact" khi đúng một địa điểm.
+- "searchQuery": chuỗi tra bản đồ (tên + huyện/tỉnh + quốc gia). Không bịa tên quán/đường không có trong manh mối.
+- "clues" chép lại các manh mối cụ thể (chữ trên biển, số điện thoại, biển báo...) VÀ mọi dòng trong khối "KẾT QUẢ TRA CỨU" của phân tích — đây là bằng chứng mạnh nhất, đặt lên đầu.
+- Nếu tra cứu chỉ ra một tỉnh/thành cụ thể, phương án đầu tiên PHẢI là nơi đó, kể cả khi khác với chuyến đi của người dùng.`;
+
+      const parsed = await this.callGeminiJSON<{
         found?: boolean;
         clues?: unknown;
         candidates?: unknown;
-      };
+      }>(prompt);
       await this.recordAiUsage(
         userId,
         'PHOTO_LOCATION',
         undefined,
-        '[photo-location v2]',
+        '[photo-location v3]',
         parsed,
       );
 
@@ -347,24 +390,27 @@ Chỉ trả JSON: {"found": boolean, "clues": string[], "candidates": [{"placeNa
           Number.isFinite(lat) &&
           Number.isFinite(lng) &&
           !(lat === 0 && lng === 0);
-        if (!hit && !aiOk) continue;
+
         const prec = String(c.precision ?? 'area');
+        // Trần độ tin cậy theo mức chính xác: "chỉ biết tỉnh" thì không thể chắc 90%.
+        const rawConf = Math.min(Math.max(Number(c.confidence) || 0.3, 0), 1);
+        const prec2 = ['exact', 'area', 'city'].includes(prec) ? prec : 'area';
+        const cap = prec2 === 'city' ? 0.5 : prec2 === 'area' ? 0.7 : 0.95;
         candidates.push({
           placeName: name,
           region: String(c.region ?? '').trim() || null,
-          precision: (['exact', 'area', 'city'].includes(prec)
-            ? prec
-            : 'area') as PhotoCandidate['precision'],
-          confidence: Math.min(Math.max(Number(c.confidence) || 0.3, 0), 1),
+          precision: prec2 as PhotoCandidate['precision'],
+          confidence: Math.min(rawConf, cap),
           reason: String(c.reason ?? '').trim() || null,
-          latitude: hit ? hit.latitude : lat,
-          longitude: hit ? hit.longitude : lng,
-          coordSource: hit ? 'map' : 'ai_estimate',
+          latitude: hit ? hit.latitude : aiOk ? lat : null,
+          longitude: hit ? hit.longitude : aiOk ? lng : null,
+          coordSource: hit ? 'map' : aiOk ? 'ai_estimate' : 'none',
         });
       }
 
-      if (parsed.found !== false && candidates.length > 0) {
-        const best = candidates[0];
+      // Phương án đầu tiên CÓ toạ độ mới ghim được lên bản đồ.
+      const best = candidates.find((c) => c.latitude != null);
+      if (parsed.found !== false && best != null) {
         return {
           source: 'ai',
           found: true,
@@ -382,7 +428,11 @@ Chỉ trả JSON: {"found": boolean, "clues": string[], "candidates": [{"placeNa
         source: 'ai',
         found: false,
         clues,
-        message: 'Không nhận ra địa điểm từ ảnh.',
+        candidates,
+        message:
+          candidates.length === 0
+            ? 'Không nhận ra địa điểm từ ảnh.'
+            : 'Chỉ đoán được tên nơi chụp, chưa xác định được toạ độ.',
       };
     } catch (e) {
       this.logger.error(`Gemini vision failed: ${toMessage(e)}`);
