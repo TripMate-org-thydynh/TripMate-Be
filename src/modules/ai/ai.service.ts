@@ -10,6 +10,7 @@ import { EntitlementService } from '../premium/entitlement.service';
 import { ConfigService } from '@nestjs/config';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as exifr from 'exifr';
+import { readGps } from './exif-gps';
 import { GeocodingService } from '../itineraries/geocoding.service';
 
 /** Lấy message an toàn từ giá trị `catch` (kiểu `unknown`). */
@@ -268,12 +269,9 @@ export class AiService {
 
     // ── 1. EXIF GPS ────────────────────────────────────────────────────────
     try {
-      const gps = await exifr.gps(buffer);
-      if (
-        gps &&
-        typeof gps.latitude === 'number' &&
-        typeof gps.longitude === 'number'
-      ) {
+      // Hỗ trợ cả HEIC (iPhone) và WebP/PNG — xem `exif-gps.ts`.
+      const gps = await readGps(buffer);
+      if (gps) {
         const name = await this.reverseGeocode(gps.latitude, gps.longitude);
         return {
           source: 'exif',
