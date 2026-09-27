@@ -1,15 +1,44 @@
+import { createHash } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 
+/** UUID tất định từ một khoá chữ — nạp lại cùng dữ liệu thì ghi đè, không nhân bản. */
+function stableUuid(key: string): string {
+  const h = createHash('sha256').update(key).digest('hex');
+  return [
+    h.slice(0, 8),
+    h.slice(8, 12),
+    `5${h.slice(13, 16)}`,
+    ((parseInt(h.slice(16, 18), 16) & 0x3f) | 0x80).toString(16) + h.slice(18, 20),
+    h.slice(20, 32),
+  ].join('-');
+}
+
 /** Một đoạn văn bản khớp với câu hỏi, kèm mẫu chứa nó. */
 export interface RagHit {
-  source: 'TEMPLATE' | 'TEMPLATE_STOP';
-  templateId: string;
+  source: 'TEMPLATE' | 'TEMPLATE_STOP' | 'TRAVEL_INSIGHT';
+  templateId: string | null;
   templateTitle: string;
   content: string;
   /** 0..1, càng cao càng giống. */
   score: number;
+  /** Link nội dung gốc — có với địa điểm rút từ video KOL. */
+  sourceUrl?: string | null;
+  sourceAuthor?: string | null;
+}
+
+/** Một địa điểm rút ra từ video du lịch, đã kèm nguồn. */
+export interface TravelInsight {
+  /** Khoá ổn định để nạp lại không sinh trùng (id video + tên địa điểm). */
+  key: string;
+  name: string;
+  city?: string | null;
+  category?: string | null;
+  priceHint?: string | null;
+  note?: string | null;
+  sourceUrl: string;
+  sourceAuthor?: string | null;
 }
 
 /**
@@ -81,27 +110,68 @@ export class AiEmbeddingService {
 
   /** Ghi một đoạn kèm vectơ. Prisma không có kiểu vector nên phải dùng SQL thô. */
   private async upsertRow(
-    source: 'TEMPLATE' | 'TEMPLATE_STOP',
+    source: 'TEMPLATE' | 'TEMPLATE_STOP' | 'TRAVEL_INSIGHT',
     sourceId: string,
-    templateId: string,
+    templateId: string | null,
     content: string,
     vec: number[],
+    sourceUrl: string | null = null,
+    sourceAuthor: string | null = null,
   ): Promise<void> {
     const literal = `[${vec.join(',')}]`;
     await this.prisma.$executeRawUnsafe(
-      `INSERT INTO ai_embeddings (id, source, source_id, template_id, content, embedding, updated_at)
-       VALUES (gen_random_uuid(), $1::"EmbeddingSource", $2::uuid, $3::uuid, $4, $5::vector, NOW())
+      `INSERT INTO ai_embeddings (id, source, source_id, template_id, content, embedding, source_url, source_author, updated_at)
+       VALUES (gen_random_uuid(), $1::"EmbeddingSource", $2::uuid, $3::uuid, $4, $5::vector, $6, $7, NOW())
        ON CONFLICT (source, source_id)
        DO UPDATE SET content = EXCLUDED.content,
                      embedding = EXCLUDED.embedding,
                      template_id = EXCLUDED.template_id,
+                     source_url = EXCLUDED.source_url,
+                     source_author = EXCLUDED.source_author,
                      updated_at = NOW()`,
       source,
       sourceId,
       templateId,
       content,
       literal,
+      sourceUrl,
+      sourceAuthor,
     );
+  }
+
+  /**
+   * Nạp địa điểm rút từ video du lịch vào kho tri thức.
+   *
+   * `source_id` là UUID sinh tất định từ `key`, để chạy lại cùng dữ liệu thì
+   * ghi đè chứ không nhân bản thành hàng nghìn dòng trùng.
+   */
+  async ingestTravelInsights(rows: TravelInsight[]): Promise<number> {
+    let n = 0;
+    for (const r of rows) {
+      const content = [
+        r.name,
+        r.city ?? '',
+        r.category ?? '',
+        r.note ?? '',
+        r.priceHint ? `Giá tham khảo: ${r.priceHint}` : '',
+      ]
+        .filter(Boolean)
+        .join('. ');
+      const vec = await this.embed(content, 'RETRIEVAL_DOCUMENT');
+      if (!vec) continue;
+      await this.upsertRow(
+        'TRAVEL_INSIGHT',
+        stableUuid(r.key),
+        null,
+        content,
+        vec,
+        r.sourceUrl,
+        r.sourceAuthor ?? null,
+      );
+      n++;
+    }
+    this.logger.log(`Nạp ${n}/${rows.length} địa điểm từ video du lịch`);
+    return n;
   }
 
   /**
@@ -247,20 +317,25 @@ export class AiEmbeddingService {
     try {
       const rows = await this.prisma.$queryRawUnsafe<
         Array<{
-          source: 'TEMPLATE' | 'TEMPLATE_STOP';
-          template_id: string;
-          title: string;
+          source: 'TEMPLATE' | 'TEMPLATE_STOP' | 'TRAVEL_INSIGHT';
+          template_id: string | null;
+          title: string | null;
+          source_url: string | null;
+          source_author: string | null;
           content: string;
           distance: number;
         }>
       >(
-        `SELECT e.source, e.template_id, t.title,
+        `SELECT e.source, e.template_id, t.title, e.source_url, e.source_author,
                 e.content, (e.embedding <=> $1::vector) AS distance
            FROM ai_embeddings e
-           JOIN itinerary_templates t ON t.id = e.template_id
+           LEFT JOIN itinerary_templates t ON t.id = e.template_id
           WHERE e.embedding IS NOT NULL
-            AND t.deleted_at IS NULL
-            AND t.is_public = true
+            -- Nguồn ngoài không thuộc mẫu nào; mẫu thì phải còn công khai.
+            AND (
+              e.template_id IS NULL
+              OR (t.deleted_at IS NULL AND t.is_public = true)
+            )
           ORDER BY e.embedding <=> $1::vector
           LIMIT $2`,
         literal,
@@ -271,9 +346,11 @@ export class AiEmbeddingService {
         .map((r) => ({
           source: r.source,
           templateId: r.template_id,
-          templateTitle: r.title,
+          templateTitle: r.title ?? (r.source_author ?? 'Video du lịch'),
           content: r.content,
           score: 1 - Number(r.distance),
+          sourceUrl: r.source_url,
+          sourceAuthor: r.source_author,
         }))
         .filter((h) => h.score >= minScore);
     } catch (e) {

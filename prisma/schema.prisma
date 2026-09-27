@@ -1533,6 +1533,9 @@ enum EmbeddingSource {
   TEMPLATE
   /// Một điểm dừng trong mẫu: tên quán, địa chỉ, ghi chú.
   TEMPLATE_STOP
+  /// Địa điểm rút ra từ video du lịch của KOL. Chỉ SỰ KIỆN (tên, thành phố,
+  /// khoảng giá) chứ không chép lời người ta nói — kèm link nguồn.
+  TRAVEL_INSIGHT
 }
 
 /// Tìm kiếm theo NGHĨA cho kho mẫu cộng đồng.
