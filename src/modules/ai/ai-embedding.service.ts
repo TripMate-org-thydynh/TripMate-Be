@@ -3,6 +3,39 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 
+/**
+ * Chuẩn hoá tên địa điểm để nhận ra hai bản ghi là một chỗ.
+ *
+ * Cùng một quán nhưng đọc caption ra "Suối Mơ" còn nghe lời thuyết minh ra
+ * "Tiệm cà phê Suối Mơ" — không gộp thì kho phình lên toàn bản trùng và
+ * người dùng nhận hai kết quả y hệt nhau.
+ */
+export function placeKey(name: string, city?: string | null): string {
+  const strip = (t: string) =>
+    t
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/d/g, 'd')
+      .replace(/đ/g, 'd');
+  // Bỏ tiền tố loại hình, LẶP cho hết: "tiệm cà phê Suối Mơ" phải rút được
+  // cả "tiệm" lẫn "cà phê" mới trùng với "Suối Mơ". Bóc một lần là thiếu.
+  const PREFIX =
+    /^(tiem|quan|nha hang|cafe|ca phe|coffee|khu du lich|diem|homestay|nha nghi|khach san)\s+/;
+  let bare = strip(name)
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // Dừng khi không bóc được nữa, hoặc khi bóc tiếp sẽ còn lại chuỗi rỗng
+  // (tên đúng là "Cà Phê" thì phải giữ nguyên chứ không xoá sạch).
+  for (let i = 0; i < 4; i++) {
+    const next = bare.replace(PREFIX, '').trim();
+    if (!next || next === bare) break;
+    bare = next;
+  }
+  return `${bare}|${strip(city ?? '')}`;
+}
+
 /** UUID tất định từ một khoá chữ — nạp lại cùng dữ liệu thì ghi đè, không nhân bản. */
 function stableUuid(key: string): string {
   const h = createHash('sha256').update(key).digest('hex');
@@ -34,8 +67,13 @@ export interface TravelInsight {
   key: string;
   name: string;
   city?: string | null;
+  /** Có khi nghe được lời thuyết minh; caption hiếm khi nêu. */
+  address?: string | null;
   category?: string | null;
   priceHint?: string | null;
+  openHours?: string | null;
+  /** Mẹo thực tế — thứ chỉ có trong lời nói, không có trong metadata. */
+  tips?: string[] | null;
   note?: string | null;
   sourceUrl: string;
   sourceAuthor?: string | null;
@@ -147,21 +185,41 @@ export class AiEmbeddingService {
    */
   async ingestTravelInsights(rows: TravelInsight[]): Promise<number> {
     let n = 0;
+    let skipped = 0;
     for (const r of rows) {
       const content = [
         r.name,
         r.city ?? '',
+        r.address ?? '',
         r.category ?? '',
         r.note ?? '',
         r.priceHint ? `Giá tham khảo: ${r.priceHint}` : '',
+        r.openHours ? `Giờ mở cửa: ${r.openHours}` : '',
+        (r.tips ?? []).length ? `Mẹo: ${(r.tips ?? []).join('; ')}` : '',
       ]
         .filter(Boolean)
         .join('. ');
+      // Gộp theo ĐỊA ĐIỂM chứ không theo video: hai video nói về cùng một
+      // quán thì gộp làm một, không tạo dòng thứ hai.
+      const id = stableUuid(placeKey(r.name, r.city));
+
+      // Ghi đè mù quáng sẽ MẤT DỮ LIỆU: bản rút từ caption (một câu) nạp sau
+      // sẽ xoá mất bản nghe được lời thuyết minh (có địa chỉ, giá, mẹo).
+      // Chỉ thay khi bản mới thực sự nhiều thông tin hơn.
+      const existing = await this.prisma.$queryRawUnsafe<
+        Array<{ content: string }>
+      >('SELECT content FROM ai_embeddings WHERE id = $1::uuid', id);
+      const old = existing[0]?.content ?? '';
+      if (old.length >= content.length) {
+        skipped++;
+        continue;
+      }
+
       const vec = await this.embed(content, 'RETRIEVAL_DOCUMENT');
       if (!vec) continue;
       await this.upsertRow(
         'TRAVEL_INSIGHT',
-        stableUuid(r.key),
+        id,
         null,
         content,
         vec,
@@ -170,7 +228,10 @@ export class AiEmbeddingService {
       );
       n++;
     }
-    this.logger.log(`Nạp ${n}/${rows.length} địa điểm từ video du lịch`);
+    this.logger.log(
+      `Nạp ${n}/${rows.length} địa điểm từ video du lịch` +
+        (skipped ? ` (bỏ qua ${skipped} bản nghèo thông tin hơn bản đã có)` : ''),
+    );
     return n;
   }
 
