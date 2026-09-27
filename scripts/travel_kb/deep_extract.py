@@ -14,6 +14,7 @@ Vẫn chỉ lấy SỰ KIỆN, không chép nguyên văn lời người ta nói.
 Đi chậm có chủ ý: TikTok khoá IP sau khoảng 10 lượt tải liên tiếp.
 """
 import base64
+import io
 import json
 import os
 import random
@@ -225,19 +226,56 @@ def process(video: dict, key: str) -> list[dict]:
     return rows
 
 
+def load_done(path: str) -> set[str]:
+    """URL đã rút xong ở lần chạy trước. Chạy lại không tốn công và không tốn quota."""
+    done: set[str] = set()
+    try:
+        for line in io.open(path, encoding="utf-8"):
+            line = line.strip()
+            if line:
+                done.add(json.loads(line).get("sourceUrl", ""))
+    except FileNotFoundError:
+        pass
+    return done
+
+
 if __name__ == "__main__":
     key = os.environ.get("GEMINI_API_KEY", "")
     if not key:
         print("Thiếu GEMINI_API_KEY"); sys.exit(1)
-    src = json.load(open(sys.argv[1], encoding="utf-8"))
+    src = json.load(io.open(sys.argv[1], encoding="utf-8"))
     vids = src if isinstance(src, list) else src.get("videos", [])
+    dst = sys.argv[2] if len(sys.argv) > 2 else "deep_places.jsonl"
     limit = int(sys.argv[3]) if len(sys.argv) > 3 else len(vids)
-    all_rows: list[dict] = []
-    for idx, v in enumerate(vids[:limit]):
-        all_rows += process(v, key)
-        if idx < limit - 1:
+
+    done = load_done(dst)
+    todo = [v for v in vids if v.get("url") not in done][:limit]
+    print(f"{len(done)} video đã xong trước đó, còn {len(todo)} video lượt này")
+
+    sink = io.open(dst, "a", encoding="utf-8")
+    kept = miss = streak = 0
+    for idx, v in enumerate(todo):
+        rows = process(v, key)
+        if rows:
+            streak = 0
+            for r in rows:
+                # Ghi ngay từng dòng: bị chặn giữa chừng vẫn giữ được phần đã làm.
+                sink.write(json.dumps(r, ensure_ascii=False) + "\n")
+            sink.flush()
+            kept += len(rows)
+        else:
+            miss += 1
+            streak += 1
+            # Ghi lại cả video hỏng để lần sau không mò lại vô ích... nhưng
+            # KHÔNG đánh dấu là xong: hỏng thường do bị chặn, không phải do video.
+        if streak >= 3:
+            # Ba lần liên tiếp là dấu hiệu bị chặn theo IP, không phải xui.
+            cool = 180
+            print(f"  ! hỏng {streak} lần liên tiếp — nghỉ {cool}s cho hạ nhiệt",
+                  file=sys.stderr)
+            time.sleep(cool)
+            streak = 0
+        if idx < len(todo) - 1:
             time.sleep(random.uniform(*PAUSE_S))
-    dst = sys.argv[2] if len(sys.argv) > 2 else "deep_places.json"
-    json.dump(all_rows, open(dst, "w", encoding="utf-8"),
-              ensure_ascii=False, indent=2)
-    print(f"ghi {len(all_rows)} địa điểm → {dst}")
+    sink.close()
+    print(f"lượt này: +{kept} địa điểm, {miss} video không lấy được → {dst}")
