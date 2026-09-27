@@ -131,6 +131,74 @@ describe('ExpensesService', () => {
       expect(result).toBeDefined();
     });
 
+    it('chia đều chỉ trong nhóm nhỏ khi có participantIds', async () => {
+      mockPrismaService.tripMember.findMany.mockResolvedValue([
+        { userId: 'user-1' },
+        { userId: 'user-2' },
+        { userId: 'user-3' },
+        { userId: 'user-4' },
+      ]);
+      mockPrismaService.expense.create.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'exp-1', ...data }),
+      );
+
+      await service.create('trip-1', {
+        amount: 300,
+        paidById: 'user-1',
+        category: 'FOOD' as any,
+        splitType: 'EQUAL' as any,
+        participantIds: ['user-1', 'user-2'],
+      });
+
+      const created = mockPrismaService.expense.create.mock.calls.at(-1)[0];
+      const rows = created.data.splits.create;
+      expect(rows).toHaveLength(2);
+      expect(rows.map((r: any) => r.userId).sort()).toEqual([
+        'user-1',
+        'user-2',
+      ]);
+      // 300 chia 2 người tham gia, không phải 4 người của chuyến.
+      expect(rows[0].shareAmount).toEqual(new Decimal(150));
+      expect(rows[1].shareAmount).toEqual(new Decimal(150));
+    });
+
+    it('từ chối participantIds có người ngoài chuyến', async () => {
+      mockPrismaService.tripMember.findMany.mockResolvedValue([
+        { userId: 'user-1' },
+        { userId: 'user-2' },
+      ]);
+      await expect(
+        service.create('trip-1', {
+          amount: 100,
+          paidById: 'user-1',
+          category: 'FOOD' as any,
+          splitType: 'EQUAL' as any,
+          participantIds: ['user-1', 'nguoi-la'],
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('bỏ trống participantIds thì vẫn chia cả nhóm như cũ', async () => {
+      mockPrismaService.tripMember.findMany.mockResolvedValue([
+        { userId: 'user-1' },
+        { userId: 'user-2' },
+        { userId: 'user-3' },
+      ]);
+      mockPrismaService.expense.create.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'exp-2', ...data }),
+      );
+
+      await service.create('trip-1', {
+        amount: 300,
+        paidById: 'user-1',
+        category: 'FOOD' as any,
+        splitType: 'EQUAL' as any,
+      });
+
+      const created = mockPrismaService.expense.create.mock.calls.at(-1)[0];
+      expect(created.data.splits.create).toHaveLength(3);
+    });
+
     it('should throw BadRequestException if PERCENTAGE splits do not sum to 100', async () => {
       const tripId = 'trip-1';
       const dto = {

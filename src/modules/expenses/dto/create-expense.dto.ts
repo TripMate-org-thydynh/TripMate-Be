@@ -57,6 +57,17 @@ export class CreateExpenseDto {
   @Type(() => SplitMemberDto)
   splits?: SplitMemberDto[];
 
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'Chỉ dùng với EQUAL: chia đều trong nhóm nhỏ này thay vì cả chuyến. ' +
+      'Bỏ trống = chia cho mọi thành viên (như cũ).',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('loose', { each: true })
+  participantIds?: string[];
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

@@ -29,13 +29,28 @@ export class ExpensesService {
       select: { userId: true },
     });
 
+    const memberIds = new Set(members.map((m) => m.userId));
     const totalAmount = new Decimal(dto.amount);
     let splits: Array<{ userId: string; shareAmount: Decimal }>;
 
     if (dto.splitType === 'EQUAL') {
-      const perPerson = totalAmount.div(members.length).toDecimalPlaces(2);
-      splits = members.map((m) => ({
-        userId: m.userId,
+      // Nhiều hoạt động chỉ vài người tham gia (cáp treo, vé vào cổng...).
+      // Không truyền participantIds thì vẫn chia cho cả chuyến như trước.
+      const payers = dto.participantIds?.length
+        ? [...new Set(dto.participantIds)]
+        : members.map((m) => m.userId);
+      const outsider = payers.find((id) => !memberIds.has(id));
+      if (outsider) {
+        throw new BadRequestException(
+          `User ${outsider} is not a member of this trip`,
+        );
+      }
+      if (payers.length === 0) {
+        throw new BadRequestException('Cần ít nhất 1 người tham gia');
+      }
+      const perPerson = totalAmount.div(payers.length).toDecimalPlaces(2);
+      splits = payers.map((userId) => ({
+        userId,
         shareAmount: perPerson,
       }));
       if (splits.length > 0) {
@@ -52,6 +67,12 @@ export class ExpensesService {
       if (!dto.splits || dto.splits.length === 0) {
         throw new BadRequestException(
           'splits array is required for EXACT/PERCENTAGE splitType',
+        );
+      }
+      const stranger = dto.splits.find((x) => !memberIds.has(x.userId));
+      if (stranger) {
+        throw new BadRequestException(
+          `User ${stranger.userId} is not a member of this trip`,
         );
       }
       if (dto.splitType === 'PERCENTAGE') {
@@ -258,11 +279,16 @@ export class ExpensesService {
 
     for (const expense of expenses) {
       // payer gets credit
-      balances[expense.paidById] = balances[expense.paidById].add(
-        expense.amount,
-      );
+      // Người trả đã rời chuyến: bỏ qua, đừng tạo khoá lạ trong bảng số dư.
+      if (expense.paidById in balances) {
+        balances[expense.paidById] = balances[expense.paidById].add(
+          expense.amount,
+        );
+      }
       // each splitter owes their share
       for (const split of expense.splits) {
+        // Người đã rời chuyến vẫn còn dòng split cũ: bỏ qua thay vì sập.
+        if (!(split.userId in balances)) continue;
         balances[split.userId] = balances[split.userId].sub(split.shareAmount);
       }
     }
