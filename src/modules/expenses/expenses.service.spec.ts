@@ -162,6 +162,70 @@ describe('ExpensesService', () => {
       expect(rows[1].shareAmount).toEqual(new Decimal(150));
     });
 
+    it('phần lẻ dồn vào người trả, không phụ thuộc thứ tự bấm', async () => {
+      mockPrismaService.tripMember.findMany.mockResolvedValue([
+        { userId: 'an' },
+        { userId: 'binh' },
+        { userId: 'chi' },
+      ]);
+      mockPrismaService.expense.create.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'exp-r', ...data }),
+      );
+
+      // 1.000.000 chia 3 = 333333.33 x3 = 999999.99, thiếu 0.01.
+      // Bình trả, nhưng đứng GIỮA danh sách.
+      await service.create('trip-1', {
+        amount: 1000000,
+        paidById: 'binh',
+        category: 'ACTIVITIES' as any,
+        splitType: 'EQUAL' as any,
+        participantIds: ['an', 'binh', 'chi'],
+      });
+
+      const rows =
+        mockPrismaService.expense.create.mock.calls.at(-1)[0].data.splits
+          .create;
+      const by = Object.fromEntries(
+        rows.map((r: any) => [r.userId, r.shareAmount.toString()]),
+      );
+      expect(by).toEqual({
+        an: '333333.33',
+        binh: '333333.34',
+        chi: '333333.33',
+      });
+    });
+
+    it('người trả không tham gia thì phần lẻ dồn người đầu', async () => {
+      mockPrismaService.tripMember.findMany.mockResolvedValue([
+        { userId: 'an' },
+        { userId: 'binh' },
+        { userId: 'chi' },
+      ]);
+      mockPrismaService.expense.create.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'exp-r2', ...data }),
+      );
+
+      // An mời cà phê: An trả nhưng không nằm trong nhóm chia.
+      await service.create('trip-1', {
+        amount: 100,
+        paidById: 'an',
+        category: 'FOOD' as any,
+        splitType: 'EQUAL' as any,
+        participantIds: ['binh', 'chi'],
+      });
+
+      const rows =
+        mockPrismaService.expense.create.mock.calls.at(-1)[0].data.splits
+          .create;
+      expect(rows).toHaveLength(2);
+      expect(rows.every((r: any) => r.userId !== 'an')).toBe(true);
+      const sum = rows.reduce(
+        (a: any, r: any) => a.add(r.shareAmount),
+        new Decimal(0),
+      );
+      expect(sum).toEqual(new Decimal(100));
+    });
+
     it('từ chối participantIds có người ngoài chuyến', async () => {
       mockPrismaService.tripMember.findMany.mockResolvedValue([
         { userId: 'user-1' },

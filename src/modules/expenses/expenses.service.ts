@@ -13,6 +13,32 @@ import { ActivitiesService } from '../activities/activities.service';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { AiService } from '../ai/ai.service';
 
+/**
+ * Chia tiền hiếm khi ra số tròn: 1.000.000 chia 3 còn dư 0,01.
+ *
+ * Phần lẻ dồn vào **người trả tiền**, vì họ đang được cả nhóm hoàn lại —
+ * gánh thêm một xu là hợp lý nhất và không ai thiệt. Nếu người trả không
+ * nằm trong nhóm chia (kiểu "tôi mời cả bọn"), dồn vào người đầu danh sách.
+ *
+ * Trước đây luôn dồn vào `splits[0]`, tức phụ thuộc thứ tự bấm chip trên
+ * màn hình — cùng một khoản chi mà ai chịu phần lẻ lại khác nhau.
+ */
+function absorbRemainder(
+  splits: Array<{ userId: string; shareAmount: Decimal }>,
+  totalAmount: Decimal,
+  paidById: string,
+): void {
+  if (splits.length === 0) return;
+  const sumShares = splits.reduce(
+    (acc, s) => acc.add(s.shareAmount),
+    new Decimal(0),
+  );
+  const diff = totalAmount.sub(sumShares);
+  if (diff.isZero()) return;
+  const target = splits.find((s) => s.userId === paidById) ?? splits[0];
+  target.shareAmount = target.shareAmount.add(diff);
+}
+
 @Injectable()
 export class ExpensesService {
   constructor(
@@ -53,16 +79,7 @@ export class ExpensesService {
         userId,
         shareAmount: perPerson,
       }));
-      if (splits.length > 0) {
-        const sumShares = splits.reduce(
-          (acc, s) => acc.add(s.shareAmount),
-          new Decimal(0),
-        );
-        const diff = totalAmount.sub(sumShares);
-        if (!diff.isZero()) {
-          splits[0].shareAmount = splits[0].shareAmount.add(diff);
-        }
-      }
+      absorbRemainder(splits, totalAmount, dto.paidById);
     } else if (dto.splitType === 'EXACT' || dto.splitType === 'PERCENTAGE') {
       if (!dto.splits || dto.splits.length === 0) {
         throw new BadRequestException(
@@ -84,16 +101,7 @@ export class ExpensesService {
           userId: s.userId,
           shareAmount: totalAmount.mul(s.amount).div(100).toDecimalPlaces(2),
         }));
-        if (splits.length > 0) {
-          const sumShares = splits.reduce(
-            (acc, s) => acc.add(s.shareAmount),
-            new Decimal(0),
-          );
-          const diff = totalAmount.sub(sumShares);
-          if (!diff.isZero()) {
-            splits[0].shareAmount = splits[0].shareAmount.add(diff);
-          }
-        }
+        absorbRemainder(splits, totalAmount, dto.paidById);
       } else {
         splits = dto.splits.map((s) => ({
           userId: s.userId,
