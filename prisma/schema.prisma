@@ -1492,3 +1492,37 @@ model ItineraryTemplateRating {
   @@id([templateId, userId])
   @@map("itinerary_template_ratings")
 }
+
+/// Bộ nhớ đệm câu trả lời AI — câu hỏi du lịch lặp lại rất nhiều
+/// ("Đà Lạt mùa nào đẹp?"), trả từ đây thì không tốn tiền gọi Gemini.
+model AiResponseCache {
+  /// SHA-256 của (type | tripId | câu hỏi đã chuẩn hoá).
+  key       String        @id
+  type      AIRequestType
+  response  Json
+  hitCount  Int           @default(0) @map("hit_count")
+  createdAt DateTime      @default(now()) @map("created_at")
+  /// Hết hạn theo loại: thời tiết 1 ngày, mẹo du lịch 30 ngày.
+  expiresAt DateTime      @map("expires_at")
+
+  @@index([expiresAt])
+  @@map("ai_response_cache")
+}
+
+/// Đính chính tri thức: quán đóng cửa, đổi địa chỉ, tăng giá vé.
+///
+/// Rẻ hơn nhiều so với đánh chỉ mục lại toàn bộ. Chỉ bản ghi đã duyệt mới
+/// được chèn vào prompt — nếu không ai cũng ghi đè được, thành đầu độc tri thức.
+model AiCorrection {
+  id          String    @id @default(uuid()) @db.Uuid
+  /// Từ khoá để biết khi nào cần chèn (tên quán, tên địa điểm).
+  subject     String
+  correction  String
+  createdById String?   @map("created_by") @db.Uuid
+  isApproved  Boolean   @default(false) @map("is_approved")
+  approvedAt  DateTime? @map("approved_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([isApproved])
+  @@map("ai_corrections")
+}

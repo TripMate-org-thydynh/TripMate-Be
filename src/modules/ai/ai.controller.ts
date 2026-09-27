@@ -6,12 +6,48 @@ import { CreateAIRequestDto } from './dto/ai-request.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { AdminGuard } from '../../common/guards/admin.guard';
+import { AiCorrectionsService } from './ai-corrections.service';
+import { SubmitCorrectionDto } from './dto/correction.dto';
 @ApiTags('AI')
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth('JWT')
 @Controller('ai')
 export class AiController {
-  constructor(private readonly aiService: AiService) {}
+  constructor(
+    private readonly aiService: AiService,
+    private readonly corrections: AiCorrectionsService,
+  ) {}
+
+  @Post('corrections')
+  @ApiOperation({
+    summary:
+      'Báo thông tin sai (quán đóng cửa, đổi địa chỉ). Phải được duyệt mới ' +
+      'có hiệu lực — nếu không ai cũng đầu độc được câu trả lời chung.',
+  })
+  submitCorrection(
+    @CurrentUser() user: User,
+    @Body() dto: SubmitCorrectionDto,
+  ) {
+    return this.corrections.submit(user.id, dto.subject, dto.correction);
+  }
+
+  @Get('corrections/pending')
+  @UseGuards(AdminGuard)
+  @ApiOperation({ summary: 'Danh sách đính chính chờ duyệt (admin)' })
+  pendingCorrections() {
+    return this.corrections.listPending();
+  }
+
+  @Post('corrections/:id/approve')
+  @UseGuards(AdminGuard)
+  @ApiOperation({ summary: 'Duyệt hoặc gỡ duyệt một đính chính (admin)' })
+  approveCorrection(
+    @Param('id') id: string,
+    @Body('approved') approved?: boolean,
+  ) {
+    return this.corrections.approve(id, approved !== false);
+  }
 
   @Post('request')
   @ApiOperation({ summary: 'Tạo yêu cầu AI (lập lịch, recap, caption...)' })
@@ -21,6 +57,7 @@ export class AiController {
       dto.tripId,
       dto.type,
       dto.prompt,
+      dto.history,
     );
   }
 

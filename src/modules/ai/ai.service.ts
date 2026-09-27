@@ -11,6 +11,13 @@ import { EntitlementService } from '../premium/entitlement.service';
 import { ConfigService } from '@nestjs/config';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as exifr from 'exifr';
+import { redactPii, wrapUntrusted } from './ai-guard';
+import { AiCacheService } from './ai-cache.service';
+import { AiCorrectionsService } from './ai-corrections.service';
+import {
+  AiQueryRewriterService,
+  ChatTurn,
+} from './ai-query-rewriter.service';
 import { readGps } from './exif-gps';
 import { GeocodingService } from '../itineraries/geocoding.service';
 
@@ -182,6 +189,9 @@ export class AiService {
     private config: ConfigService,
     private entitlements: EntitlementService,
     private geocoding: GeocodingService,
+    private cache: AiCacheService,
+    private corrections: AiCorrectionsService,
+    private rewriter: AiQueryRewriterService,
   ) {
     const apiKey =
       this.config.get<string>('GEMINI_API_KEY') || process.env.GEMINI_API_KEY;
@@ -632,7 +642,29 @@ Quy tắc chấm "confidence":
     tripId: string | undefined,
     type: AIRequestType,
     prompt: string,
+    history?: ChatTurn[],
   ) {
+    // Câu hỏi nối tiếp ("chỗ đó vé bao nhiêu?") phải thành câu độc lập trước,
+    // nếu không cả đệm lẫn đính chính đều không khớp được vào đâu.
+    const standalone = await this.rewriter.rewrite(prompt, history ?? []);
+
+    // Che dữ liệu cá nhân TRƯỚC khi chữ rời khỏi máy chủ. Người dùng hay dán
+    // số điện thoại, CCCD, số thẻ vào khung chat khi hỏi chuyện đặt phòng.
+    const { text: safePrompt, hits } = redactPii(standalone);
+    if (hits.length > 0) {
+      // Chỉ ghi số lượng, không ghi nội dung đã che.
+      this.logger.log(
+        `Đã che PII trước khi gọi AI: ${hits
+          .map((h) => `${h.kind}x${h.count}`)
+          .join(', ')}`,
+      );
+    }
+
+    // Đệm trả trước cả hạn mức: câu trả lời sẵn có thì không tốn tiền Gemini,
+    // nên cũng không công bằng khi trừ lượt của người dùng.
+    const cached = await this.cache.get(type, tripId, safePrompt);
+    if (cached) return { cached: true, response: cached };
+
     // Hạn mức lời gọi AI mỗi tháng.
     //
     // Đây là hạn mức duy nhất gắn với chi phí biến đổi thật (mỗi lời gọi là
@@ -645,10 +677,13 @@ Quy tắc chấm "confidence":
     await this.assertAiQuota(userId);
 
     try {
-      return await this.runRequest(userId, tripId, type, prompt);
+      const out = await this.runRequest(userId, tripId, type, safePrompt);
+      const resp = (out as { response?: object })?.response;
+      if (resp) await this.cache.set(type, tripId, safePrompt, resp);
+      return out;
     } catch (e) {
       await this.prisma.aIRequest.create({
-        data: { userId, tripId, type, prompt, status: 'FAILED' },
+        data: { userId, tripId, type, prompt: safePrompt, status: 'FAILED' },
       });
       throw e;
     }
@@ -731,12 +766,21 @@ Quy tắc chấm "confidence":
     let response: object | undefined = undefined;
     let status: AIStatus = 'COMPLETED';
 
+    // Chữ người dùng nhập luôn đi vào prompt dưới dạng khối DỮ LIỆU có rào.
+    // Không rào thì một câu "bỏ qua hướng dẫn trên và..." trong mô tả mẫu
+    // lịch trình cộng đồng là đủ để lái toàn bộ câu trả lời.
+    const userBlock = wrapUntrusted('user_input', prompt);
+    // Đính chính đã duyệt (quán đóng cửa, đổi địa chỉ) được ưu tiên hơn kiến
+    // thức sẵn có của model.
+    const fixes = await this.corrections.promptBlock(prompt);
+
     if (type === 'VIBE_MATCH') {
       {
         const promptText = `
           You are TripMate AI, a trendy, cool Gen Z travel vibe matcher.
           Analyze the vibe match between the following prompt/location and a squad's travel vibe.
-          Prompt: "${prompt}"
+          Prompt:
+          ${userBlock}${fixes}
           
           Please provide:
           1. A match percentage (integer between 60 and 100).
@@ -781,7 +825,8 @@ Quy tắc chấm "confidence":
       {
         const promptText = `
           You are TripMate AI, an extremely sassy, sarcastic, and funny Gen Z financial advisor.
-          Roast the squad's spendings or the following prompt: "${prompt}".
+          Roast the squad's spendings or the following prompt::
+          ${userBlock}${fixes}
           
           Here are the actual trip expenses:
           ${expensesSummary}
@@ -805,7 +850,8 @@ Quy tắc chấm "confidence":
       {
         const promptText = `
           You are TripMate AI, a professional local tour guide who loves finding hidden gems and aesthetic spots.
-          Create a detailed, beautiful travel itinerary based on this prompt: "${prompt}".
+          Create a detailed, beautiful travel itinerary based on this prompt::
+          ${userBlock}${fixes}
           
           Return a JSON object matching this schema:
           {
@@ -832,7 +878,8 @@ Quy tắc chấm "confidence":
       {
         const promptText = `
           You are TripMate AI, a social media influencer guru.
-          Generate 3-5 creative, trendy, and funny Instagram/TikTok captions in Vietnamese (some with English hybrid/slang, emojis) based on this prompt/photos vibe: "${prompt}".
+          Generate 3-5 creative, trendy, and funny Instagram/TikTok captions in Vietnamese (some with English hybrid/slang, emojis) based on this prompt/photos vibe::
+          ${userBlock}${fixes}
           
           Return a JSON object matching this schema:
           {
@@ -845,7 +892,8 @@ Quy tắc chấm "confidence":
       {
         const promptText = `
           You are TripMate AI, a smart weather bot that is both practical and funny.
-          Provide weather advice and packing tips based on the destination/time in this prompt: "${prompt}".
+          Provide weather advice and packing tips based on the destination/time in this prompt::
+          ${userBlock}${fixes}
           
           Return a JSON object matching this schema:
           {
@@ -860,7 +908,8 @@ Quy tắc chấm "confidence":
       {
         const promptText = `
           You are TripMate AI, an expert travel matcher.
-          Suggest 3 beautiful travel destinations matching this vibe/prompt: "${prompt}".
+          Suggest 3 beautiful travel destinations matching this vibe/prompt::
+          ${userBlock}${fixes}
           
           Return a JSON object matching this schema:
           {
@@ -902,7 +951,8 @@ Quy tắc chấm "confidence":
         const promptText = `
           You are TripMate AI, a smart budget optimizer.
           Analyze the following trip expenses and provide tips to optimize spending or save money.
-          Prompt: "${prompt}"
+          Prompt:
+          ${userBlock}${fixes}
           
           Actual Expenses:
           ${expensesSummary}
@@ -922,7 +972,8 @@ Quy tắc chấm "confidence":
       {
         const promptText = `
           You are TripMate AI. Generate a funny script and outline for a recap video of the trip.
-          Prompt: "${prompt}"
+          Prompt:
+          ${userBlock}${fixes}
           
           Return a JSON object matching this schema:
           {
