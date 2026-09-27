@@ -568,8 +568,8 @@ export class ExpensesService {
     return newCard;
   }
 
-  async scanReceipt(receiptUrl: string) {
-    return this.aiService.scanReceiptImage(receiptUrl);
+  async scanReceipt(userId: string, receiptUrl: string) {
+    return this.aiService.scanReceiptImage(userId, receiptUrl);
   }
 
   async getBudgetGoal(tripId: string) {

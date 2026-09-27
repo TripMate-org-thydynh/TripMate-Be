@@ -56,3 +56,7 @@ be-err.log
 # File tam / backup
 *.bak
 tm_skip.png
+
+# Sao lưu .env — tuyệt đối không commit
+.env.bak*
+.env.*.bak

@@ -124,8 +124,9 @@ export class ExpensesController {
   scanReceipt(
     @Param('tripId') tripId: string,
     @Body('receiptUrl') receiptUrl: string,
+    @CurrentUser() user: User,
   ) {
-    return this.expensesService.scanReceipt(receiptUrl);
+    return this.expensesService.scanReceipt(user.id, receiptUrl);
   }
 
   @Get('budget-goal')

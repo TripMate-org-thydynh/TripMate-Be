@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   NotFoundException,
@@ -163,6 +164,14 @@ export interface CustomizedItinerary {
   }[];
 }
 
+/**
+ * Model dùng cho mọi lời gọi Gemini — đổi ở đây là đổi cả dự án.
+ *
+ * Trước đây rải rác 4 chỗ hardcode, riêng máy quét hoá đơn còn kẹt ở
+ * `gemini-1.5-flash` trong khi phần còn lại đã lên 2.5.
+ */
+const GEMINI_MODEL = 'gemini-3.8-flash';
+
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
@@ -222,7 +231,7 @@ export class AiService {
     }
     try {
       const model = this.genAI.getGenerativeModel({
-        model: 'gemini-2.5-flash',
+        model: GEMINI_MODEL,
         generationConfig: {
           responseMimeType: 'application/json',
         },
@@ -322,7 +331,7 @@ KẾT QUẢ TRA CỨU:
       let analysis = '';
       try {
         const searchModel = this.genAI.getGenerativeModel({
-          model: 'gemini-2.5-flash',
+          model: GEMINI_MODEL,
           tools: [{ googleSearch: {} } as never],
         });
         const r = await searchModel.generateContent([
@@ -517,7 +526,7 @@ Quy tắc chấm "confidence":
       : imageBase64;
     try {
       const model = this.genAI.getGenerativeModel({
-        model: 'gemini-2.5-flash',
+        model: GEMINI_MODEL,
         generationConfig: { responseMimeType: 'application/json' },
       });
       const prompt =
@@ -1303,57 +1312,66 @@ Trả về JSON đúng dạng:
     return result;
   }
 
-  async scanReceiptImage(receiptUrlOrBase64: string) {
+  /**
+   * Đọc hoá đơn từ ảnh → món, tổng tiền, danh mục.
+   *
+   * Chỉ nhận **ảnh** (base64/data-URL). Trước đây nếu đầu vào không phải
+   * base64 thì code gửi 100 ký tự đầu của URL cho model *text* — Gemini
+   * không mở được URL nên sẽ **bịa ra một hoá đơn**. Nay từ chối thẳng.
+   */
+  async scanReceiptImage(userId: string, receiptUrlOrBase64: string) {
     if (!this.genAI) this.aiUnavailable();
 
+    const raw = (receiptUrlOrBase64 ?? '').trim();
+    const m = /^data:(image\/[\w.+-]+);base64,(.+)$/s.exec(raw);
+    const looksBare = !raw.startsWith('data:') && /^[A-Za-z0-9+/=\s]+$/.test(raw);
+    if (!m && !(looksBare && raw.length > 500)) {
+      throw new BadRequestException(
+        'Cần ảnh hoá đơn (base64 hoặc data:image/...), không nhận đường dẫn.',
+      );
+    }
+    const mimeType = m ? m[1] : 'image/jpeg';
+    const data = m ? m[2] : raw.replace(/\s+/g, '');
+
+    const promptText = [
+      'Bạn là bộ đọc hoá đơn của TripMate. Đọc ảnh hoá đơn và trích ra JSON.',
+      'Chỉ ghi những gì NHÌN THẤY trên ảnh. Không suy đoán, không bịa món.',
+      'Không đọc được trường nào thì để null (hoặc mảng rỗng với items).',
+      'Tiền tệ mặc định VND. Giá là số, không kèm dấu chấm/phẩy phân cách.',
+      'Schema:',
+      '{"merchant":string|null,"date":string|null,"currency":string,',
+      '"items":[{"name":string,"quantity":number,"price":number,"selected":boolean}],',
+      '"subtotal":number|null,"tax":number|null,"total":number|null,',
+      '"suggestedCategory":"FOOD"|"ACCOMMODATION"|"TRANSPORT"|"ACTIVITIES"|"SHOPPING"|"OTHER",',
+      '"confidenceScore":number}',
+    ].join('\n');
+
+    let parsed: Record<string, unknown>;
     try {
       const model = this.genAI.getGenerativeModel({
-        model: 'gemini-1.5-flash',
+        model: GEMINI_MODEL,
+        // JSON mode: trước đây bắt kết quả bằng regex {...}, vỡ ngay khi
+        // model trả kèm lời dẫn hoặc rào ```json.
+        generationConfig: { responseMimeType: 'application/json' },
       });
-      const promptText = `
-        You are an expert OCR receipt parser for TripMate. Extract merchant name, total price, currency, category (FOOD, ACCOMMODATION, TRANSPORT, ACTIVITIES, SHOPPING, OTHER), and list of items with their names and prices.
-        Return JSON matching this schema:
-        {
-          "merchant": string,
-          "date": string,
-          "items": Array<{ "name": string, "quantity": number, "price": number, "selected": boolean }>,
-          "subtotal": number,
-          "tax": number,
-          "total": number,
-          "suggestedCategory": string,
-          "confidenceScore": number
-        }
-      `;
-
-      if (
-        receiptUrlOrBase64.startsWith('data:image/') ||
-        receiptUrlOrBase64.length > 500
-      ) {
-        // Base64 Vision call
-        const base64Data = receiptUrlOrBase64.replace(
-          /^data:image\/\w+;base64,/,
-          '',
-        );
-        const imagePart = {
-          inlineData: {
-            data: base64Data,
-            mimeType: 'image/jpeg',
-          },
-        };
-        const res = await model.generateContent([promptText, imagePart]);
-        const text = res.response.text();
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          return JSON.parse(jsonMatch[0]) as Record<string, unknown>;
-        }
-      }
-
-      return await this.callGeminiJSON(
-        promptText + ` Input: ${receiptUrlOrBase64.substring(0, 100)}`,
-      );
+      const res = await model.generateContent([
+        promptText,
+        { inlineData: { data, mimeType } },
+      ]);
+      parsed = JSON.parse(res.response.text()) as Record<string, unknown>;
     } catch {
       // Ảnh mờ / Gemini hỏng: báo lỗi để người dùng chụp lại, không bịa hoá đơn.
       this.aiUnavailable();
     }
+
+    await this.recordAiUsage(
+      userId,
+      'RECEIPT_SCAN',
+      undefined,
+      '[receipt-ocr]',
+      parsed!,
+    );
+    return parsed!;
   }
+
 }
