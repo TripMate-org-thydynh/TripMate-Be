@@ -1,5 +1,14 @@
 import type { User } from '@prisma/client';
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AiService } from './ai.service';
 import { CreateAIRequestDto } from './dto/ai-request.dto';
@@ -18,6 +27,56 @@ export class AiController {
     private readonly aiService: AiService,
     private readonly corrections: AiCorrectionsService,
   ) {}
+
+  /**
+   * Matey trả lời theo kiểu chảy chữ (SSE).
+   *
+   * Dùng SSE thủ công thay vì `@Sse` của Nest vì `@Sse` bắt buộc phương thức
+   * GET, mà câu hỏi kèm lịch sử hội thoại thì phải đi trong thân yêu cầu —
+   * nhét cả đoạn chat vào query string là vừa vỡ giới hạn độ dài URL vừa
+   * đẩy nội dung riêng tư vào log máy chủ.
+   */
+  @Post('chat/stream')
+  @ApiOperation({ summary: 'Matey trả lời chảy từng mẩu chữ (SSE)' })
+  async chatStream(
+    @CurrentUser() user: User,
+    @Body() dto: CreateAIRequestDto,
+    @Res() res: Response,
+  ) {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    // Nginx mặc định gom đệm phản hồi, chảy chữ sẽ thành trả một cục.
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const send = (event: string, data: unknown) => {
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    try {
+      for await (const piece of this.aiService.chatStream(
+        user.id,
+        dto.tripId,
+        dto.prompt,
+        dto.history,
+      )) {
+        send('chunk', { text: piece });
+      }
+      send('done', {});
+    } catch (e) {
+      // Header đã gửi rồi nên không đặt được mã lỗi HTTP nữa — báo lỗi qua
+      // chính luồng sự kiện để app hiện được thông báo tử tế.
+      const err = e as { status?: number; message?: string };
+      send('error', {
+        status: err?.status ?? 500,
+        message: err?.message ?? 'Lỗi không xác định',
+      });
+    } finally {
+      res.end();
+    }
+  }
 
   @Post('corrections')
   @ApiOperation({

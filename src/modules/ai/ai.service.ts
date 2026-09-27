@@ -9,7 +9,10 @@ import { AIRequestType, AIStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EntitlementService } from '../premium/entitlement.service';
 import { ConfigService } from '@nestjs/config';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import {
+  GenerationConfig,
+  GoogleGenerativeAI,
+} from '@google/generative-ai';
 import * as exifr from 'exifr';
 import { redactPii, wrapUntrusted } from './ai-guard';
 import { AiCacheService } from './ai-cache.service';
@@ -1423,6 +1426,109 @@ Trả về JSON đúng dạng:
       parsed!,
     );
     return parsed!;
+  }
+
+  /**
+   * Trả lời Matey theo kiểu **chảy từng mẩu chữ** thay vì chờ xong mới trả.
+   *
+   * Người dùng Flutter nhìn vòng xoay 4–8 giây là thoát app. Đệm chỉ cứu được
+   * câu đã từng hỏi; câu mới vẫn phải chờ. Chảy chữ ra ngay thì chữ đầu tiên
+   * xuất hiện sau chưa tới một giây.
+   *
+   * Vẫn đi qua đủ các lớp như đường không chảy: hạn mức, viết lại câu nối
+   * tiếp, che PII, đính chính, rào dữ liệu không tin cậy, đệm. Khác duy nhất
+   * là trả **văn bản** chứ không phải JSON — hợp với bong bóng chat hơn nhiều
+   * so với việc ép câu trả lời vào khuôn lịch trình rồi ghép chữ lại.
+   */
+  async *chatStream(
+    userId: string,
+    tripId: string | undefined,
+    question: string,
+    history?: ChatTurn[],
+  ): AsyncGenerator<string> {
+    if (!this.genAI) this.aiUnavailable();
+
+    // Hạn mức khởi động ngay, chờ chung với đệm và đính chính ở dưới.
+    const quota = this.assertAiQuota(userId);
+    const standalone = await this.rewriter.rewrite(question, history ?? []);
+    const { text: safe, hits } = redactPii(standalone);
+    if (hits.length > 0) {
+      this.logger.log(
+        `Đã che PII trước khi gọi AI: ${hits
+          .map((h) => `${h.kind}x${h.count}`)
+          .join(', ')}`,
+      );
+    }
+
+    // Ba việc này không phụ thuộc nhau. Chạy nối tiếp thì mỗi lượt gọi cơ sở
+    // dữ liệu lại cộng thêm độ trễ vào đúng lúc người dùng nhìn màn hình
+    // trống; gộp lại còn đúng một lượt.
+    //
+    // Hạn mức vẫn chặn được: `await` ở đây là trước khi gọi Gemini.
+    const [, cachedRaw, fixes] = await Promise.all([
+      quota,
+      this.cache.get('ITINERARY_PLAN', tripId, safe),
+      this.corrections.promptBlock(safe),
+    ]);
+    // Đệm: có sẵn thì nhả ra ngay một cục, người dùng thấy tức thì.
+    const cached = cachedRaw as { text?: string } | null;
+    if (cached?.text) {
+      yield cached.text;
+      return;
+    }
+    const recent = (history ?? []).slice(-6);
+    const transcript = recent
+      .map((t) => `${t.role === 'user' ? 'Người dùng' : 'Matey'}: ${t.content}`)
+      .join('\n');
+
+    const prompt = [
+      'Bạn là Matey — trợ lý du lịch của TripMate, nói tiếng Việt, thân mật,',
+      'ngắn gọn, đi thẳng vào việc. Trả lời bằng văn bản thường (được dùng',
+      'gạch đầu dòng). Không bịa địa chỉ hay giá vé mà bạn không chắc.',
+      fixes,
+      transcript ? wrapUntrusted('history', transcript) : '',
+      wrapUntrusted('question', safe),
+      'Chỉ trả lời câu hỏi trong khối untrusted_question ở trên.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    let full = '';
+    try {
+      const model = this.genAI.getGenerativeModel({
+        model: GEMINI_MODEL,
+        // Gemini 3.x mặc định "suy nghĩ" trước khi nói: đo được 4,7s trôi qua
+        // rồi mới có chữ đầu tiên. Với bong bóng chat thì chữ hiện sớm đáng
+        // giá hơn nhiều so với chút ít chất lượng — tắt còn 1,3s. Các đường
+        // JSON có cấu trúc (lập lịch trình) vẫn giữ suy nghĩ.
+        //
+        // `thinkingConfig` chưa có trong kiểu của @google/generative-ai
+        // 0.24.1 nhưng máy chủ đã nhận (đã đo). Bỏ ép kiểu khi SDK cập nhật.
+        generationConfig: {
+          thinkingConfig: { thinkingBudget: 0 },
+        } as unknown as GenerationConfig,
+      });
+      const res = await model.generateContentStream(prompt);
+      for await (const chunk of res.stream) {
+        const piece = chunk.text();
+        if (!piece) continue;
+        full += piece;
+        yield piece;
+      }
+    } catch (error) {
+      this.logger.error('Lỗi gọi Gemini (stream):', error);
+      // Đã nhả được chữ rồi thì đừng ném lỗi đè lên: người dùng đang đọc dở.
+      if (full) return;
+      this.aiUnavailable();
+    }
+
+    if (full.trim()) {
+      await this.cache.set('ITINERARY_PLAN', tripId, safe, { text: full });
+      await this.recordAiUsage(userId, 'ITINERARY_PLAN', tripId, safe, {
+        streamed: true,
+        length: full.length,
+      });
+    }
   }
 
 }

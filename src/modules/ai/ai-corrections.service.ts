@@ -20,7 +20,36 @@ export class AiCorrectionsService {
   /** Chèn tối đa ngần này dòng để prompt không phình ra vô hạn. */
   private static readonly MAX_INJECTED = 5;
 
+  /**
+   * Bảng đính chính rất nhỏ và hiếm khi đổi, nhưng trước đây mỗi tin nhắn
+   * lại nạp 200 dòng — một vòng gọi cơ sở dữ liệu nằm chắn ngay trước lúc
+   * người dùng nhìn màn hình trống. Giữ tạm trong bộ nhớ 60 giây.
+   */
+  private snapshot: Array<{ subject: string; correction: string }> = [];
+  private snapshotAt = 0;
+  private static readonly SNAPSHOT_MS = 60_000;
+
   constructor(private readonly prisma: PrismaService) {}
+
+  /** Xoá bản nhớ tạm để đính chính vừa duyệt có hiệu lực ngay. */
+  private invalidate(): void {
+    this.snapshotAt = 0;
+  }
+
+  private async approvedRows() {
+    if (Date.now() - this.snapshotAt < AiCorrectionsService.SNAPSHOT_MS) {
+      return this.snapshot;
+    }
+    const rows = await this.prisma.aiCorrection.findMany({
+      where: { isApproved: true },
+      orderBy: { approvedAt: 'desc' },
+      take: 200,
+      select: { subject: true, correction: true },
+    });
+    this.snapshot = rows;
+    this.snapshotAt = Date.now();
+    return rows;
+  }
 
   async submit(userId: string, subject: string, correction: string) {
     return this.prisma.aiCorrection.create({
@@ -36,10 +65,12 @@ export class AiCorrectionsService {
   async approve(id: string, approved: boolean) {
     const row = await this.prisma.aiCorrection.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Không tìm thấy đính chính');
-    return this.prisma.aiCorrection.update({
+    const out = await this.prisma.aiCorrection.update({
       where: { id },
       data: { isApproved: approved, approvedAt: approved ? new Date() : null },
     });
+    this.invalidate();
+    return out;
   }
 
   async listPending(limit = 50) {
@@ -61,11 +92,7 @@ export class AiCorrectionsService {
     const hay = (prompt ?? '').toLowerCase();
     if (!hay) return [];
     try {
-      const rows = await this.prisma.aiCorrection.findMany({
-        where: { isApproved: true },
-        orderBy: { approvedAt: 'desc' },
-        take: 200,
-      });
+      const rows = await this.approvedRows();
       return rows
         .filter((r) => hay.includes(r.subject.toLowerCase()))
         .slice(0, AiCorrectionsService.MAX_INJECTED)
