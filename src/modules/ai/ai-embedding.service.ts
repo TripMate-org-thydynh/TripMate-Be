@@ -1,0 +1,291 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { PrismaService } from '../../prisma/prisma.service';
+
+/** Một đoạn văn bản khớp với câu hỏi, kèm mẫu chứa nó. */
+export interface RagHit {
+  source: 'TEMPLATE' | 'TEMPLATE_STOP';
+  templateId: string;
+  templateTitle: string;
+  content: string;
+  /** 0..1, càng cao càng giống. */
+  score: number;
+}
+
+/**
+ * Tìm kiếm theo NGHĨA trên kho mẫu lịch trình cộng đồng.
+ *
+ * Người dùng hỏi "quán cà phê yên tĩnh để ngồi đọc sách". Không quán nào tự
+ * mô tả bằng đúng mấy chữ đó, nên tìm theo từ khoá trả về rỗng. Vectơ hiểu
+ * được ý, nên vẫn ra "Quán của Thời Thanh Xuân — không gian tĩnh lặng".
+ *
+ * Chọn 768 chiều (rút gọn Matryoshka từ 3072 mặc định) vì chỉ mục HNSW của
+ * pgvector chỉ nhận tới 2000 chiều. Rút gọn kiểu này là cách chính thức, chất
+ * lượng giảm rất ít ở quy mô vài nghìn tài liệu.
+ */
+@Injectable()
+export class AiEmbeddingService {
+  private readonly logger = new Logger(AiEmbeddingService.name);
+  private readonly apiKey: string | undefined;
+
+  private static readonly MODEL = 'gemini-embedding-001';
+  private static readonly DIM = 768;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    config: ConfigService,
+  ) {
+    this.apiKey =
+      config.get<string>('GEMINI_API_KEY') || process.env.GEMINI_API_KEY;
+  }
+
+  /**
+   * Nhúng một đoạn văn bản thành vectơ.
+   *
+   * `taskType` khác nhau cho tài liệu và câu hỏi là có chủ ý: model nhúng hai
+   * bên vào cùng không gian nhưng tối ưu riêng cho vai trò của mỗi bên, bỏ
+   * qua thì chất lượng truy hồi kém đi rõ rệt.
+   */
+  async embed(
+    text: string,
+    taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY',
+  ): Promise<number[] | null> {
+    if (!this.apiKey || !text.trim()) return null;
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${AiEmbeddingService.MODEL}:embedContent?key=${this.apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: { parts: [{ text: text.slice(0, 8000) }] },
+            outputDimensionality: AiEmbeddingService.DIM,
+            taskType,
+          }),
+        },
+      );
+      const json = (await res.json()) as {
+        embedding?: { values?: number[] };
+        error?: { message?: string };
+      };
+      if (json.error) {
+        this.logger.warn(`Nhúng vectơ lỗi: ${json.error.message}`);
+        return null;
+      }
+      return json.embedding?.values ?? null;
+    } catch (e) {
+      this.logger.warn(`Nhúng vectơ lỗi: ${(e as Error).message}`);
+      return null;
+    }
+  }
+
+  /** Ghi một đoạn kèm vectơ. Prisma không có kiểu vector nên phải dùng SQL thô. */
+  private async upsertRow(
+    source: 'TEMPLATE' | 'TEMPLATE_STOP',
+    sourceId: string,
+    templateId: string,
+    content: string,
+    vec: number[],
+  ): Promise<void> {
+    const literal = `[${vec.join(',')}]`;
+    await this.prisma.$executeRawUnsafe(
+      `INSERT INTO ai_embeddings (id, source, source_id, template_id, content, embedding, updated_at)
+       VALUES (gen_random_uuid(), $1::"EmbeddingSource", $2::uuid, $3::uuid, $4, $5::vector, NOW())
+       ON CONFLICT (source, source_id)
+       DO UPDATE SET content = EXCLUDED.content,
+                     embedding = EXCLUDED.embedding,
+                     template_id = EXCLUDED.template_id,
+                     updated_at = NOW()`,
+      source,
+      sourceId,
+      templateId,
+      content,
+      literal,
+    );
+  }
+
+  /**
+   * Đánh chỉ mục lại toàn bộ mẫu công khai.
+   *
+   * Mỗi mẫu cho một đoạn tổng quan, mỗi điểm dừng một đoạn riêng. Chia nhỏ tới
+   * mức điểm dừng là có chủ ý: câu hỏi của người dùng thường nhắm vào **một
+   * chỗ cụ thể**, gộp cả mẫu thành một đoạn thì tín hiệu của quán cà phê nhỏ
+   * bị chìm giữa mười mấy địa điểm khác.
+   *
+   * Trả về số đoạn đã ghi.
+   */
+  async reindexTemplates(): Promise<{ indexed: number; skipped: number }> {
+    const templates = await this.prisma.itineraryTemplate.findMany({
+      where: { isPublic: true, deletedAt: null },
+      include: { items: true },
+    });
+
+    let indexed = 0;
+    let skipped = 0;
+
+    for (const t of templates) {
+      const overview = [
+        t.title,
+        t.destination ?? '',
+        t.description ?? '',
+        t.tags.join(', '),
+      ]
+        .filter(Boolean)
+        .join('. ');
+      const vec = await this.embed(overview, 'RETRIEVAL_DOCUMENT');
+      if (vec) {
+        await this.upsertRow('TEMPLATE', t.id, t.id, overview, vec);
+        indexed++;
+      } else {
+        skipped++;
+      }
+
+      for (const it of t.items) {
+        const chunk = [
+          it.placeName,
+          it.placeAddress ?? '',
+          it.notes ?? '',
+          it.category ?? '',
+          `(trong lịch trình "${t.title}"${t.destination ? ` ở ${t.destination}` : ''})`,
+        ]
+          .filter(Boolean)
+          .join('. ');
+        const v = await this.embed(chunk, 'RETRIEVAL_DOCUMENT');
+        if (v) {
+          await this.upsertRow('TEMPLATE_STOP', it.id, t.id, chunk, v);
+          indexed++;
+        } else {
+          skipped++;
+        }
+      }
+    }
+    this.logger.log(`Đánh chỉ mục xong: ${indexed} đoạn, bỏ qua ${skipped}`);
+    return { indexed, skipped };
+  }
+
+  /**
+   * Đánh chỉ mục một mẫu. Dùng khi vừa xuất bản, khỏi phải quét lại cả kho.
+   *
+   * Mẫu riêng tư thì gỡ khỏi chỉ mục thay vì ghi vào: tìm kiếm chỉ trả về mẫu
+   * công khai, để sót lại là rò nội dung riêng của người khác.
+   */
+  async indexTemplate(templateId: string): Promise<number> {
+    const t = await this.prisma.itineraryTemplate.findUnique({
+      where: { id: templateId },
+      include: { items: true },
+    });
+    if (!t || !t.isPublic || t.deletedAt) {
+      await this.removeTemplate(templateId);
+      return 0;
+    }
+
+    let n = 0;
+    const overview = [
+      t.title,
+      t.destination ?? '',
+      t.description ?? '',
+      t.tags.join(', '),
+    ]
+      .filter(Boolean)
+      .join('. ');
+    const vec = await this.embed(overview, 'RETRIEVAL_DOCUMENT');
+    if (vec) {
+      await this.upsertRow('TEMPLATE', t.id, t.id, overview, vec);
+      n++;
+    }
+    for (const it of t.items) {
+      const chunk = [
+        it.placeName,
+        it.placeAddress ?? '',
+        it.notes ?? '',
+        it.category ?? '',
+        `(trong lịch trình "${t.title}"${t.destination ? ` ở ${t.destination}` : ''})`,
+      ]
+        .filter(Boolean)
+        .join('. ');
+      const v = await this.embed(chunk, 'RETRIEVAL_DOCUMENT');
+      if (v) {
+        await this.upsertRow('TEMPLATE_STOP', it.id, t.id, chunk, v);
+        n++;
+      }
+    }
+    return n;
+  }
+
+  /** Xoá chỉ mục của một mẫu (khi mẫu bị gỡ hoặc sửa). */
+  async removeTemplate(templateId: string): Promise<void> {
+    await this.prisma.$executeRawUnsafe(
+      'DELETE FROM ai_embeddings WHERE template_id = $1::uuid',
+      templateId,
+    );
+  }
+
+  /**
+   * Các đoạn gần nghĩa nhất với [query].
+   *
+   * `minScore` lọc bỏ kết quả gần như không liên quan. Không có ngưỡng thì
+   * câu hỏi nào cũng trả về k đoạn — kể cả khi kho chẳng có gì hợp — và model
+   * sẽ bám vào chúng mà bịa.
+   *
+   * Ngưỡng 0.63 là **đo ra chứ không đoán**. Điểm cosine của model này dồn
+   * cụm rất hẹp nên trực giác "0.5 là một nửa giống nhau" sai hoàn toàn:
+   *
+   * | Câu hỏi                               | Điểm cao nhất |
+   * |---------------------------------------|---------------|
+   * | "thác nước có máng trượt" (đúng)      | 0.729         |
+   * | "chỗ yên tĩnh ngồi đọc sách" (đúng)   | 0.668         |
+   * | "tỷ giá đô la hôm nay" (lạc đề)       | 0.569         |
+   * | "cài máy in HP trên Windows" (lạc đề) | 0.488         |
+   *
+   * Ngưỡng 0.45 ban đầu cho lọt cả câu hỏi tỷ giá. Khoảng cách giữa đúng và
+   * lạc đề chỉ 0.1, nên đo lại mỗi khi đổi model nhúng.
+   */
+  async search(query: string, k = 5, minScore = 0.63): Promise<RagHit[]> {
+    const vec = await this.embed(query, 'RETRIEVAL_QUERY');
+    if (!vec) return [];
+    const literal = `[${vec.join(',')}]`;
+    try {
+      const rows = await this.prisma.$queryRawUnsafe<
+        Array<{
+          source: 'TEMPLATE' | 'TEMPLATE_STOP';
+          template_id: string;
+          title: string;
+          content: string;
+          distance: number;
+        }>
+      >(
+        `SELECT e.source, e.template_id, t.title,
+                e.content, (e.embedding <=> $1::vector) AS distance
+           FROM ai_embeddings e
+           JOIN itinerary_templates t ON t.id = e.template_id
+          WHERE e.embedding IS NOT NULL
+            AND t.deleted_at IS NULL
+            AND t.is_public = true
+          ORDER BY e.embedding <=> $1::vector
+          LIMIT $2`,
+        literal,
+        k,
+      );
+      return rows
+        // `<=>` là khoảng cách cosine (0 = trùng khớp), đổi sang điểm giống nhau.
+        .map((r) => ({
+          source: r.source,
+          templateId: r.template_id,
+          templateTitle: r.title,
+          content: r.content,
+          score: 1 - Number(r.distance),
+        }))
+        .filter((h) => h.score >= minScore);
+    } catch (e) {
+      this.logger.warn(`Tìm theo nghĩa lỗi: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  async count(): Promise<number> {
+    const r = await this.prisma.$queryRawUnsafe<Array<{ n: bigint }>>(
+      'SELECT COUNT(*)::bigint AS n FROM ai_embeddings',
+    );
+    return Number(r[0]?.n ?? 0);
+  }
+}

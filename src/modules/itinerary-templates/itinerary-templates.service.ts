@@ -11,6 +11,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TripsService } from '../trips/trips.service';
 import { AiService } from '../ai/ai.service';
+import { AiEmbeddingService } from '../ai/ai-embedding.service';
 import { ItinerariesService } from '../itineraries/itineraries.service';
 import {
   RateTemplateDto,
@@ -32,6 +33,7 @@ export class ItineraryTemplatesService {
     private readonly trips: TripsService,
     @Inject(CACHE_MANAGER) private readonly cache: Cache,
     private readonly ai: AiService,
+    private readonly embeddings: AiEmbeddingService,
     private readonly itineraries: ItinerariesService,
   ) {}
 
@@ -108,7 +110,7 @@ export class ItineraryTemplatesService {
     }
 
     const days = new Set(trip.itineraries.map((i) => i.day));
-    return this.prisma.itineraryTemplate.create({
+    const created = await this.prisma.itineraryTemplate.create({
       data: {
         authorId: userId,
         sourceTripId: trip.id,
@@ -137,6 +139,13 @@ export class ItineraryTemplatesService {
       },
       include: { author: AUTHOR_SELECT },
     });
+
+    // Đánh chỉ mục ngay để mẫu vừa xuất bản tìm được bằng ngôn ngữ tự nhiên.
+    // Không chờ: nhúng vectơ mất vài giây, bắt người xuất bản đợi là vô lý.
+    void this.embeddings
+      .indexTemplate(created.id)
+      .catch(() => undefined);
+    return created;
   }
 
   /** Mẫu công khai để khám phá. */
@@ -218,6 +227,8 @@ export class ItineraryTemplatesService {
       where: { id },
       data: { deletedAt: new Date() },
     });
+    // Gỡ khỏi chỉ mục, nếu không mẫu đã xoá vẫn hiện trong kết quả tìm kiếm.
+    await this.embeddings.removeTemplate(id).catch(() => undefined);
     return { success: true };
   }
 

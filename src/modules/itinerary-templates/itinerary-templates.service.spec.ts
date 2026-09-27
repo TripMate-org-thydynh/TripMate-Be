@@ -46,6 +46,7 @@ describe('ItineraryTemplatesService', () => {
   let cache: any;
   let ai: any;
   let itins: any;
+  let embeddings: any;
   let svc: ItineraryTemplatesService;
 
   beforeEach(() => {
@@ -76,7 +77,19 @@ describe('ItineraryTemplatesService', () => {
     cache = { del: jest.fn() };
     ai = { customizeItinerary: jest.fn() };
     itins = { geocodeMissing: jest.fn().mockResolvedValue({}) };
-    svc = new ItineraryTemplatesService(prisma, trips, cache, ai, itins);
+    // Đánh chỉ mục vectơ chạy ngầm sau khi xuất bản; test không cần mạng.
+    embeddings = {
+      indexTemplate: jest.fn().mockResolvedValue(0),
+      removeTemplate: jest.fn().mockResolvedValue(undefined),
+    };
+    svc = new ItineraryTemplatesService(
+      prisma,
+      trips,
+      cache,
+      ai,
+      embeddings,
+      itins,
+    );
   });
 
   describe('publish', () => {

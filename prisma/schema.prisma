@@ -1526,3 +1526,36 @@ model AiCorrection {
   @@index([isApproved])
   @@map("ai_corrections")
 }
+
+/// Nguồn của một đoạn văn bản đã nhúng vectơ.
+enum EmbeddingSource {
+  /// Cả mẫu lịch trình: tiêu đề + mô tả + điểm đến + thẻ.
+  TEMPLATE
+  /// Một điểm dừng trong mẫu: tên quán, địa chỉ, ghi chú.
+  TEMPLATE_STOP
+}
+
+/// Tìm kiếm theo NGHĨA cho kho mẫu cộng đồng.
+///
+/// Người dùng hỏi "quán cà phê yên tĩnh để ngồi đọc sách" — tìm theo từ khoá
+/// thất bại hoàn toàn vì không quán nào tự mô tả bằng đúng mấy chữ đó. Vectơ
+/// 768 chiều (rút gọn từ gemini-embedding-001) hiểu được ý.
+///
+/// Cột `embedding` là kiểu `vector` của pgvector, Prisma không có kiểu tương
+/// ứng nên đọc/ghi bằng SQL thô. 768 chứ không phải 3072 mặc định vì HNSW
+/// chỉ đánh chỉ mục được tới 2000 chiều.
+model AiEmbedding {
+  id         String                      @id @default(uuid()) @db.Uuid
+  source     EmbeddingSource
+  /// Khoá của bản ghi gốc (template.id hoặc templateItem.id).
+  sourceId   String                      @map("source_id") @db.Uuid
+  /// Mẫu chứa đoạn này — để trả kết quả về đúng mẫu.
+  templateId String                      @map("template_id") @db.Uuid
+  content    String
+  embedding  Unsupported("vector(768)")?
+  updatedAt  DateTime                    @updatedAt @map("updated_at")
+
+  @@unique([source, sourceId])
+  @@index([templateId])
+  @@map("ai_embeddings")
+}

@@ -4,6 +4,7 @@ import { AiController } from './ai.controller';
 import { AiService } from './ai.service';
 import { GeocodingService } from '../itineraries/geocoding.service';
 import { AiCacheService } from './ai-cache.service';
+import { AiEmbeddingService } from './ai-embedding.service';
 import { AiCorrectionsService } from './ai-corrections.service';
 import { AiQueryRewriterService } from './ai-query-rewriter.service';
 
@@ -21,7 +22,9 @@ import { AiQueryRewriterService } from './ai-query-rewriter.service';
     AiCacheService,
     AiCorrectionsService,
     AiQueryRewriterService,
+    // Tìm kiếm theo nghĩa (pgvector) trên kho mẫu cộng đồng.
+    AiEmbeddingService,
   ],
-  exports: [AiService, AiCacheService, AiCorrectionsService],
+  exports: [AiService, AiCacheService, AiCorrectionsService, AiEmbeddingService],
 })
 export class AiModule {}

@@ -6,6 +6,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -17,6 +18,7 @@ import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AdminGuard } from '../../common/guards/admin.guard';
 import { AiCorrectionsService } from './ai-corrections.service';
+import { AiEmbeddingService } from './ai-embedding.service';
 import { SubmitCorrectionDto } from './dto/correction.dto';
 @ApiTags('AI')
 @UseGuards(JwtAuthGuard)
@@ -26,6 +28,7 @@ export class AiController {
   constructor(
     private readonly aiService: AiService,
     private readonly corrections: AiCorrectionsService,
+    private readonly embeddings: AiEmbeddingService,
   ) {}
 
   /**
@@ -76,6 +79,21 @@ export class AiController {
     } finally {
       res.end();
     }
+  }
+
+  @Get('search')
+  @ApiOperation({
+    summary: 'Tìm mẫu/điểm dừng theo NGHĨA (pgvector), không phải từ khoá',
+  })
+  semanticSearch(@Query('q') q: string) {
+    return this.embeddings.search(q ?? '', 8);
+  }
+
+  @Post('reindex')
+  @UseGuards(AdminGuard)
+  @ApiOperation({ summary: 'Đánh chỉ mục lại kho mẫu công khai (admin)' })
+  reindex() {
+    return this.embeddings.reindexTemplates();
   }
 
   @Post('corrections')
