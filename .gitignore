@@ -61,3 +61,7 @@ tm_skip.png
 .env.bak*
 .env.*.bak
 __pycache__/
+
+# Khoá service account Firebase — tuyệt đối không commit.
+*firebase-adminsdk*.json
+firebase-service-account*.json

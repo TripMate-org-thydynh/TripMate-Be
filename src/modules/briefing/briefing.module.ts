@@ -13,6 +13,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { AdminGuard } from '../../common/guards/admin.guard';
 import { ItinerariesModule } from '../itineraries/itineraries.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { BriefingService } from './briefing.service';
 
 @ApiTags('Briefing')
@@ -37,12 +38,16 @@ export class BriefingController {
   @UseGuards(JwtAuthGuard, AdminGuard)
   @ApiOperation({ summary: 'Admin: gửi bản tin sáng ngay (không trùng)' })
   async sendNow() {
-    return { sent: await this.briefing.sendAll() };
+    const r = await this.briefing.sendAllDetailed();
+    return {
+      sent: r.created,
+      push: { enabled: r.pushEnabled, delivered: r.pushDelivered },
+    };
   }
 }
 
 @Module({
-  imports: [ItinerariesModule],
+  imports: [ItinerariesModule, NotificationsModule],
   controllers: [BriefingController],
   providers: [BriefingService],
 })

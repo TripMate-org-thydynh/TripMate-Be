@@ -1,7 +1,19 @@
 import type { User } from '@prisma/client';
-import { Controller, Get, Param, Patch, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
+import { PushService } from './push.service';
+import { RegisterDeviceDto } from './dto/register-device.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 @ApiTags('Notifications')
@@ -9,7 +21,27 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 @ApiBearerAuth('JWT')
 @Controller('notifications')
 export class NotificationsController {
-  constructor(private readonly notificationsService: NotificationsService) {}
+  constructor(
+    private readonly notificationsService: NotificationsService,
+    private readonly push: PushService,
+  ) {}
+
+  @Post('devices')
+  @HttpCode(204)
+  @ApiOperation({ summary: 'Ghi token FCM của máy để nhận thông báo đẩy' })
+  async registerDevice(
+    @CurrentUser() user: User,
+    @Body() dto: RegisterDeviceDto,
+  ) {
+    await this.push.registerToken(user.id, dto.token, dto.platform);
+  }
+
+  @Delete('devices/:token')
+  @HttpCode(204)
+  @ApiOperation({ summary: 'Gỡ token khi đăng xuất' })
+  async removeDevice(@CurrentUser() user: User, @Param('token') token: string) {
+    await this.push.removeToken(user.id, token);
+  }
 
   @Get()
   @ApiOperation({ summary: 'Lấy danh sách thông báo' })

@@ -52,6 +52,7 @@ model User {
   momentReactions    MomentReaction[]
   moments            Moment[]
   notifications      Notification[]
+  deviceTokens       DeviceToken[]
   paymentCards       PaymentCard[]
   paymentsReceived   PaymentTransaction[]      @relation("PaymentReceiver")
   paymentsSent       PaymentTransaction[]      @relation("PaymentSender")
@@ -805,6 +806,21 @@ model Notification {
   @@index([userId, isRead])
   @@index([userId, createdAt])
   @@map("notifications")
+}
+
+/// Token FCM của từng máy. Một người có thể có nhiều máy; một token chỉ thuộc
+/// về một người (đăng nhập tài khoản khác trên cùng máy thì token đổi chủ).
+model DeviceToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  token     String   @unique
+  platform  String   @default("android")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("device_tokens")
 }
 
 model GameSession {

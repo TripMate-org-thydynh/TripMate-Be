@@ -5,10 +5,14 @@ import {
 } from '@nestjs/common';
 import { NotificationType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PushService } from './push.service';
 
 @Injectable()
 export class NotificationsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private push: PushService,
+  ) {}
 
   async create(data: {
     userId: string;
@@ -60,7 +64,11 @@ export class NotificationsService {
   }
 
   /**
-   * Giả lập / Dispatch FCM Push Notification tới thiết bị di động
+   * Lưu thông báo trong app rồi đẩy lên điện thoại qua FCM.
+   *
+   * Trả kết quả đẩy THẬT: `push.enabled = false` nghĩa là chưa cấu hình
+   * Firebase và không có gì rời khỏi server. Bản cũ in "[FCM Push] Sent" rồi
+   * trả `success: true` dù chẳng gửi đi đâu.
    */
   async sendPushNotification(payload: {
     userId: string;
@@ -69,7 +77,6 @@ export class NotificationsService {
     type?: NotificationType;
     data?: Record<string, any>;
   }) {
-    // 1) Lưu notification vào DB
     const notif = await this.create({
       userId: payload.userId,
       type: payload.type ?? 'TRIP_UPDATE',
@@ -77,15 +84,12 @@ export class NotificationsService {
       body: payload.body,
       data: payload.data,
     });
-
-    // 2) Log FCM Payload Dispatch
-    console.log(`[FCM Push] Sent to user ${payload.userId}:`, {
+    const push = await this.push.sendToUsers([payload.userId], {
       title: payload.title,
       body: payload.body,
-      data: payload.data,
+      data: { ...payload.data, notificationId: notif.id },
     });
-
-    return { success: true, notification: notif };
+    return { notification: notif, push };
   }
 
   /**

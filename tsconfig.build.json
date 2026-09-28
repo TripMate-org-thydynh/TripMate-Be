@@ -1,12 +1,13 @@
 {
   "extends": "./tsconfig.json",
-  "comment": "scratch/ và prisma/seed.ts nằm ngoài src/ — nếu để lọt vào build, rootDir bị đẩy lên gốc repo và output thành dist/src/main.js thay vì dist/main.js, làm `npm run start:prod` (node dist/main) fail.",
+  "comment": "scratch/, prisma/seed.ts và scripts/ nằm ngoài src/ — nếu để lọt vào build, rootDir bị đẩy lên gốc repo và output thành dist/src/main.js thay vì dist/main.js, làm `npm run start:prod` (node dist/main) fail. scripts/travel_kb/ingest.ts từng lọt vào đúng kiểu này: máy dev lặng lẽ chạy dist/main.js cũ, còn bản clone mới thì không khởi động được.",
   "exclude": [
     "node_modules",
     "test",
     "dist",
     "scratch",
     "prisma",
+    "scripts",
     "**/*spec.ts"
   ]
 }

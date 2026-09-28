@@ -6,6 +6,7 @@ import { BriefingService, todayVN } from './briefing.service';
 describe('BriefingService', () => {
   let prisma: any;
   let weather: any;
+  let push: any;
   let svc: BriefingService;
 
   beforeEach(() => {
@@ -60,7 +61,13 @@ describe('BriefingService', () => {
         alerts: [{ itemId: 'i1', day: 2, rainProbability: 70 }],
       }),
     };
-    svc = new BriefingService(prisma, weather);
+    push = {
+      enabled: true,
+      sendToUsers: jest
+        .fn()
+        .mockResolvedValue({ enabled: true, attempted: 2, delivered: 2 }),
+    };
+    svc = new BriefingService(prisma, weather, push);
   });
 
   it('tính đúng ngày thứ mấy + ghép thời tiết, điểm, việc, người phụ trách', async () => {
@@ -82,6 +89,35 @@ describe('BriefingService', () => {
     prisma.notification.findFirst.mockResolvedValue({ id: 'x' });
     expect(await svc.sendAll('2026-09-22')).toBe(0);
     expect(prisma.notification.create).not.toHaveBeenCalled();
+    // Cron chạy lại không được làm điện thoại rung thêm lần nữa.
+    expect(push.sendToUsers).not.toHaveBeenCalled();
+  });
+
+  it('đẩy lên máy đúng những người vừa có bản tin, gộp một lần mỗi chuyến', async () => {
+    const r = await svc.sendAllDetailed('2026-09-22');
+    expect(push.sendToUsers).toHaveBeenCalledTimes(1);
+    const [users, msg] = push.sendToUsers.mock.calls[0];
+    expect(users).toHaveLength(2);
+    expect(msg.data.kind).toBe('MORNING_BRIEF');
+    expect(r).toEqual({ created: 2, pushEnabled: true, pushDelivered: 2 });
+  });
+
+  it('chưa cấu hình Firebase thì vẫn tạo thông báo trong app và nói thật là không đẩy', async () => {
+    push.enabled = false;
+    push.sendToUsers.mockResolvedValue({
+      enabled: false,
+      attempted: 0,
+      delivered: 0,
+    });
+    const r = await svc.sendAllDetailed('2026-09-22');
+    expect(r.created).toBe(2);
+    expect(r.pushEnabled).toBe(false);
+    expect(r.pushDelivered).toBe(0);
+  });
+
+  it('đẩy lỗi không làm mất thông báo trong app', async () => {
+    push.sendToUsers.mockRejectedValue(new Error('fcm down'));
+    expect(await svc.sendAll('2026-09-22')).toBe(2);
   });
 
   it('thời tiết lỗi vẫn gửi được bản tin', async () => {

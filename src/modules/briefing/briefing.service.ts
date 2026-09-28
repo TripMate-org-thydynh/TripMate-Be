@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ItineraryWeatherService } from '../itineraries/itinerary-weather.service';
+import { PushService } from '../notifications/push.service';
 
 export interface MorningBrief {
   tripId: string;
@@ -51,6 +52,7 @@ export class BriefingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly weather: ItineraryWeatherService,
+    private readonly push: PushService,
   ) {}
 
   async buildForTrip(tripId: string, date = todayVN()): Promise<MorningBrief> {
@@ -137,12 +139,25 @@ export class BriefingService {
   /** 7:00 sáng giờ Việt Nam mỗi ngày. */
   @Cron('0 7 * * *', { name: 'morning-brief', timeZone: 'Asia/Ho_Chi_Minh' })
   async sendMorningBriefs() {
-    const sent = await this.sendAll();
-    this.logger.log(`Ban tin sang: da gui ${sent} thong bao`);
+    const r = await this.sendAllDetailed();
+    // Tách hai con số: tạo thông báo trong app KHÁC với đánh thức được máy.
+    this.logger.log(
+      r.pushEnabled
+        ? `Ban tin sang: ${r.created} thong bao trong app, day len ${r.pushDelivered} may`
+        : `Ban tin sang: ${r.created} thong bao trong app (chua cau hinh Firebase, khong day len may)`,
+    );
   }
 
   /** Gửi bản tin cho mọi chuyến đang diễn ra hôm nay. Trả số thông báo đã tạo. */
   async sendAll(date = todayVN()): Promise<number> {
+    return (await this.sendAllDetailed(date)).created;
+  }
+
+  async sendAllDetailed(date = todayVN()): Promise<{
+    created: number;
+    pushEnabled: boolean;
+    pushDelivered: number;
+  }> {
     const day = new Date(`${date}T00:00:00Z`);
     const trips = await this.prisma.trip.findMany({
       where: {
@@ -154,9 +169,12 @@ export class BriefingService {
     });
 
     let sent = 0;
+    const pushEnabled = this.push.enabled;
+    let pushDelivered = 0;
     for (const t of trips) {
       try {
         const brief = await this.buildForTrip(t.id, date);
+        const fresh: string[] = [];
         for (const m of t.members) {
           if (await this.alreadySent(m.userId, t.id, date)) continue;
           await this.prisma.notification.create({
@@ -175,12 +193,35 @@ export class BriefingService {
             },
           });
           sent++;
+          fresh.push(m.userId);
+        }
+        // Chỉ đẩy cho người vừa có bản tin mới: chạy lại cron không làm
+        // điện thoại rung thêm lần nữa.
+        if (fresh.length) {
+          try {
+            const r = await this.push.sendToUsers(fresh, {
+              title: `Ngày ${brief.day} · ${brief.tripName}`,
+              body: brief.summary,
+              data: {
+                kind: 'MORNING_BRIEF',
+                tripId: t.id,
+                date,
+                day: brief.day,
+              },
+            });
+            pushDelivered += r.delivered;
+          } catch (e) {
+            // Thông báo trong app đã tạo xong; chỉ phần đánh thức máy hỏng.
+            this.logger.warn(
+              `Day ban tin chuyen ${t.id} loi (van co trong app): ${(e as Error).message}`,
+            );
+          }
         }
       } catch (e) {
         this.logger.warn(`Ban tin chuyen ${t.id} loi: ${(e as Error).message}`);
       }
     }
-    return sent;
+    return { created: sent, pushEnabled, pushDelivered };
   }
 
   private async alreadySent(userId: string, tripId: string, date: string) {
