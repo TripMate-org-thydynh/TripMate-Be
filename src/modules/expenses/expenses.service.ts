@@ -56,6 +56,13 @@ export class ExpensesService {
     });
 
     const memberIds = new Set(members.map((m) => m.userId));
+    // Người trả cũng phải trong chuyến: số dư chỉ cộng tiền cho thành viên, nên
+    // khoản do "người ngoài" trả làm cả nhóm nợ một khoản không ai nhận.
+    if (!memberIds.has(dto.paidById)) {
+      throw new BadRequestException(
+        `User ${dto.paidById} is not a member of this trip`,
+      );
+    }
     const totalAmount = new Decimal(dto.amount);
     let splits: Array<{ userId: string; shareAmount: Decimal }>;
 

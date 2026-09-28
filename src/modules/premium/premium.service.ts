@@ -1603,13 +1603,12 @@ export class PremiumService {
         : null;
     if (existingOrder) {
       if (existingOrder.userId === order.userId) {
-        this.logger.log(`IPN trùng, giao dịch đã được xử lý thành công trước đó: ${provider}/${externalId}`);
-        if (order.status === 'PENDING') {
-          await this.prisma.paymentOrder.update({
-            where: { orderId: order.orderId },
-            data: { status: 'SUCCESS', externalId, paidAt: new Date() },
-          });
-        }
+        // Giao dịch này đã trả cho đơn KHÁC (đơn hiện tại còn PENDING, nên
+        // không phải cùng đơn gọi lại). Không đánh đơn này thành SUCCESS: nó
+        // chưa nhận đồng nào, đánh vào là hoá đơn báo "đã trả" mà không có gói.
+        this.logger.warn(
+          `Mã giao dịch ${provider}/${externalId} đã dùng cho đơn ${existingOrder.orderId} — giữ đơn ${order.orderId} ở PENDING`,
+        );
         return;
       }
       this.logger.error(
@@ -1631,11 +1630,11 @@ export class PremiumService {
       // Cùng người dùng: đây là lần gọi lại của chính giao dịch đó, đóng đơn
       // và thôi.
       if (existing.userId === order.userId) {
-        this.logger.log(`IPN trùng, bỏ qua: ${provider}/${externalId}`);
-        await this.prisma.paymentOrder.update({
-          where: { orderId: order.orderId },
-          data: { status: 'SUCCESS', externalId, paidAt: new Date() },
-        });
+        // Như trên: giao dịch đã cấp gói cho một đơn khác, đơn này chưa nhận
+        // tiền nên để nguyên PENDING.
+        this.logger.warn(
+          `Mã giao dịch ${provider}/${externalId} đã cấp gói trước đó — giữ đơn ${order.orderId} ở PENDING`,
+        );
         return;
       }
       // Khác người dùng: mã giao dịch của cổng lẽ ra là duy nhất toàn hệ

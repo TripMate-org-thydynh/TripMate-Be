@@ -47,7 +47,13 @@ async function login() {
 async function main() {
   const { token, userId } = await login();
   console.log('SePay E2E Test - Running for user:', userId);
+  // Bắt đầu từ bản Free: lần chạy trước để lại gói SQUAD thì bước "lên PLUS"
+  // không bao giờ thấy PLUS (entitlement trả gói cao nhất).
+  await prisma.squadSeat.deleteMany({ where: { subscription: { userId } } });
+  await prisma.subscription.deleteMany({ where: { userId } });
 
+  // Mã giao dịch SePay phải khác nhau giữa các lần chạy: server nhớ mã đã dùng.
+  const RUN = Date.now() * 10;
   const SEPAY_TOKEN = process.env.SEPAY_WEBHOOK_TOKEN || 'MY_SEPAY_SECRET_0406';
 
   console.log('\n--- 1. Khởi tạo thanh toán VietQR (SePay) ---');
@@ -64,24 +70,23 @@ async function main() {
   check('Có qrUrl SePay', typeof checkoutData?.qrUrl === 'string' && checkoutData.qrUrl.includes('qr.sepay.vn/img'));
   check('Có vietqrUrl chuẩn VietQR.app', typeof checkoutData?.vietqrUrl === 'string' && checkoutData.vietqrUrl.includes('vietqr.app/img'));
   check('Có payUrl SePay Gateway', typeof checkoutData?.payUrl === 'string' && checkoutData.payUrl.includes('qr.sepay.vn/gateway'));
-  check('Có bankInfo với đúng số tài khoản 0949064234 & tên CHAU THANH TRUNG',
-    Boolean(checkoutData?.bankInfo?.accountNumber === '0949064234' &&
-            checkoutData?.bankInfo?.accountName === 'CHAU THANH TRUNG' &&
+  // Tài khoản nhận lấy từ cấu hình server, không còn giá trị mặc định cứng.
+  check('bankInfo khớp tài khoản cấu hình trong SEPAY_ACCOUNT_*',
+    Boolean(checkoutData?.bankInfo?.accountNumber === process.env.SEPAY_ACCOUNT_NUMBER &&
+            checkoutData?.bankInfo?.accountName === process.env.SEPAY_ACCOUNT_NAME &&
             checkoutData?.bankInfo?.transferContent === checkoutData?.orderCode));
 
   const orderCode1 = checkoutData?.orderCode;
 
   // Kiểm tra PaymentTransaction trong DB
-  const pendingTx = await prisma.paymentTransaction.findFirst({
-    where: { transactionId: orderCode1, provider: 'BANK_TRANSFER' },
-  });
-  check('Đã lưu giao dịch PENDING trong bảng PaymentTransaction', pendingTx?.status === 'PENDING');
+  const pendingTx = await prisma.paymentOrder.findUnique({ where: { orderId: orderCode1 } });
+  check('Đã lưu đơn PENDING trong bảng PaymentOrder', pendingTx?.status === 'PENDING');
 
   console.log('\n--- 2. Webhook SePay: Từ chối khi sai Token ---');
   const badAuthRes = await call('POST', '/payment/sepay/webhook', {
     headers: { authorization: 'Apikey wrong_secret_token' },
     body: {
-      id: 999001,
+      id: RUN + 1,
       gateway: 'MBBank',
       code: orderCode1,
       transferType: 'in',
@@ -94,7 +99,7 @@ async function main() {
   const underpaidRes = await call('POST', '/payment/sepay/webhook', {
     headers: { authorization: `Apikey ${SEPAY_TOKEN}` },
     body: {
-      id: 999002,
+      id: RUN + 2,
       gateway: 'MBBank',
       code: orderCode1,
       transferType: 'in',
@@ -102,10 +107,10 @@ async function main() {
     },
   });
   check('Webhook từ chối khi thiếu tiền', underpaidRes.data?.success === false);
-  const failedTx = await prisma.paymentTransaction.findFirst({
-    where: { transactionId: orderCode1, provider: 'BANK_TRANSFER' },
-  });
-  check('Giao dịch chuyển thiếu tiền chuyển thành FAILED', failedTx?.status === 'FAILED');
+  const failedTx = await prisma.paymentOrder.findUnique({ where: { orderId: orderCode1 } });
+  // Chuyển khoản thiếu được giữ PENDING có chủ đích: chuyển bù đúng số vẫn
+  // hoàn tất được chính đơn đó (xem `fulfill`, allowOverpay).
+  check('Chuyển thiếu tiền: đơn giữ PENDING, không cấp gói', failedTx?.status === 'PENDING');
 
   console.log('\n--- 4. Webhook SePay: Kích hoạt thành công gói PLUS ---');
   // Tạo đơn mới để thanh toán thành công
@@ -115,14 +120,14 @@ async function main() {
   });
   const orderCode2 = checkoutRes2.data?.orderCode;
 
-  const sepayTxId = 999003;
+  const sepayTxId = RUN + 3;
   const validWebhookRes = await call('POST', '/payment/sepay/webhook', {
     headers: { authorization: `Apikey ${SEPAY_TOKEN}` },
     body: {
       id: sepayTxId,
       gateway: 'MBBank',
       transactionDate: '2026-09-07 12:15:00',
-      accountNumber: '0949064234',
+      accountNumber: process.env.SEPAY_ACCOUNT_NUMBER,
       code: orderCode2,
       content: `Thanh toan don hang ${orderCode2} tai tripmate`,
       transferType: 'in',
@@ -133,10 +138,8 @@ async function main() {
 
   check('Webhook trả về success: true', validWebhookRes.data?.success === true);
 
-  const successTx = await prisma.paymentTransaction.findFirst({
-    where: { transactionId: orderCode2, provider: 'BANK_TRANSFER' },
-  });
-  check('PaymentTransaction cập nhật trạng thái SUCCESS', successTx?.status === 'SUCCESS');
+  const successTx = await prisma.paymentOrder.findUnique({ where: { orderId: orderCode2 } });
+  check('PaymentOrder cập nhật trạng thái SUCCESS', successTx?.status === 'SUCCESS');
 
   // Kiểm tra quyền sở hữu gói
   const entRes = await call('GET', '/premium/entitlement', { token });
@@ -166,9 +169,9 @@ async function main() {
     body: { plan: 'SQUAD', months: 1, paymentMethod: 'SEPAY' },
   });
   const orderCodeSquad = checkoutSquad.data?.orderCode;
-  check('Tạo đơn SQUAD thành công', checkoutSquad.data?.amount === 10000);
+  check('Tạo đơn SQUAD thành công 99.000đ', checkoutSquad.data?.amount === 99000);
 
-  const sepayTxSquad = 999004;
+  const sepayTxSquad = RUN + 4;
   const contentOnlyRes = await call('POST', '/payment/sepay/webhook', {
     headers: { authorization: `Apikey ${SEPAY_TOKEN}` },
     body: {
@@ -177,7 +180,7 @@ async function main() {
       code: null, // SePay không parse sẵn code
       content: `MBVCB.789123. ${orderCodeSquad} NGUYEN VAN A CHUYEN TIEN`,
       transferType: 'in',
-      transferAmount: 10000,
+      transferAmount: 99000,
       referenceCode: 'FT260907999888',
     },
   });
@@ -186,11 +189,23 @@ async function main() {
   const entSquad = await call('GET', '/premium/entitlement', { token });
   check('Cấp thành công gói SQUAD từ webhook content regex', entSquad.data?.plan === 'SQUAD');
 
+  // Phát lại mã giao dịch đã dùng cho một đơn MỚI: đơn mới không được báo "đã trả".
+  const replayOrder = await call('POST', '/premium/checkout', {
+    token,
+    body: { plan: 'PLUS', months: 1, paymentMethod: 'SEPAY' },
+  });
+  await call('POST', '/payment/sepay/webhook', {
+    headers: { authorization: `Apikey ${SEPAY_TOKEN}` },
+    body: { id: sepayTxId, code: replayOrder.data?.orderCode, transferType: 'in', transferAmount: 39000 },
+  });
+  const replayRow = await prisma.paymentOrder.findUnique({ where: { orderId: replayOrder.data?.orderCode } });
+  check('Phát lại mã giao dịch cũ cho đơn mới: đơn mới vẫn PENDING', replayRow?.status === 'PENDING', replayRow?.status);
+
   console.log('\n--- 7. Bỏ qua giao dịch tiền ra (transferType: out) ---');
   const outRes = await call('POST', '/payment/sepay/webhook', {
     headers: { authorization: `Apikey ${SEPAY_TOKEN}` },
     body: {
-      id: 999005,
+      id: RUN + 5,
       transferType: 'out',
       transferAmount: 50000,
       content: 'Chuyen tien tra tien an',
@@ -209,7 +224,7 @@ async function main() {
   const apiKeyRes = await call('POST', '/payment/sepay/webhook', {
     headers: { 'x-api-key': SEPAY_TOKEN },
     body: {
-      id: 999006,
+      id: RUN + 6,
       code: codeApiKey,
       transferType: 'in',
       transferAmount: 39000,
@@ -227,7 +242,7 @@ async function main() {
   const bearerRes = await call('POST', '/payment/sepay/webhook', {
     headers: { authorization: `Bearer ${SEPAY_TOKEN}` },
     body: {
-      id: 999007,
+      id: RUN + 7,
       code: codeBearer,
       transferType: 'in',
       transferAmount: 39000,
@@ -240,12 +255,12 @@ async function main() {
     token,
     body: { plan: 'PLUS', months: 12, paymentMethod: 'SEPAY' },
   });
-  check('Tạo đơn gói năm PLUS thành công 299.000đ', checkoutYear.data?.amount === 299000);
+  check('Tạo đơn gói năm PLUS thành công 374.000đ (giảm 20%)', checkoutYear.data?.amount === 374000);
 
   console.log('\n--- 10. Kiểm tra Lịch sử thanh toán (Billing History) ---');
   const historyRes = await call('GET', '/premium/billing-history', { token });
   const hasSepayTx = historyRes.data?.history?.some(
-    (h) => h.method === 'BANK_TRANSFER' && h.status === 'SUCCESS',
+    (h) => h.method === 'SEPAY' && h.status === 'SUCCESS',
   );
   check('Lịch sử thanh toán ghi nhận giao dịch SePay SUCCESS', Boolean(hasSepayTx));
 

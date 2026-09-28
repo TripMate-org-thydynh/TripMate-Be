@@ -89,9 +89,23 @@ const ok = await call('POST', '/premium/referrals', {
 });
 check('Nhập mã hợp lệ thành công (không phân biệt hoa thường)', ok.data?.success === true, JSON.stringify(ok.json)?.slice(0, 100));
 
+// Người mời chỉ được thưởng khi người được mời làm việc thật (tạo/vào chuyến),
+// không phải ngay lúc nhập mã — chặn cày XP bằng tài khoản ảo.
+const aliceAfterCode = await xpOf(alice.id);
+check('Người MỜI chưa được thưởng chỉ vì nhập mã', aliceAfterCode === aliceBefore, `${aliceBefore} → ${aliceAfterCode}`);
+const tripStart = new Date(Date.now() + 864e5);
+await call('POST', '/trips', {
+  token: bob.token,
+  body: {
+    name: 'Chuyến đầu của Bob',
+    startDate: tripStart.toISOString(),
+    endDate: new Date(tripStart.getTime() + 864e5).toISOString(),
+    currency: 'VND',
+  },
+});
 const aliceAfter = await xpOf(alice.id);
 const bobAfter = await xpOf(bob.id);
-check('Người MỜI được cộng XP thật vào số dư', aliceAfter > aliceBefore, `${aliceBefore} → ${aliceAfter}`);
+check('Người MỜI được cộng XP thật sau khi người được mời tạo chuyến', aliceAfter > aliceBefore, `${aliceBefore} → ${aliceAfter}`);
 check('Người ĐƯỢC MỜI được cộng XP thật vào số dư', bobAfter > bobBefore, `${bobBefore} → ${bobAfter}`);
 
 const ledger = await prisma.xpLedger.findMany({

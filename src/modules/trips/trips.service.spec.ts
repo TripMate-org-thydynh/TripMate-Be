@@ -37,6 +37,8 @@ describe('TripsService', () => {
         create: jest.fn(),
         delete: jest.fn(),
       },
+      // Chạy callback trên chính mock này: code trong transaction dùng `tx`.
+      $transaction: jest.fn((fn: (tx: unknown) => unknown) => fn(prisma)),
     };
 
     // Mặc định cho qua hạn mức: các test ở đây kiểm hành vi tạo/sửa chuyến,
@@ -44,6 +46,7 @@ describe('TripsService', () => {
     entitlements = {
       assertWithin: jest.fn().mockResolvedValue(undefined),
       assertTripWithin: jest.fn().mockResolvedValue(undefined),
+      joinGuard: jest.fn().mockResolvedValue(async () => undefined),
     };
 
     referrals = {

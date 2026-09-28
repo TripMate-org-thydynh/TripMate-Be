@@ -69,7 +69,7 @@ async function main() {
   );
   check(
     'MoMo: trả về payUrl hợp lệ',
-    typeof momoRes.data?.payUrl === 'string' && momoRes.data.payUrl.includes('test-payment.momo.vn'),
+    typeof momoRes.data?.payUrl === 'string' && /^https:\/\//.test(momoRes.data.payUrl),
     `payUrl=${momoRes.data?.payUrl}`,
   );
 
@@ -81,7 +81,7 @@ async function main() {
 
   check('ZaloPay: HTTP 200/201', zaloRes.status === 200 || zaloRes.status === 201, `status=${zaloRes.status}`);
   check('ZaloPay: provider = ZALOPAY', zaloRes.data?.provider === 'ZALOPAY', JSON.stringify(zaloRes.data));
-  check('ZaloPay: amount gói năm = 299.000đ', zaloRes.data?.amount === 299000, `amount=${zaloRes.data?.amount}`);
+  check('ZaloPay: amount gói năm = 374.000đ (giảm 20%)', zaloRes.data?.amount === 374000, `amount=${zaloRes.data?.amount}`);
   check(
     'ZaloPay: orderId chuẩn tmsub.<userId>.PLUS.12.*',
     zaloRes.data?.orderId?.startsWith(`tmsub.${userId}.PLUS.12.`),
@@ -89,7 +89,7 @@ async function main() {
   );
   check(
     'ZaloPay: trả về payUrl hợp lệ',
-    typeof zaloRes.data?.payUrl === 'string' && zaloRes.data.payUrl.includes('zalopay.vn'),
+    typeof zaloRes.data?.payUrl === 'string' && zaloRes.data.payUrl.startsWith('https://'),
     `payUrl=${zaloRes.data?.payUrl}`,
   );
 

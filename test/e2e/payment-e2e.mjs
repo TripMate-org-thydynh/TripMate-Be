@@ -22,8 +22,11 @@ const check = (n, ok, d='') => { ok ? pass++ : fail++; console.log(`  ${ok?'PASS
 const reg = await (await fetch(B+'/auth/register-password',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'pay_'+s,password:'matkhau123',confirmPassword:'matkhau123'})})).json();
 const h = { authorization: 'Bearer '+reg.data.token, 'content-type':'application/json' };
 
-const pl = (await (await fetch(B+'/premium/plans',{headers:h})).json()).data;
-check('Bảng giá liệt kê cổng đã cấu hình', pl.gateways.includes('MOMO'), JSON.stringify(pl.gateways));
+// Ví chỉ được bày ở bản phát hành ngoài CH Play; bản Play chỉ thấy Play Billing.
+const pl = (await (await fetch(B+'/premium/plans',{headers:{...h,'x-client-channel':'direct'}})).json()).data;
+check('Bảng giá (kênh direct) liệt kê cổng đã cấu hình', pl.gateways.includes('MOMO'), JSON.stringify(pl.gateways));
+const plPlay = (await (await fetch(B+'/premium/plans',{headers:h})).json()).data;
+check('Kênh CH Play (mặc định) KHÔNG bày ví MoMo', !plPlay.gateways.includes('MOMO'), JSON.stringify(plPlay.gateways));
 
 const o = (await (await fetch(B+'/premium/orders',{method:'POST',headers:h,body:JSON.stringify({plan:'SQUAD',months:12,provider:'MOMO'})})).json()).data;
 check('Tạo đơn qua cổng, nhận payUrl', !!o?.payUrl, JSON.stringify(o)?.slice(0,120));

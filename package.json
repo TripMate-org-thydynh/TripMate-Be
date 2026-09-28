@@ -27,7 +27,8 @@
     "test:gating": "node test/e2e/gating-e2e.mjs",
     "test:trial": "node test/e2e/trial-e2e.mjs",
     "seed:promo": "ts-node prisma/seed-promo-codes.ts",
-    "test:referral": "node test/e2e/referral-promo-e2e.mjs"
+    "test:referral": "node test/e2e/referral-promo-e2e.mjs",
+    "test:concurrency": "node test/e2e/concurrency-security-e2e.mjs"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

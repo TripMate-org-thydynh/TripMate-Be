@@ -192,6 +192,56 @@ export class EntitlementService {
   }
 
   /**
+   * Chốt hạn mức khi một người vào chuyến — gọi BÊN TRONG transaction ghi
+   * thành viên.
+   *
+   * Đếm rồi mới ghi ở hai bước rời nhau thì 15 người bấm cùng lúc đều đếm thấy
+   * "1 < 8" và cùng lọt vào. Khoá dòng user và dòng chuyến (`FOR UPDATE`) trước
+   * khi đếm để các lượt vào cùng chuyến xếp hàng. Luôn khoá user trước rồi mới
+   * tới chuyến để hai giao dịch không khoá chéo nhau.
+   */
+  ///
+  /// Gói cước của người vào và của chủ chuyến được đọc TRƯỚC khi mở
+  /// transaction: đọc bằng kết nối khác trong lúc đang giữ khoá thì mười mấy
+  /// lượt vào cùng lúc chiếm hết pool, chờ khoá của nhau và cùng hết giờ.
+  async joinGuard(
+    tripId: string,
+    userId: string,
+  ): Promise<(tx: Prisma.TransactionClient) => Promise<void>> {
+    const trip = await this.prisma.trip.findUnique({
+      where: { id: tripId },
+      select: { createdBy: true },
+    });
+    const joiner = await this.of(userId);
+    const owner = trip ? await this.of(trip.createdBy) : joiner;
+
+    return async (tx) => {
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
+      await tx.$queryRaw`SELECT id FROM trips WHERE id = ${tripId}::uuid FOR UPDATE`;
+
+      const activeTrips = await tx.tripMember.count({
+        where: { userId, trip: { deletedAt: null } },
+      });
+      this.assertLimit(joiner, 'activeTrips', activeTrips);
+
+      const members = await tx.tripMember.count({ where: { tripId } });
+      this.assertLimit(owner, 'membersPerTrip', members);
+    };
+  }
+
+  private assertLimit(ent: Entitlement, quota: Quota, current: number) {
+    const limit = ent.limits[quota];
+    if (current < limit) return;
+    throw new ForbiddenException({
+      code: 'QUOTA_EXCEEDED',
+      quota,
+      limit,
+      current,
+      plan: ent.plan,
+    });
+  }
+
+  /**
    * Cấp hoặc gia hạn gói sau khi thanh toán thành công.
    *
    * Gia hạn cộng dồn từ **thời điểm còn hạn**, không phải từ hôm nay: trả sớm
@@ -205,7 +255,13 @@ export class EntitlementService {
     userId: string;
     plan: Exclude<Plan, 'FREE'>;
     months: number;
-    provider: PaymentProvider | 'MOMO' | 'ZALOPAY' | 'BANK_TRANSFER' | 'CASH' | 'VNPAY';
+    provider:
+      | PaymentProvider
+      | 'MOMO'
+      | 'ZALOPAY'
+      | 'BANK_TRANSFER'
+      | 'CASH'
+      | 'VNPAY';
     externalId?: string;
     tx?: Prisma.TransactionClient;
   }) {

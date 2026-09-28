@@ -66,8 +66,16 @@ async function main() {
 
   console.log('user:', user.id);
 
+  // Webhook chỉ cấp gói cho đơn server đã ghi từ trước (chống tự dựng mã đơn),
+  // nên phải có đơn PENDING thật như khi app gọi POST /premium/orders.
+  const newOrder = (id, plan, amount, provider) =>
+    prisma.paymentOrder.create({
+      data: { orderId: id, userId: user.id, plan, months: 1, amount, baseAmount: amount, provider },
+    });
+
   console.log('\n— Momo: sai chữ ký —');
   const orderId = `tmsub.${user.id}.PLUS.1.${Date.now()}`;
+  await newOrder(orderId, 'PLUS', 39000, 'MOMO');
   const basePayload = {
     partnerCode: 'MOMO',
     orderId,
@@ -121,12 +129,13 @@ async function main() {
   }
 
   console.log('\n— ZaloPay: sai chữ ký —');
+  const zaloOrderId = `tmsub.${user.id}.SQUAD.1.${Date.now()}`;
+  await newOrder(zaloOrderId, 'SQUAD', 99000, 'ZALOPAY');
   const zaloData = JSON.stringify({
     app_trans_id: 'zp-' + Date.now(),
     zp_trans_id: 'zptx-' + Date.now(),
-    embed_data: JSON.stringify({
-      orderId: `tmsub.${user.id}.SQUAD.1.${Date.now()}`,
-    }),
+    amount: 99000,
+    embed_data: JSON.stringify({ orderId: zaloOrderId }),
   });
   const zForged = await post('/payment/zalopay/ipn', {
     data: zaloData,
@@ -148,7 +157,9 @@ async function main() {
     console.log('  BỎ QUA  ca chữ ký đúng — chưa cấu hình ZALOPAY_KEY2');
   }
 
+  await prisma.squadSeat.deleteMany({ where: { subscription: { userId: user.id } } });
   await prisma.subscription.deleteMany({ where: { userId: user.id } });
+  await prisma.paymentOrder.deleteMany({ where: { orderId: { in: [orderId, zaloOrderId] } } });
   console.log(`\nKết quả: ${pass} pass, ${fail} fail`);
   await prisma.$disconnect();
   process.exit(fail === 0 ? 0 : 1);

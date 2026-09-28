@@ -51,6 +51,12 @@ export class PrismaClientExceptionFilter implements ExceptionFilter {
           ? i18n.t('errors.database.invalidRelation')
           : 'Invalid relation';
         break;
+      // ID trên URL không phải UUID (`/trips/abc`, chuỗi dò SQL...): lỗi của
+      // request, không phải của server.
+      case 'P2023':
+        status = HttpStatus.BAD_REQUEST;
+        message = 'Invalid ID format';
+        break;
     }
 
     response.status(status).json({

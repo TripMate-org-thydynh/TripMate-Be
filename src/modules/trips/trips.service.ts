@@ -144,12 +144,6 @@ export class TripsService {
     });
     if (existing) throw new ConflictException('errors.trips.alreadyMember');
 
-    // Hạn mức chuyến đang hoạt động của người tham gia.
-    const activeTrips = await this.prisma.tripMember.count({
-      where: { userId, trip: { deletedAt: null } },
-    });
-    await this.entitlements.assertWithin(userId, 'activeTrips', activeTrips);
-
     // Hạn mức số thành viên của chuyến.
     //
     // `membersPerTrip` được khai báo trong `FREE_LIMITS`/`PAID_LIMITS` từ đầu
@@ -157,19 +151,23 @@ export class TripsService {
     // người trả tiền thực tế chỉ nhận được đúng một thứ.
     //
     // Chặn ở đây chứ không ở lúc tạo lời mời: lời mời có thể nằm im nhiều
-    // ngày, số thành viên chỉ thật sự tăng ở giây phút này.
-    const members = await this.prisma.tripMember.count({
-      where: { tripId: trip.id },
-    });
-    await this.entitlements.assertTripWithin(
-      trip.id,
-      'membersPerTrip',
-      members,
+    // ngày, số thành viên chỉ thật sự tăng ở giây phút này. Đếm và ghi nằm
+    // chung một transaction có khoá — xem `joinGuard`.
+    const guard = await this.entitlements.joinGuard(trip.id, userId);
+    await this.prisma.$transaction(
+      async (tx) => {
+        await guard(tx);
+        const already = await tx.tripMember.findUnique({
+          where: { tripId_userId: { tripId: trip.id, userId } },
+        });
+        if (already) throw new ConflictException('errors.trips.alreadyMember');
+        await tx.tripMember.create({
+          data: { tripId: trip.id, userId, role: 'MEMBER' },
+        });
+        // Các lượt vào cùng chuyến xếp hàng sau khoá, nên cho chờ lâu hơn mặc định 5s.
+      },
+      { maxWait: 10000, timeout: 20000 },
     );
-
-    await this.prisma.tripMember.create({
-      data: { tripId: trip.id, userId, role: 'MEMBER' },
-    });
 
     await this.referrals.settleReferralReward(userId);
 

@@ -103,56 +103,54 @@ export class InvitesService {
     });
     if (existing) throw new BadRequestException('Already a trip member');
 
-    // Hạn mức chuyến đang hoạt động của người tham gia.
-    const activeTrips = await this.prisma.tripMember.count({
-      where: { userId, trip: { deletedAt: null } },
-    });
-    await this.entitlements.assertWithin(userId, 'activeTrips', activeTrips);
-
-    // Hạn mức số thành viên — cùng chốt chặn như `TripsService.join()`.
-    //
-    // Đây là đường vào chuyến thứ hai. Chặn một đường mà bỏ đường kia thì hạn
-    // mức chỉ là gợi ý: ai cũng lách được bằng cách dùng link mời thay vì mã.
-    const members = await this.prisma.tripMember.count({
-      where: { tripId: invite.tripId },
-    });
-    await this.entitlements.assertTripWithin(
-      invite.tripId,
-      'membersPerTrip',
-      members,
-    );
+    // Hạn mức (chuyến đang hoạt động, thành viên/chuyến) được chốt bên trong
+    // transaction dưới đây — xem `joinGuard`.
+    const guard = await this.entitlements.joinGuard(invite.tripId, userId);
 
     // Add member & increment use count
-    await this.prisma.$transaction(async (tx) => {
-      const claimed = await tx.tripInvite.updateMany({
-        where: {
-          id: invite.id,
-          isActive: true,
-          ...(invite.maxUses !== null
-            ? { useCount: { lt: invite.maxUses } }
-            : {}),
-        },
-        data: { useCount: { increment: 1 } },
-      });
+    await this.prisma.$transaction(
+      async (tx) => {
+        await guard(tx);
 
-      if (claimed.count === 0) {
-        throw new BadRequestException('Invite link has reached max uses');
-      }
+        // Đọc lại sau khi đã khoá: hai lượt bấm cùng lúc của cùng một người đều
+        // qua được kiểm tra ở trên.
+        const already = await tx.tripMember.findUnique({
+          where: { tripId_userId: { tripId: invite.tripId, userId } },
+        });
+        if (already) throw new BadRequestException('Already a trip member');
 
-      if (invite.maxUses !== null) {
-        await tx.tripInvite.updateMany({
+        const claimed = await tx.tripInvite.updateMany({
           where: {
             id: invite.id,
-            useCount: { gte: invite.maxUses },
+            isActive: true,
+            ...(invite.maxUses !== null
+              ? { useCount: { lt: invite.maxUses } }
+              : {}),
           },
-          data: { isActive: false },
+          data: { useCount: { increment: 1 } },
         });
-      }
 
-      await tx.tripMember.create({
-        data: { tripId: invite.tripId, userId, role: 'MEMBER' },
-      });
-    });
+        if (claimed.count === 0) {
+          throw new BadRequestException('Invite link has reached max uses');
+        }
+
+        if (invite.maxUses !== null) {
+          await tx.tripInvite.updateMany({
+            where: {
+              id: invite.id,
+              useCount: { gte: invite.maxUses },
+            },
+            data: { isActive: false },
+          });
+        }
+
+        await tx.tripMember.create({
+          data: { tripId: invite.tripId, userId, role: 'MEMBER' },
+        });
+        // Các lượt vào cùng chuyến xếp hàng sau khoá, nên cho chờ lâu hơn mặc định 5s.
+      },
+      { maxWait: 10000, timeout: 20000 },
+    );
 
     return this.prisma.trip.findUnique({
       where: { id: invite.tripId },
