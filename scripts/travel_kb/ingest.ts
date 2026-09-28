@@ -1,7 +1,8 @@
 /**
  * Nạp địa điểm đã rút từ video KOL vào kho tri thức (bảng ai_embeddings).
  *
- * Đầu vào là JSONL do `deep_extract.py` ghi ra — mỗi dòng một địa điểm.
+ * Đầu vào là JSONL do `deep_extract.py` (video) hoặc `discover.py` (blog,
+ * trang web) ghi ra — mỗi dòng một địa điểm hoặc một lịch trình.
  * Dùng JSONL chứ không phải JSON để lần chạy bị chặn giữa chừng vẫn giữ
  * được phần đã làm.
  *
@@ -39,6 +40,9 @@ async function main(): Promise<void> {
       note: (r.note as string) ?? null,
       sourceUrl: String(r.sourceUrl ?? ''),
       sourceAuthor: (r.sourceAuthor as string) ?? null,
+      imageUrl: (r.imageUrl as string) ?? null,
+      totalBudgetHint: (r.totalBudgetHint as string) ?? null,
+      bestTime: (r.bestTime as string) ?? null,
     }))
     .filter((r) => r.name && r.sourceUrl);
 

@@ -43,7 +43,8 @@ function stableUuid(key: string): string {
     h.slice(0, 8),
     h.slice(8, 12),
     `5${h.slice(13, 16)}`,
-    ((parseInt(h.slice(16, 18), 16) & 0x3f) | 0x80).toString(16) + h.slice(18, 20),
+    ((parseInt(h.slice(16, 18), 16) & 0x3f) | 0x80).toString(16) +
+      h.slice(18, 20),
     h.slice(20, 32),
   ].join('-');
 }
@@ -59,6 +60,8 @@ export interface RagHit {
   /** Link nội dung gốc — có với địa điểm rút từ video KOL. */
   sourceUrl?: string | null;
   sourceAuthor?: string | null;
+  /** Link ảnh minh hoạ từ trang nguồn (không tải về). */
+  imageUrl?: string | null;
 }
 
 /** Một địa điểm rút ra từ video du lịch, đã kèm nguồn. */
@@ -77,6 +80,11 @@ export interface TravelInsight {
   note?: string | null;
   sourceUrl: string;
   sourceAuthor?: string | null;
+  /** Link ảnh minh hoạ lấy từ bài gốc — chỉ link, ảnh vẫn thuộc trang nguồn. */
+  imageUrl?: string | null;
+  /** Lịch trình rút từ blog: tổng chi phí và mùa nên đi. */
+  totalBudgetHint?: string | null;
+  bestTime?: string | null;
 }
 
 /**
@@ -155,17 +163,19 @@ export class AiEmbeddingService {
     vec: number[],
     sourceUrl: string | null = null,
     sourceAuthor: string | null = null,
+    imageUrl: string | null = null,
   ): Promise<void> {
     const literal = `[${vec.join(',')}]`;
     await this.prisma.$executeRawUnsafe(
-      `INSERT INTO ai_embeddings (id, source, source_id, template_id, content, embedding, source_url, source_author, updated_at)
-       VALUES (gen_random_uuid(), $1::"EmbeddingSource", $2::uuid, $3::uuid, $4, $5::vector, $6, $7, NOW())
+      `INSERT INTO ai_embeddings (id, source, source_id, template_id, content, embedding, source_url, source_author, image_url, updated_at)
+       VALUES (gen_random_uuid(), $1::"EmbeddingSource", $2::uuid, $3::uuid, $4, $5::vector, $6, $7, $8, NOW())
        ON CONFLICT (source, source_id)
        DO UPDATE SET content = EXCLUDED.content,
                      embedding = EXCLUDED.embedding,
                      template_id = EXCLUDED.template_id,
                      source_url = EXCLUDED.source_url,
                      source_author = EXCLUDED.source_author,
+                     image_url = EXCLUDED.image_url,
                      updated_at = NOW()`,
       source,
       sourceId,
@@ -174,6 +184,7 @@ export class AiEmbeddingService {
       literal,
       sourceUrl,
       sourceAuthor,
+      imageUrl,
     );
   }
 
@@ -195,6 +206,8 @@ export class AiEmbeddingService {
         r.note ?? '',
         r.priceHint ? `Giá tham khảo: ${r.priceHint}` : '',
         r.openHours ? `Giờ mở cửa: ${r.openHours}` : '',
+        r.totalBudgetHint ? `Tổng chi phí tham khảo: ${r.totalBudgetHint}` : '',
+        r.bestTime ? `Thời điểm nên đi: ${r.bestTime}` : '',
         (r.tips ?? []).length ? `Mẹo: ${(r.tips ?? []).join('; ')}` : '',
       ]
         .filter(Boolean)
@@ -225,12 +238,15 @@ export class AiEmbeddingService {
         vec,
         r.sourceUrl,
         r.sourceAuthor ?? null,
+        r.imageUrl ?? null,
       );
       n++;
     }
     this.logger.log(
       `Nạp ${n}/${rows.length} địa điểm từ video du lịch` +
-        (skipped ? ` (bỏ qua ${skipped} bản nghèo thông tin hơn bản đã có)` : ''),
+        (skipped
+          ? ` (bỏ qua ${skipped} bản nghèo thông tin hơn bản đã có)`
+          : ''),
     );
     return n;
   }
@@ -383,11 +399,12 @@ export class AiEmbeddingService {
           title: string | null;
           source_url: string | null;
           source_author: string | null;
+          image_url: string | null;
           content: string;
           distance: number;
         }>
       >(
-        `SELECT e.source, e.template_id, t.title, e.source_url, e.source_author,
+        `SELECT e.source, e.template_id, t.title, e.source_url, e.source_author, e.image_url,
                 e.content, (e.embedding <=> $1::vector) AS distance
            FROM ai_embeddings e
            LEFT JOIN itinerary_templates t ON t.id = e.template_id
@@ -402,18 +419,21 @@ export class AiEmbeddingService {
         literal,
         k,
       );
-      return rows
-        // `<=>` là khoảng cách cosine (0 = trùng khớp), đổi sang điểm giống nhau.
-        .map((r) => ({
-          source: r.source,
-          templateId: r.template_id,
-          templateTitle: r.title ?? (r.source_author ?? 'Video du lịch'),
-          content: r.content,
-          score: 1 - Number(r.distance),
-          sourceUrl: r.source_url,
-          sourceAuthor: r.source_author,
-        }))
-        .filter((h) => h.score >= minScore);
+      return (
+        rows
+          // `<=>` là khoảng cách cosine (0 = trùng khớp), đổi sang điểm giống nhau.
+          .map((r) => ({
+            source: r.source,
+            templateId: r.template_id,
+            templateTitle: r.title ?? r.source_author ?? 'Video du lịch',
+            content: r.content,
+            score: 1 - Number(r.distance),
+            sourceUrl: r.source_url,
+            sourceAuthor: r.source_author,
+            imageUrl: r.image_url,
+          }))
+          .filter((h) => h.score >= minScore)
+      );
     } catch (e) {
       this.logger.warn(`Tìm theo nghĩa lỗi: ${(e as Error).message}`);
       return [];

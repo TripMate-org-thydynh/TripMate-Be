@@ -7,6 +7,7 @@ import { AiCacheService } from './ai-cache.service';
 import { AiEmbeddingService } from './ai-embedding.service';
 import { AiCorrectionsService } from './ai-corrections.service';
 import { AiQueryRewriterService } from './ai-query-rewriter.service';
+import { WebResearchService } from './web-research.service';
 
 @Module({
   // PremiumModule cho EntitlementService: chặn khi vượt hạn mức AI/tháng.
@@ -24,6 +25,8 @@ import { AiQueryRewriterService } from './ai-query-rewriter.service';
     AiQueryRewriterService,
     // Tìm kiếm theo nghĩa (pgvector) trên kho mẫu cộng đồng.
     AiEmbeddingService,
+    // Tìm kiếm + crawl web để AI trả lời địa điểm bằng thông tin thật.
+    WebResearchService,
   ],
   exports: [AiService, AiCacheService, AiCorrectionsService, AiEmbeddingService],
 })

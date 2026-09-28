@@ -13,7 +13,8 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     region: singapore
-    plan: free
+    # Starter thay vì free: free ngủ sau 15 phút, IPN thanh toán có thể timeout.
+    plan: starter
     healthCheckPath: /api/v1/health
     envVars:
       - key: NODE_ENV

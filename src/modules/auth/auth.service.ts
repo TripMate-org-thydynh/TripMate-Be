@@ -1,4 +1,5 @@
 import {
+  ServiceUnavailableException,
   BadRequestException,
   ConflictException,
   Injectable,
@@ -243,10 +244,18 @@ export class AuthService {
     } else {
       // Send via Twilio SMS
       const message = `[TripMate] Ma OTP dang nhap cua ban la: ${code}. Ma nay co hieu luc trong 5 phut.`;
+      let sent = false;
       try {
-        await this.twilioService.sendSms(cleanedPhone, message);
+        sent = await this.twilioService.sendSms(cleanedPhone, message);
       } catch (err) {
         this.logger.error(`Twilio send SMS failed: ${err.message}`);
+      }
+      if (!sent) {
+        // Không để người dùng chờ một mã không bao giờ tới.
+        await this.cacheManager.del(cacheKey);
+        throw new ServiceUnavailableException(
+          'Không gửi được SMS lúc này, vui lòng đăng nhập bằng email hoặc Google.',
+        );
       }
     }
 

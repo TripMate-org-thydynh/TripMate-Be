@@ -1,3 +1,4 @@
+import { WebResearchService, type WebSource } from './web-research.service';
 import {
   BadRequestException,
   Injectable,
@@ -9,19 +10,13 @@ import { AIRequestType, AIStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EntitlementService } from '../premium/entitlement.service';
 import { ConfigService } from '@nestjs/config';
-import {
-  GenerationConfig,
-  GoogleGenerativeAI,
-} from '@google/generative-ai';
+import { GenerationConfig, GoogleGenerativeAI } from '@google/generative-ai';
 import * as exifr from 'exifr';
 import { redactPii, wrapUntrusted } from './ai-guard';
 import { AiCacheService } from './ai-cache.service';
 import { AiEmbeddingService } from './ai-embedding.service';
 import { AiCorrectionsService } from './ai-corrections.service';
-import {
-  AiQueryRewriterService,
-  ChatTurn,
-} from './ai-query-rewriter.service';
+import { AiQueryRewriterService, ChatTurn } from './ai-query-rewriter.service';
 import { readGps } from './exif-gps';
 import { GeocodingService } from '../itineraries/geocoding.service';
 
@@ -197,6 +192,7 @@ export class AiService {
     private corrections: AiCorrectionsService,
     private rewriter: AiQueryRewriterService,
     private embeddings: AiEmbeddingService,
+    private web: WebResearchService,
   ) {
     const apiKey =
       this.config.get<string>('GEMINI_API_KEY') || process.env.GEMINI_API_KEY;
@@ -1380,7 +1376,8 @@ Trả về JSON đúng dạng:
 
     const raw = (receiptUrlOrBase64 ?? '').trim();
     const m = /^data:(image\/[\w.+-]+);base64,(.+)$/s.exec(raw);
-    const looksBare = !raw.startsWith('data:') && /^[A-Za-z0-9+/=\s]+$/.test(raw);
+    const looksBare =
+      !raw.startsWith('data:') && /^[A-Za-z0-9+/=\s]+$/.test(raw);
     if (!m && !(looksBare && raw.length > 500)) {
       throw new BadRequestException(
         'Cần ảnh hoá đơn (base64 hoặc data:image/...), không nhận đường dẫn.',
@@ -1467,6 +1464,11 @@ Trả về JSON đúng dạng:
     // trống; gộp lại còn đúng một lượt.
     //
     // Hạn mức vẫn chặn được: `await` ở đây là trước khi gọi Gemini.
+    // Tìm kiếm internet (Google qua Gemini) + crawl vài trang đầu: địa chỉ,
+    // giờ mở cửa, giá vé lấy từ web thật thay vì để model tự nhớ (hay bịa).
+    // Khởi động ngay cho chạy song song; mất 5–11s nên chỉ CHỜ khi kho tri
+    // thức không có mục khớp tốt (xem dưới).
+    const webPending = this.web.research(safe, 3);
     const [, cachedRaw, fixes, docs] = await Promise.all([
       quota,
       this.cache.get('ITINERARY_PLAN', tripId, safe),
@@ -1481,6 +1483,15 @@ Trả về JSON đúng dạng:
       yield cached.text;
       return;
     }
+    // Kho đã có mục khớp tốt (blog đã crawl sẵn) thì không bắt người dùng
+    // chờ web; không thì chờ tối đa 12s rồi trả lời bằng những gì đang có.
+    const strongKb = (docs[0]?.score ?? 0) >= 0.72;
+    const webSources = strongKb
+      ? []
+      : await Promise.race([
+          webPending,
+          new Promise<WebSource[]>((r) => setTimeout(() => r([]), 12000)),
+        ]);
     const recent = (history ?? []).slice(-6);
     const transcript = recent
       .map((t) => `${t.role === 'user' ? 'Người dùng' : 'Matey'}: ${t.content}`)
@@ -1500,12 +1511,25 @@ Trả về JSON đúng dạng:
             docs
               .map(
                 (h) =>
-                  `[${h.templateTitle}] ${h.content} (độ khớp ${h.score.toFixed(2)})`,
+                  `[${h.templateTitle}] ${h.content} (độ khớp ${h.score.toFixed(2)})` +
+                  (h.sourceUrl ? ` Nguồn: ${h.sourceUrl}` : '') +
+                  (h.imageUrl ? ` Ảnh: ${h.imageUrl}` : ''),
               )
               .join('\n'),
           ) +
           '\nDùng thông tin trong khối trên nếu liên quan. Nếu không liên ' +
-          'quan thì bỏ qua, KHÔNG gượng ép nhét vào câu trả lời.'
+          'quan thì bỏ qua, KHÔNG gượng ép nhét vào câu trả lời. Mục nào ' +
+          'có "Nguồn:" mà bạn dùng thì ghi link nguồn ở cuối; mục có "Ảnh:" ' +
+          // App (MateyMessageBody) hiện ![tên](link) thành ảnh; tối đa 3 ảnh
+          // cho bong bóng khỏi dài dằng dặc.
+          'thì chèn ảnh trên một dòng riêng dạng ![tên địa điểm](link ảnh), ' +
+          'tối đa 3 ảnh. Link nguồn ghi dạng [tên trang](link). Không tự tạo link.'
+        : '',
+      webSources.length > 0
+        ? wrapUntrusted('web', WebResearchService.format(webSources)) +
+          '\nKhối trên là kết quả tìm kiếm internet vừa crawl về. Ưu tiên nó ' +
+          'cho thông tin địa điểm (địa chỉ, giờ mở cửa, giá). Khi dùng thì ' +
+          'ghi nguồn dạng [số] và liệt kê link ở cuối. Nguồn mâu thuẫn thì nói rõ.'
         : '',
       transcript ? wrapUntrusted('history', transcript) : '',
       wrapUntrusted('question', safe),
@@ -1551,5 +1575,4 @@ Trả về JSON đúng dạng:
       });
     }
   }
-
 }
