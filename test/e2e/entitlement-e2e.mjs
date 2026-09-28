@@ -61,6 +61,15 @@ async function main() {
   check('Free: via = none', free.data?.via === 'none');
   check('Free: hạn mức chuyến = 2', free.data?.limits?.activeTrips === 2);
 
+  // Tự lấp cho đủ hạn mức thay vì tin vào dữ liệu có sẵn trong database.
+  const active = await prisma.tripMember.count({ where: { userId, trip: { deletedAt: null } } });
+  for (let i = active; i < 2; i++) {
+    await call('POST', '/trips', {
+      token,
+      body: { name: `E2E chuyến lấp hạn mức ${i}`, startDate: '2026-10-01', endDate: '2026-10-03' },
+    });
+  }
+
   const blocked = await call('POST', '/trips', {
     token,
     body: { name: 'E2E vượt hạn mức', startDate: '2026-10-01', endDate: '2026-10-03' },

@@ -65,3 +65,6 @@ __pycache__/
 # Khoá service account Firebase — tuyệt đối không commit.
 *firebase-adminsdk*.json
 firebase-service-account*.json
+
+# Log của e2e
+test/e2e/.logs/

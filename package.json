@@ -28,7 +28,10 @@
     "test:trial": "node test/e2e/trial-e2e.mjs",
     "seed:promo": "ts-node prisma/seed-promo-codes.ts",
     "test:referral": "node test/e2e/referral-promo-e2e.mjs",
-    "test:concurrency": "node test/e2e/concurrency-security-e2e.mjs"
+    "test:concurrency": "node test/e2e/concurrency-security-e2e.mjs",
+    "test:db:up": "bash scripts/test-db-up.sh",
+    "test:db:down": "docker compose -f docker-compose.test.yml down",
+    "test:e2e:all": "bash scripts/run-e2e.sh"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
