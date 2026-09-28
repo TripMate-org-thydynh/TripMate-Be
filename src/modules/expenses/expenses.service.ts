@@ -55,6 +55,15 @@ export class ExpensesService {
       select: { userId: true },
     });
 
+    // Tiền Việt không có xu: chia 50.000 cho 3 người ra 16.666,67 thì mỗi dòng
+    // hiển thị 16.667 và cộng lại thành 50.001. Chia theo đồng chẵn, phần dư
+    // `absorbRemainder` dồn cho người trả.
+    const trip = await this.prisma.trip.findUnique({
+      where: { id: tripId },
+      select: { currency: true },
+    });
+    const dp = (trip?.currency ?? 'VND') === 'VND' ? 0 : 2;
+
     const memberIds = new Set(members.map((m) => m.userId));
     // Người trả cũng phải trong chuyến: số dư chỉ cộng tiền cho thành viên, nên
     // khoản do "người ngoài" trả làm cả nhóm nợ một khoản không ai nhận.
@@ -81,7 +90,9 @@ export class ExpensesService {
       if (payers.length === 0) {
         throw new BadRequestException('Cần ít nhất 1 người tham gia');
       }
-      const perPerson = totalAmount.div(payers.length).toDecimalPlaces(2);
+      const perPerson = totalAmount
+        .div(payers.length)
+        .toDecimalPlaces(dp, Decimal.ROUND_DOWN);
       splits = payers.map((userId) => ({
         userId,
         shareAmount: perPerson,
@@ -106,7 +117,10 @@ export class ExpensesService {
         }
         splits = dto.splits.map((s) => ({
           userId: s.userId,
-          shareAmount: totalAmount.mul(s.amount).div(100).toDecimalPlaces(2),
+          shareAmount: totalAmount
+            .mul(s.amount)
+            .div(100)
+            .toDecimalPlaces(dp, Decimal.ROUND_DOWN),
         }));
         absorbRemainder(splits, totalAmount, dto.paidById);
       } else {

@@ -31,6 +31,10 @@ describe('ExpensesService', () => {
   };
 
   const mockPrismaService = {
+    // Các ca cũ viết cho tiền có xu (2 chữ số lẻ); ca VND tự đổi currency.
+    trip: {
+      findUnique: jest.fn().mockResolvedValue({ currency: 'USD' }),
+    },
     tripMember: {
       findMany: jest.fn(),
     },
@@ -160,6 +164,37 @@ describe('ExpensesService', () => {
       // 300 chia 2 người tham gia, không phải 4 người của chuyến.
       expect(rows[0].shareAmount).toEqual(new Decimal(150));
       expect(rows[1].shareAmount).toEqual(new Decimal(150));
+    });
+
+    it('VND chia theo đồng chẵn, tổng khớp đúng số tiền', async () => {
+      mockPrismaService.trip.findUnique.mockResolvedValueOnce({
+        currency: 'VND',
+      });
+      mockPrismaService.tripMember.findMany.mockResolvedValue([
+        { userId: 'thi' },
+        { userId: 'hoang' },
+        { userId: 'huy' },
+      ]);
+      mockPrismaService.expense.create.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'exp-vnd', ...data }),
+      );
+
+      // Xoài 50.000 chia 3: trước đây ra 16.666,67 x3, hiển thị cộng thành 50.001.
+      await service.create('trip-1', {
+        amount: 50000,
+        paidById: 'hoang',
+        category: 'FOOD' as any,
+        splitType: 'EQUAL' as any,
+        participantIds: ['thi', 'hoang', 'huy'],
+      });
+
+      const rows =
+        mockPrismaService.expense.create.mock.calls.at(-1)[0].data.splits
+          .create;
+      const by = Object.fromEntries(
+        rows.map((r: any) => [r.userId, r.shareAmount.toString()]),
+      );
+      expect(by).toEqual({ thi: '16666', hoang: '16668', huy: '16666' });
     });
 
     it('phần lẻ dồn vào người trả, không phụ thuộc thứ tự bấm', async () => {
