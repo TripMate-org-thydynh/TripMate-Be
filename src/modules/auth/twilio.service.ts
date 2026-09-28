@@ -10,6 +10,11 @@ export class TwilioService {
     const fromNumber = process.env.TWILIO_PHONE_NUMBER;
 
     if (!accountSid || !authToken || !fromNumber) {
+      // Production: không giả lập — báo gửi thất bại và không ghi OTP ra log.
+      if (process.env.NODE_ENV === 'production') {
+        this.logger.error('Twilio chưa cấu hình, không gửi được SMS.');
+        return false;
+      }
       this.logger.warn(
         'Twilio credentials not fully configured. Twilio SMS sending will be mocked.',
       );

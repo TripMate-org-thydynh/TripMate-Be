@@ -13,6 +13,32 @@ import { ActivitiesService } from '../activities/activities.service';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { AiService } from '../ai/ai.service';
 
+/**
+ * Chia tiền hiếm khi ra số tròn: 1.000.000 chia 3 còn dư 0,01.
+ *
+ * Phần lẻ dồn vào **người trả tiền**, vì họ đang được cả nhóm hoàn lại —
+ * gánh thêm một xu là hợp lý nhất và không ai thiệt. Nếu người trả không
+ * nằm trong nhóm chia (kiểu "tôi mời cả bọn"), dồn vào người đầu danh sách.
+ *
+ * Trước đây luôn dồn vào `splits[0]`, tức phụ thuộc thứ tự bấm chip trên
+ * màn hình — cùng một khoản chi mà ai chịu phần lẻ lại khác nhau.
+ */
+function absorbRemainder(
+  splits: Array<{ userId: string; shareAmount: Decimal }>,
+  totalAmount: Decimal,
+  paidById: string,
+): void {
+  if (splits.length === 0) return;
+  const sumShares = splits.reduce(
+    (acc, s) => acc.add(s.shareAmount),
+    new Decimal(0),
+  );
+  const diff = totalAmount.sub(sumShares);
+  if (diff.isZero()) return;
+  const target = splits.find((s) => s.userId === paidById) ?? splits[0];
+  target.shareAmount = target.shareAmount.add(diff);
+}
+
 @Injectable()
 export class ExpensesService {
   constructor(
@@ -29,29 +55,41 @@ export class ExpensesService {
       select: { userId: true },
     });
 
+    const memberIds = new Set(members.map((m) => m.userId));
     const totalAmount = new Decimal(dto.amount);
     let splits: Array<{ userId: string; shareAmount: Decimal }>;
 
     if (dto.splitType === 'EQUAL') {
-      const perPerson = totalAmount.div(members.length).toDecimalPlaces(2);
-      splits = members.map((m) => ({
-        userId: m.userId,
+      // Nhiều hoạt động chỉ vài người tham gia (cáp treo, vé vào cổng...).
+      // Không truyền participantIds thì vẫn chia cho cả chuyến như trước.
+      const payers = dto.participantIds?.length
+        ? [...new Set(dto.participantIds)]
+        : members.map((m) => m.userId);
+      const outsider = payers.find((id) => !memberIds.has(id));
+      if (outsider) {
+        throw new BadRequestException(
+          `User ${outsider} is not a member of this trip`,
+        );
+      }
+      if (payers.length === 0) {
+        throw new BadRequestException('Cần ít nhất 1 người tham gia');
+      }
+      const perPerson = totalAmount.div(payers.length).toDecimalPlaces(2);
+      splits = payers.map((userId) => ({
+        userId,
         shareAmount: perPerson,
       }));
-      if (splits.length > 0) {
-        const sumShares = splits.reduce(
-          (acc, s) => acc.add(s.shareAmount),
-          new Decimal(0),
-        );
-        const diff = totalAmount.sub(sumShares);
-        if (!diff.isZero()) {
-          splits[0].shareAmount = splits[0].shareAmount.add(diff);
-        }
-      }
+      absorbRemainder(splits, totalAmount, dto.paidById);
     } else if (dto.splitType === 'EXACT' || dto.splitType === 'PERCENTAGE') {
       if (!dto.splits || dto.splits.length === 0) {
         throw new BadRequestException(
           'splits array is required for EXACT/PERCENTAGE splitType',
+        );
+      }
+      const stranger = dto.splits.find((x) => !memberIds.has(x.userId));
+      if (stranger) {
+        throw new BadRequestException(
+          `User ${stranger.userId} is not a member of this trip`,
         );
       }
       if (dto.splitType === 'PERCENTAGE') {
@@ -63,16 +101,7 @@ export class ExpensesService {
           userId: s.userId,
           shareAmount: totalAmount.mul(s.amount).div(100).toDecimalPlaces(2),
         }));
-        if (splits.length > 0) {
-          const sumShares = splits.reduce(
-            (acc, s) => acc.add(s.shareAmount),
-            new Decimal(0),
-          );
-          const diff = totalAmount.sub(sumShares);
-          if (!diff.isZero()) {
-            splits[0].shareAmount = splits[0].shareAmount.add(diff);
-          }
-        }
+        absorbRemainder(splits, totalAmount, dto.paidById);
       } else {
         splits = dto.splits.map((s) => ({
           userId: s.userId,
@@ -258,11 +287,16 @@ export class ExpensesService {
 
     for (const expense of expenses) {
       // payer gets credit
-      balances[expense.paidById] = balances[expense.paidById].add(
-        expense.amount,
-      );
+      // Người trả đã rời chuyến: bỏ qua, đừng tạo khoá lạ trong bảng số dư.
+      if (expense.paidById in balances) {
+        balances[expense.paidById] = balances[expense.paidById].add(
+          expense.amount,
+        );
+      }
       // each splitter owes their share
       for (const split of expense.splits) {
+        // Người đã rời chuyến vẫn còn dòng split cũ: bỏ qua thay vì sập.
+        if (!(split.userId in balances)) continue;
         balances[split.userId] = balances[split.userId].sub(split.shareAmount);
       }
     }
@@ -534,8 +568,8 @@ export class ExpensesService {
     return newCard;
   }
 
-  async scanReceipt(receiptUrl: string) {
-    return this.aiService.scanReceiptImage(receiptUrl);
+  async scanReceipt(userId: string, receiptUrl: string) {
+    return this.aiService.scanReceiptImage(userId, receiptUrl);
   }
 
   async getBudgetGoal(tripId: string) {

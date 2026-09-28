@@ -17,7 +17,7 @@ export class CreateTodoDto {
   priority?: string;
 
   @IsOptional()
-  @IsUUID()
+  @IsUUID('loose')
   assignedTo?: string;
 
   @IsOptional()

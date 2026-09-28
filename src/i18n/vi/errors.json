@@ -55,5 +55,12 @@
     "notConfigured": "Chức năng tải ảnh chưa được cấu hình. Báo admin giúp mình nha!",
     "typeNotAllowed": "Định dạng file này không được hỗ trợ.",
     "tooLarge": "File quá lớn. Thử ảnh nhẹ hơn nha!"
+  },
+  "templates": {
+    "notFound": "Không tìm thấy lịch trình mẫu",
+    "notAuthor": "Chỉ người đăng mới sửa được lịch trình mẫu này",
+    "emptyItinerary": "Chuyến chưa có điểm dừng nào để đăng thành mẫu",
+    "cannotRateOwn": "Không tự chấm điểm mẫu của mình",
+    "mustUseFirst": "Dùng mẫu này cho một chuyến trước rồi hãy chấm điểm"
   }
 }

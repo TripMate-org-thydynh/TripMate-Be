@@ -51,16 +51,22 @@ export class ChatService {
         type: data.type ?? 'TEXT',
         replyToId: data.replyToId,
       },
+      // Chỉ lấy thứ tin MỚI thật sự có. Mỗi `include` là một lượt truy vấn nữa
+      // tới database ở xa: tin vừa tạo chưa thể có reaction, và chỉ cần đọc tin
+      // được trả lời khi có trả lời.
       include: {
         sender: { select: { id: true, name: true, avatarUrl: true } },
-        replyTo: {
-          select: {
-            id: true,
-            content: true,
-            sender: { select: { id: true, name: true } },
-          },
-        },
-        reactions: { include: { user: { select: { id: true, name: true } } } },
+        ...(data.replyToId
+          ? {
+              replyTo: {
+                select: {
+                  id: true,
+                  content: true,
+                  sender: { select: { id: true, name: true } },
+                },
+              },
+            }
+          : {}),
       },
     });
   }

@@ -15,8 +15,8 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   // Tăng giới hạn body để nhận ảnh base64 (photo-location). Mặc định 100kb quá nhỏ.
-  app.use(json({ limit: '15mb' }));
-  app.use(urlencoded({ limit: '15mb', extended: true }));
+  app.use(json({ limit: '25mb' }));
+  app.use(urlencoded({ limit: '25mb', extended: true }));
 
   // Global prefix
   app.setGlobalPrefix('api/v1');

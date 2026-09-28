@@ -1,0 +1,3 @@
+-- AlterEnum
+ALTER TYPE "AIRequestType" ADD VALUE 'RECEIPT_SCAN';
+

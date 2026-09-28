@@ -15,7 +15,7 @@ import { Type } from 'class-transformer';
 
 export class SplitMemberDto {
   @ApiProperty()
-  @IsUUID()
+  @IsUUID('loose')
   userId: string;
 
   @ApiProperty({ example: 150000 })
@@ -44,7 +44,7 @@ export class CreateExpenseDto {
   splitType: SplitType;
 
   @ApiProperty({ description: 'User ID who paid' })
-  @IsUUID()
+  @IsUUID('loose')
   paidById: string;
 
   @ApiPropertyOptional({
@@ -56,6 +56,17 @@ export class CreateExpenseDto {
   @ValidateNested({ each: true })
   @Type(() => SplitMemberDto)
   splits?: SplitMemberDto[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'Chỉ dùng với EQUAL: chia đều trong nhóm nhỏ này thay vì cả chuyến. ' +
+      'Bỏ trống = chia cho mọi thành viên (như cũ).',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('loose', { each: true })
+  participantIds?: string[];
 
   @ApiPropertyOptional()
   @IsOptional()

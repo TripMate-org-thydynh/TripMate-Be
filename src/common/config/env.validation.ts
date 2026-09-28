@@ -24,10 +24,10 @@ export const envValidationSchema = Joi.object({
   // Cache
   REDIS_URL: Joi.string().required(),
 
-  // SMS
-  TWILIO_ACCOUNT_SID: Joi.string().required(),
-  TWILIO_AUTH_TOKEN: Joi.string().required(),
-  TWILIO_PHONE_NUMBER: Joi.string().required(),
+  // SMS — tuỳ chọn: thiếu thì OTP qua SMS bị tắt (xem TwilioService).
+  TWILIO_ACCOUNT_SID: Joi.string().optional().allow(''),
+  TWILIO_AUTH_TOKEN: Joi.string().optional().allow(''),
+  TWILIO_PHONE_NUMBER: Joi.string().optional().allow(''),
 
   // AI
   GEMINI_API_KEY: Joi.string().required(),

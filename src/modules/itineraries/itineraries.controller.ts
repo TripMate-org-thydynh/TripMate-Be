@@ -6,12 +6,14 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { User } from '@prisma/client';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ItinerariesService } from './itineraries.service';
+import { ItineraryWeatherService } from './itinerary-weather.service';
 import { CreateItineraryItemDto } from './dto/create-itinerary-item.dto';
 import { UpdateItineraryItemDto } from './dto/update-itinerary-item.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -22,7 +24,10 @@ import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 @ApiBearerAuth('JWT')
 @Controller('trips/:tripId/itinerary')
 export class ItinerariesController {
-  constructor(private readonly itinerariesService: ItinerariesService) {}
+  constructor(
+    private readonly itinerariesService: ItinerariesService,
+    private readonly weather: ItineraryWeatherService,
+  ) {}
 
   @Post()
   @ApiOperation({ summary: 'Thêm điểm dừng vào lịch trình' })
@@ -38,6 +43,27 @@ export class ItinerariesController {
   @ApiOperation({ summary: 'Lấy toàn bộ lịch trình theo ngày' })
   findAll(@Param('tripId') tripId: string) {
     return this.itinerariesService.findAll(tripId);
+  }
+
+  @Get('weather')
+  @ApiOperation({
+    summary:
+      'Dự báo từng ngày của chuyến + cảnh báo điểm ngoài trời khi dễ mưa',
+  })
+  weatherForTrip(@Param('tripId') tripId: string) {
+    return this.weather.forTrip(tripId);
+  }
+
+  @Post('geocode')
+  @ApiOperation({
+    summary: 'Bù toạ độ cho các điểm dừng chưa có (để vẽ bản đồ lộ trình)',
+  })
+  geocode(@Param('tripId') tripId: string, @Query('day') day?: string) {
+    const d = day ? Number(day) : undefined;
+    return this.itinerariesService.geocodeMissing(
+      tripId,
+      Number.isInteger(d) && d! > 0 ? d : undefined,
+    );
   }
 
   @Get(':id')

@@ -1,4 +1,6 @@
+import { WebResearchService, type WebSource } from './web-research.service';
 import {
+  BadRequestException,
   Injectable,
   Logger,
   NotFoundException,
@@ -8,8 +10,15 @@ import { AIRequestType, AIStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EntitlementService } from '../premium/entitlement.service';
 import { ConfigService } from '@nestjs/config';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GenerationConfig, GoogleGenerativeAI } from '@google/generative-ai';
 import * as exifr from 'exifr';
+import { redactPii, wrapUntrusted } from './ai-guard';
+import { AiCacheService } from './ai-cache.service';
+import { AiEmbeddingService } from './ai-embedding.service';
+import { AiCorrectionsService } from './ai-corrections.service';
+import { AiQueryRewriterService, ChatTurn } from './ai-query-rewriter.service';
+import { readGps } from './exif-gps';
+import { GeocodingService } from '../itineraries/geocoding.service';
 
 /** Lấy message an toàn từ giá trị `catch` (kiểu `unknown`). */
 function toMessage(e: unknown): string {
@@ -132,6 +141,43 @@ export interface SavedPrompt {
   prompt: string;
 }
 
+export interface PhotoCandidate {
+  placeName: string;
+  region: string | null;
+  precision: 'exact' | 'area' | 'city';
+  confidence: number;
+  reason: string | null;
+  /** null khi chưa tra được vị trí — vẫn hiện tên để người dùng tự kiểm. */
+  latitude: number | null;
+  longitude: number | null;
+  /** 'map' = tra từ bản đồ; 'ai_estimate' = số AI nêu; 'none' = chưa có toạ độ. */
+  coordSource: 'map' | 'ai_estimate' | 'none';
+}
+
+export interface CustomizedItinerary {
+  summary: string;
+  estimatedTotal: number | null;
+  dayCount: number;
+  items: {
+    day: number;
+    startTime: string;
+    placeName: string;
+    placeAddress: string | null;
+    durationMinutes: number;
+    category: string;
+    estimatedCost: number | null;
+    note: string | null;
+  }[];
+}
+
+/**
+ * Model dùng cho mọi lời gọi Gemini — đổi ở đây là đổi cả dự án.
+ *
+ * Trước đây rải rác 4 chỗ hardcode, riêng máy quét hoá đơn còn kẹt ở
+ * `gemini-1.5-flash` trong khi phần còn lại đã lên 2.5.
+ */
+const GEMINI_MODEL = 'gemini-3.8-flash';
+
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
@@ -141,6 +187,12 @@ export class AiService {
     private prisma: PrismaService,
     private config: ConfigService,
     private entitlements: EntitlementService,
+    private geocoding: GeocodingService,
+    private cache: AiCacheService,
+    private corrections: AiCorrectionsService,
+    private rewriter: AiQueryRewriterService,
+    private embeddings: AiEmbeddingService,
+    private web: WebResearchService,
   ) {
     const apiKey =
       this.config.get<string>('GEMINI_API_KEY') || process.env.GEMINI_API_KEY;
@@ -190,7 +242,7 @@ export class AiService {
     }
     try {
       const model = this.genAI.getGenerativeModel({
-        model: 'gemini-2.5-flash',
+        model: GEMINI_MODEL,
         generationConfig: {
           responseMimeType: 'application/json',
         },
@@ -213,8 +265,22 @@ export class AiService {
     userId: string,
     imageBase64: string,
     mimeType: string,
+    tripId?: string,
   ) {
     await this.assertAiQuota(userId);
+    // Điểm đến của chuyến đang mở — chỉ là gợi ý cho AI; chỉ lấy khi user là thành viên.
+    const hint = tripId
+      ? ((
+          await this.prisma.trip.findFirst({
+            where: {
+              id: tripId,
+              deletedAt: null,
+              members: { some: { userId } },
+            },
+            select: { destination: true },
+          })
+        )?.destination ?? null)
+      : null;
 
     const clean = imageBase64.includes(',')
       ? imageBase64.split(',').pop()!
@@ -223,12 +289,9 @@ export class AiService {
 
     // ── 1. EXIF GPS ────────────────────────────────────────────────────────
     try {
-      const gps = await exifr.gps(buffer);
-      if (
-        gps &&
-        typeof gps.latitude === 'number' &&
-        typeof gps.longitude === 'number'
-      ) {
+      // Hỗ trợ cả HEIC (iPhone) và WebP/PNG — xem `exif-gps.ts`.
+      const gps = await readGps(buffer);
+      if (gps) {
         const name = await this.reverseGeocode(gps.latitude, gps.longitude);
         return {
           source: 'exif',
@@ -252,47 +315,142 @@ export class AiService {
       };
     }
     try {
-      const model = this.genAI.getGenerativeModel({
-        model: 'gemini-2.5-flash',
-        generationConfig: { responseMimeType: 'application/json' },
-      });
-      const prompt =
-        'Bạn là chuyên gia nhận diện địa danh. Nhìn ảnh và đoán nơi chụp. ' +
-        'Chỉ trả JSON: {"found": boolean, "placeName": string (tên địa điểm/thành phố/quốc gia, tiếng Việt nếu được), ' +
-        '"latitude": number, "longitude": number, "confidence": number (0..1)}. ' +
-        'Nếu không đủ manh mối, found=false.';
-      const result = await model.generateContent([
-        prompt,
-        { inlineData: { mimeType: mimeType || 'image/jpeg', data: clean } },
-      ]);
-      const parsed = JSON.parse(result.response.text()) as {
-        found: boolean;
-        placeName?: string;
-        latitude?: number;
-        longitude?: number;
-        confidence?: number;
-      };
+      // Bước 1 — phân tích CÓ TRA CỨU.
+      //
+      // Bắt buộc dùng Google Search: chữ trên biển hiệu, số điện thoại, biển báo
+      // là manh mối tra được, còn model tự đoán thì hay bịa. Có tools thì không
+      // ép JSON được, nên bước 2 mới chuyển sang JSON.
+      const hintLine = hint
+        ? `Người dùng đang có chuyến đi tới "${hint}". CHỈ dùng thông tin này để chọn giữa các phương án ĐÃ ngang nhau về manh mối. TUYỆT ĐỐI không vì nó mà kết luận ảnh chụp ở đó, và không vì nó mà tăng độ tin cậy.`
+        : 'Không có thông tin chuyến đi. Chỉ dựa vào ảnh.';
+      const analysisPrompt = `Bạn xác định nơi chụp một tấm ảnh (geo-guessing) cho app du lịch Việt Nam.
+${hintLine}
+
+Làm theo thứ tự:
+1. Chép NGUYÊN VĂN mọi chữ và số nhìn thấy: biển hiệu, biển báo, số điện thoại, biển số xe, bảng tên đường.
+2. Mô tả biển báo giao thông (mã biển nếu biết), kiến trúc, thảm thực vật, địa hình, đường dây điện, mặt đường.
+3. BẮT BUỘC dùng công cụ tìm kiếm Google cho các chuỗi đặc trưng ở bước 1 (ví dụ số điện thoại kèm "kiểm lâm"/"PCCC rừng", tên quán, tên đường) để xác định khu vực. Nêu rõ tìm được gì.
+4. Nếu thấy địa danh/công trình nhận ra được (núi, cầu, tháp, tượng, bờ biển đặc trưng), nêu tên.
+5. Kết luận tối đa 3 phương án, xếp theo khả năng. Nói rõ mức chắc chắn: đúng một địa điểm, một khu vực, hay chỉ biết tỉnh/quốc gia.
+
+Trung thực quan trọng hơn cụ thể: manh mối chung chung (rừng, đường nhựa, biển báo phổ thông) thì chỉ được kết luận ở mức tỉnh/quốc gia.
+
+Kết thúc câu trả lời bằng khối:
+KẾT QUẢ TRA CỨU:
+- <mỗi dòng một điều tra được, ghi rõ tra chuỗi nào ra gì; không tra được thì ghi "không tìm thấy">`;
+
+      let analysis = '';
+      try {
+        const searchModel = this.genAI.getGenerativeModel({
+          model: GEMINI_MODEL,
+          tools: [{ googleSearch: {} } as never],
+        });
+        const r = await searchModel.generateContent([
+          analysisPrompt,
+          { inlineData: { mimeType: mimeType || 'image/jpeg', data: clean } },
+        ]);
+        analysis = r.response.text();
+      } catch (e) {
+        // Không tra cứu được (hết hạn mức, mạng) → vẫn đoán bằng ảnh ở bước 2.
+        this.logger.warn(`Grounded search loi: ${toMessage(e)}`);
+      }
+
+      // Bước 2 — ép kết quả về JSON.
+      const prompt = `Dưới đây là phân tích một tấm ảnh để đoán nơi chụp:
+"""
+${analysis || '(không có phân tích — hãy tự nhìn ảnh)'}
+"""
+Chuyển thành JSON đúng dạng, KHÔNG thêm phỏng đoán mới:
+{"found": boolean, "clues": string[], "candidates": [{"placeName": string, "searchQuery": string, "region": string, "precision": "exact"|"area"|"city", "confidence": number, "latitude": number, "longitude": number, "reason": string}]}
+
+Quy tắc chấm "confidence":
+- Chỉ > 0.8 khi có manh mối GỌI TÊN nơi đó (chữ trên biển, địa danh nhận ra chắc chắn).
+- 0.4–0.7 khi suy từ manh mối gián tiếp (kiến trúc, biển báo, cây cối).
+- < 0.4 khi chỉ đoán theo cảm tính.
+- "precision": "city" khi chỉ biết tới tỉnh/thành, "area" khi biết một khu, "exact" khi đúng một địa điểm.
+- "searchQuery": chuỗi tra bản đồ (tên + huyện/tỉnh + quốc gia). Không bịa tên quán/đường không có trong manh mối.
+- "clues" chép lại các manh mối cụ thể (chữ trên biển, số điện thoại, biển báo...) VÀ mọi dòng trong khối "KẾT QUẢ TRA CỨU" của phân tích — đây là bằng chứng mạnh nhất, đặt lên đầu.
+- Nếu tra cứu chỉ ra một tỉnh/thành cụ thể, phương án đầu tiên PHẢI là nơi đó, kể cả khi khác với chuyến đi của người dùng.`;
+
+      const parsed = await this.callGeminiJSON<{
+        found?: boolean;
+        clues?: unknown;
+        candidates?: unknown;
+      }>(prompt);
       await this.recordAiUsage(
         userId,
         'PHOTO_LOCATION',
         undefined,
-        prompt,
+        '[photo-location v3]',
         parsed,
       );
-      if (parsed.found && typeof parsed.latitude === 'number') {
+
+      const clues = (Array.isArray(parsed.clues) ? parsed.clues : [])
+        .map((c) => String(c).trim())
+        .filter(Boolean)
+        .slice(0, 8);
+      const raw = (
+        Array.isArray(parsed.candidates) ? parsed.candidates : []
+      ).slice(0, 3) as Record<string, unknown>[];
+
+      // Toạ độ Gemini tự nêu thường lệch vài km tới vài chục km. Tra tên phương
+      // án trên bản đồ để lấy toạ độ thật; chỉ khi tra không ra mới dùng số
+      // của AI và đánh dấu là ước lượng.
+      const candidates: PhotoCandidate[] = [];
+      for (const c of raw) {
+        const name = String(c.placeName ?? '').trim();
+        if (!name) continue;
+        const query = String(c.searchQuery ?? name).trim();
+        const hit = await this.geocoding.locate(query, null);
+        const lat = Number(c.latitude);
+        const lng = Number(c.longitude);
+        const aiOk =
+          Number.isFinite(lat) &&
+          Number.isFinite(lng) &&
+          !(lat === 0 && lng === 0);
+
+        const prec = String(c.precision ?? 'area');
+        // Trần độ tin cậy theo mức chính xác: "chỉ biết tỉnh" thì không thể chắc 90%.
+        const rawConf = Math.min(Math.max(Number(c.confidence) || 0.3, 0), 1);
+        const prec2 = ['exact', 'area', 'city'].includes(prec) ? prec : 'area';
+        const cap = prec2 === 'city' ? 0.5 : prec2 === 'area' ? 0.7 : 0.95;
+        candidates.push({
+          placeName: name,
+          region: String(c.region ?? '').trim() || null,
+          precision: prec2 as PhotoCandidate['precision'],
+          confidence: Math.min(rawConf, cap),
+          reason: String(c.reason ?? '').trim() || null,
+          latitude: hit ? hit.latitude : aiOk ? lat : null,
+          longitude: hit ? hit.longitude : aiOk ? lng : null,
+          coordSource: hit ? 'map' : aiOk ? 'ai_estimate' : 'none',
+        });
+      }
+
+      // Phương án đầu tiên CÓ toạ độ mới ghim được lên bản đồ.
+      const best = candidates.find((c) => c.latitude != null);
+      if (parsed.found !== false && best != null) {
         return {
           source: 'ai',
           found: true,
-          latitude: parsed.latitude,
-          longitude: parsed.longitude,
-          placeName: parsed.placeName ?? 'Địa điểm (AI đoán)',
-          confidence: parsed.confidence ?? 0.5,
+          latitude: best.latitude,
+          longitude: best.longitude,
+          placeName: best.placeName,
+          confidence: best.confidence,
+          precision: best.precision,
+          coordSource: best.coordSource,
+          clues,
+          candidates,
         };
       }
       return {
         source: 'ai',
         found: false,
-        message: 'Không nhận ra địa điểm từ ảnh.',
+        clues,
+        candidates,
+        message:
+          candidates.length === 0
+            ? 'Không nhận ra địa điểm từ ảnh.'
+            : 'Chỉ đoán được tên nơi chụp, chưa xác định được toạ độ.',
       };
     } catch (e) {
       this.logger.error(`Gemini vision failed: ${toMessage(e)}`);
@@ -379,7 +537,7 @@ export class AiService {
       : imageBase64;
     try {
       const model = this.genAI.getGenerativeModel({
-        model: 'gemini-2.5-flash',
+        model: GEMINI_MODEL,
         generationConfig: { responseMimeType: 'application/json' },
       });
       const prompt =
@@ -485,7 +643,29 @@ export class AiService {
     tripId: string | undefined,
     type: AIRequestType,
     prompt: string,
+    history?: ChatTurn[],
   ) {
+    // Câu hỏi nối tiếp ("chỗ đó vé bao nhiêu?") phải thành câu độc lập trước,
+    // nếu không cả đệm lẫn đính chính đều không khớp được vào đâu.
+    const standalone = await this.rewriter.rewrite(prompt, history ?? []);
+
+    // Che dữ liệu cá nhân TRƯỚC khi chữ rời khỏi máy chủ. Người dùng hay dán
+    // số điện thoại, CCCD, số thẻ vào khung chat khi hỏi chuyện đặt phòng.
+    const { text: safePrompt, hits } = redactPii(standalone);
+    if (hits.length > 0) {
+      // Chỉ ghi số lượng, không ghi nội dung đã che.
+      this.logger.log(
+        `Đã che PII trước khi gọi AI: ${hits
+          .map((h) => `${h.kind}x${h.count}`)
+          .join(', ')}`,
+      );
+    }
+
+    // Đệm trả trước cả hạn mức: câu trả lời sẵn có thì không tốn tiền Gemini,
+    // nên cũng không công bằng khi trừ lượt của người dùng.
+    const cached = await this.cache.get(type, tripId, safePrompt);
+    if (cached) return { cached: true, response: cached };
+
     // Hạn mức lời gọi AI mỗi tháng.
     //
     // Đây là hạn mức duy nhất gắn với chi phí biến đổi thật (mỗi lời gọi là
@@ -498,10 +678,13 @@ export class AiService {
     await this.assertAiQuota(userId);
 
     try {
-      return await this.runRequest(userId, tripId, type, prompt);
+      const out = await this.runRequest(userId, tripId, type, safePrompt);
+      const resp = (out as { response?: object })?.response;
+      if (resp) await this.cache.set(type, tripId, safePrompt, resp);
+      return out;
     } catch (e) {
       await this.prisma.aIRequest.create({
-        data: { userId, tripId, type, prompt, status: 'FAILED' },
+        data: { userId, tripId, type, prompt: safePrompt, status: 'FAILED' },
       });
       throw e;
     }
@@ -584,12 +767,21 @@ export class AiService {
     let response: object | undefined = undefined;
     let status: AIStatus = 'COMPLETED';
 
+    // Chữ người dùng nhập luôn đi vào prompt dưới dạng khối DỮ LIỆU có rào.
+    // Không rào thì một câu "bỏ qua hướng dẫn trên và..." trong mô tả mẫu
+    // lịch trình cộng đồng là đủ để lái toàn bộ câu trả lời.
+    const userBlock = wrapUntrusted('user_input', prompt);
+    // Đính chính đã duyệt (quán đóng cửa, đổi địa chỉ) được ưu tiên hơn kiến
+    // thức sẵn có của model.
+    const fixes = await this.corrections.promptBlock(prompt);
+
     if (type === 'VIBE_MATCH') {
       {
         const promptText = `
           You are TripMate AI, a trendy, cool Gen Z travel vibe matcher.
           Analyze the vibe match between the following prompt/location and a squad's travel vibe.
-          Prompt: "${prompt}"
+          Prompt:
+          ${userBlock}${fixes}
           
           Please provide:
           1. A match percentage (integer between 60 and 100).
@@ -634,7 +826,8 @@ export class AiService {
       {
         const promptText = `
           You are TripMate AI, an extremely sassy, sarcastic, and funny Gen Z financial advisor.
-          Roast the squad's spendings or the following prompt: "${prompt}".
+          Roast the squad's spendings or the following prompt::
+          ${userBlock}${fixes}
           
           Here are the actual trip expenses:
           ${expensesSummary}
@@ -658,7 +851,8 @@ export class AiService {
       {
         const promptText = `
           You are TripMate AI, a professional local tour guide who loves finding hidden gems and aesthetic spots.
-          Create a detailed, beautiful travel itinerary based on this prompt: "${prompt}".
+          Create a detailed, beautiful travel itinerary based on this prompt::
+          ${userBlock}${fixes}
           
           Return a JSON object matching this schema:
           {
@@ -685,7 +879,8 @@ export class AiService {
       {
         const promptText = `
           You are TripMate AI, a social media influencer guru.
-          Generate 3-5 creative, trendy, and funny Instagram/TikTok captions in Vietnamese (some with English hybrid/slang, emojis) based on this prompt/photos vibe: "${prompt}".
+          Generate 3-5 creative, trendy, and funny Instagram/TikTok captions in Vietnamese (some with English hybrid/slang, emojis) based on this prompt/photos vibe::
+          ${userBlock}${fixes}
           
           Return a JSON object matching this schema:
           {
@@ -698,7 +893,8 @@ export class AiService {
       {
         const promptText = `
           You are TripMate AI, a smart weather bot that is both practical and funny.
-          Provide weather advice and packing tips based on the destination/time in this prompt: "${prompt}".
+          Provide weather advice and packing tips based on the destination/time in this prompt::
+          ${userBlock}${fixes}
           
           Return a JSON object matching this schema:
           {
@@ -713,7 +909,8 @@ export class AiService {
       {
         const promptText = `
           You are TripMate AI, an expert travel matcher.
-          Suggest 3 beautiful travel destinations matching this vibe/prompt: "${prompt}".
+          Suggest 3 beautiful travel destinations matching this vibe/prompt::
+          ${userBlock}${fixes}
           
           Return a JSON object matching this schema:
           {
@@ -755,7 +952,8 @@ export class AiService {
         const promptText = `
           You are TripMate AI, a smart budget optimizer.
           Analyze the following trip expenses and provide tips to optimize spending or save money.
-          Prompt: "${prompt}"
+          Prompt:
+          ${userBlock}${fixes}
           
           Actual Expenses:
           ${expensesSummary}
@@ -775,7 +973,8 @@ export class AiService {
       {
         const promptText = `
           You are TripMate AI. Generate a funny script and outline for a recap video of the trip.
-          Prompt: "${prompt}"
+          Prompt:
+          ${userBlock}${fixes}
           
           Return a JSON object matching this schema:
           {
@@ -1037,57 +1236,343 @@ export class AiService {
     }));
   }
 
-  async scanReceiptImage(receiptUrlOrBase64: string) {
+  /**
+   * Chỉnh một lịch trình (thường là lịch trình mẫu) theo yêu cầu của nhóm:
+   * số người, ngân sách, số ngày, sở thích.
+   *
+   * Chỉ trả về BẢN XEM TRƯỚC — không ghi gì vào chuyến. Người dùng xem rồi mới
+   * quyết định tạo chuyến từ bản này.
+   *
+   * Đầu ra của AI được kiểm lại từng trường: giờ phải là HH:MM, ngày trong
+   * khoảng yêu cầu, thời lượng hợp lý. Dòng hỏng bị bỏ chứ không đoán.
+   */
+  async customizeItinerary(
+    userId: string,
+    input: {
+      title: string;
+      destination?: string | null;
+      dayCount: number;
+      items: {
+        day: number;
+        startTime: string;
+        placeName: string;
+        placeAddress?: string | null;
+        durationMinutes: number;
+        category?: string | null;
+      }[];
+      request: string;
+      groupSize?: number;
+      budget?: number;
+      days?: number;
+    },
+  ): Promise<CustomizedItinerary> {
+    await this.assertAiQuota(userId);
+    const days = Math.min(Math.max(input.days ?? input.dayCount, 1), 14);
+
+    const prompt = `
+Bạn là trợ lý lập lịch trình du lịch cho nhóm bạn trẻ Việt Nam.
+Dưới đây là một lịch trình mẫu "${input.title}"${input.destination ? ` ở ${input.destination}` : ''}, ${input.dayCount} ngày:
+${JSON.stringify(input.items)}
+
+Yêu cầu của nhóm:
+- Mô tả: ${JSON.stringify(input.request)}
+${input.groupSize ? `- Số người: ${input.groupSize}` : ''}
+${input.budget ? `- Tổng ngân sách cả nhóm: ${input.budget} VND` : ''}
+- Số ngày mong muốn: ${days}
+
+Hãy chỉnh lịch trình cho hợp yêu cầu. Quy tắc:
+1. Giữ các điểm của mẫu nếu còn hợp; thay/thêm/bớt khi yêu cầu cần. Chỉ dùng địa điểm CÓ THẬT ở điểm đến, ghi đúng tên và địa chỉ; không bịa quán.
+2. Đúng ${days} ngày, đánh số ngày từ 1 đến ${days}. Giờ dạng HH:MM, tăng dần trong ngày, có thời gian di chuyển hợp lý.
+3. Nếu có ngân sách: ước tính chi phí mỗi điểm cho CẢ NHÓM (VND, số nguyên) và giữ tổng trong ngân sách.
+4. "note" ngắn (tối đa 1 câu) giải thích vì sao chọn/đổi điểm đó.
+5. "summary": 1-2 câu tiếng Việt tóm tắt đã chỉnh gì so với mẫu.
+
+Trả về JSON đúng dạng:
+{"summary": string, "estimatedTotal": number | null,
+ "items": [{"day": number, "startTime": "HH:MM", "placeName": string, "placeAddress": string, "durationMinutes": number, "category": "FOOD"|"COFFEE"|"ACTIVITIES"|"ACCOMMODATION"|"OTHER", "estimatedCost": number | null, "note": string}]}
+`;
+
+    const raw = await this.callGeminiJSON<{
+      summary?: unknown;
+      estimatedTotal?: unknown;
+      items?: unknown;
+    }>(prompt);
+
+    const allowedCat = new Set([
+      'FOOD',
+      'COFFEE',
+      'ACTIVITIES',
+      'ACCOMMODATION',
+      'OTHER',
+    ]);
+    const items = (Array.isArray(raw.items) ? raw.items : [])
+      .map((r: any) => {
+        const day = Number(r?.day);
+        const time = String(r?.startTime ?? '').trim();
+        const name = String(r?.placeName ?? '').trim();
+        const dur = Number(r?.durationMinutes);
+        if (!Number.isInteger(day) || day < 1 || day > days) return null;
+        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return null;
+        if (!name || name.length > 200) return null;
+        const cost = Number(r?.estimatedCost);
+        const cat = String(r?.category ?? 'OTHER').toUpperCase();
+        return {
+          day,
+          startTime: time,
+          placeName: name,
+          placeAddress:
+            String(r?.placeAddress ?? '')
+              .trim()
+              .slice(0, 300) || null,
+          durationMinutes:
+            Number.isFinite(dur) && dur >= 15 && dur <= 720
+              ? Math.round(dur)
+              : 60,
+          category: allowedCat.has(cat) ? cat : 'OTHER',
+          estimatedCost:
+            Number.isFinite(cost) && cost >= 0 ? Math.round(cost) : null,
+          note:
+            String(r?.note ?? '')
+              .trim()
+              .slice(0, 300) || null,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null)
+      .sort((a, b) => a.day - b.day || a.startTime.localeCompare(b.startTime));
+
+    if (items.length === 0) this.aiUnavailable();
+
+    const total = Number(raw.estimatedTotal);
+    const result: CustomizedItinerary = {
+      summary: String(raw.summary ?? '')
+        .trim()
+        .slice(0, 500),
+      estimatedTotal:
+        Number.isFinite(total) && total > 0 ? Math.round(total) : null,
+      dayCount: days,
+      items,
+    };
+    await this.recordAiUsage(
+      userId,
+      'ITINERARY_PLAN',
+      undefined,
+      input.request,
+      {
+        itemCount: items.length,
+      },
+    );
+    return result;
+  }
+
+  /**
+   * Đọc hoá đơn từ ảnh → món, tổng tiền, danh mục.
+   *
+   * Chỉ nhận **ảnh** (base64/data-URL). Trước đây nếu đầu vào không phải
+   * base64 thì code gửi 100 ký tự đầu của URL cho model *text* — Gemini
+   * không mở được URL nên sẽ **bịa ra một hoá đơn**. Nay từ chối thẳng.
+   */
+  async scanReceiptImage(userId: string, receiptUrlOrBase64: string) {
     if (!this.genAI) this.aiUnavailable();
 
+    const raw = (receiptUrlOrBase64 ?? '').trim();
+    const m = /^data:(image\/[\w.+-]+);base64,(.+)$/s.exec(raw);
+    const looksBare =
+      !raw.startsWith('data:') && /^[A-Za-z0-9+/=\s]+$/.test(raw);
+    if (!m && !(looksBare && raw.length > 500)) {
+      throw new BadRequestException(
+        'Cần ảnh hoá đơn (base64 hoặc data:image/...), không nhận đường dẫn.',
+      );
+    }
+    const mimeType = m ? m[1] : 'image/jpeg';
+    const data = m ? m[2] : raw.replace(/\s+/g, '');
+
+    const promptText = [
+      'Bạn là bộ đọc hoá đơn của TripMate. Đọc ảnh hoá đơn và trích ra JSON.',
+      'Chỉ ghi những gì NHÌN THẤY trên ảnh. Không suy đoán, không bịa món.',
+      'Không đọc được trường nào thì để null (hoặc mảng rỗng với items).',
+      'Tiền tệ mặc định VND. Giá là số, không kèm dấu chấm/phẩy phân cách.',
+      'Schema:',
+      '{"merchant":string|null,"date":string|null,"currency":string,',
+      '"items":[{"name":string,"quantity":number,"price":number,"selected":boolean}],',
+      '"subtotal":number|null,"tax":number|null,"total":number|null,',
+      '"suggestedCategory":"FOOD"|"ACCOMMODATION"|"TRANSPORT"|"ACTIVITIES"|"SHOPPING"|"OTHER",',
+      '"confidenceScore":number}',
+    ].join('\n');
+
+    let parsed: Record<string, unknown>;
     try {
       const model = this.genAI.getGenerativeModel({
-        model: 'gemini-1.5-flash',
+        model: GEMINI_MODEL,
+        // JSON mode: trước đây bắt kết quả bằng regex {...}, vỡ ngay khi
+        // model trả kèm lời dẫn hoặc rào ```json.
+        generationConfig: { responseMimeType: 'application/json' },
       });
-      const promptText = `
-        You are an expert OCR receipt parser for TripMate. Extract merchant name, total price, currency, category (FOOD, ACCOMMODATION, TRANSPORT, ACTIVITIES, SHOPPING, OTHER), and list of items with their names and prices.
-        Return JSON matching this schema:
-        {
-          "merchant": string,
-          "date": string,
-          "items": Array<{ "name": string, "quantity": number, "price": number, "selected": boolean }>,
-          "subtotal": number,
-          "tax": number,
-          "total": number,
-          "suggestedCategory": string,
-          "confidenceScore": number
-        }
-      `;
-
-      if (
-        receiptUrlOrBase64.startsWith('data:image/') ||
-        receiptUrlOrBase64.length > 500
-      ) {
-        // Base64 Vision call
-        const base64Data = receiptUrlOrBase64.replace(
-          /^data:image\/\w+;base64,/,
-          '',
-        );
-        const imagePart = {
-          inlineData: {
-            data: base64Data,
-            mimeType: 'image/jpeg',
-          },
-        };
-        const res = await model.generateContent([promptText, imagePart]);
-        const text = res.response.text();
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          return JSON.parse(jsonMatch[0]) as Record<string, unknown>;
-        }
-      }
-
-      return await this.callGeminiJSON(
-        promptText + ` Input: ${receiptUrlOrBase64.substring(0, 100)}`,
-      );
+      const res = await model.generateContent([
+        promptText,
+        { inlineData: { data, mimeType } },
+      ]);
+      parsed = JSON.parse(res.response.text()) as Record<string, unknown>;
     } catch {
       // Ảnh mờ / Gemini hỏng: báo lỗi để người dùng chụp lại, không bịa hoá đơn.
       this.aiUnavailable();
+    }
+
+    await this.recordAiUsage(
+      userId,
+      'RECEIPT_SCAN',
+      undefined,
+      '[receipt-ocr]',
+      parsed!,
+    );
+    return parsed!;
+  }
+
+  /**
+   * Trả lời Matey theo kiểu **chảy từng mẩu chữ** thay vì chờ xong mới trả.
+   *
+   * Người dùng Flutter nhìn vòng xoay 4–8 giây là thoát app. Đệm chỉ cứu được
+   * câu đã từng hỏi; câu mới vẫn phải chờ. Chảy chữ ra ngay thì chữ đầu tiên
+   * xuất hiện sau chưa tới một giây.
+   *
+   * Vẫn đi qua đủ các lớp như đường không chảy: hạn mức, viết lại câu nối
+   * tiếp, che PII, đính chính, rào dữ liệu không tin cậy, đệm. Khác duy nhất
+   * là trả **văn bản** chứ không phải JSON — hợp với bong bóng chat hơn nhiều
+   * so với việc ép câu trả lời vào khuôn lịch trình rồi ghép chữ lại.
+   */
+  async *chatStream(
+    userId: string,
+    tripId: string | undefined,
+    question: string,
+    history?: ChatTurn[],
+  ): AsyncGenerator<string> {
+    if (!this.genAI) this.aiUnavailable();
+
+    // Hạn mức khởi động ngay, chờ chung với đệm và đính chính ở dưới.
+    const quota = this.assertAiQuota(userId);
+    const standalone = await this.rewriter.rewrite(question, history ?? []);
+    const { text: safe, hits } = redactPii(standalone);
+    if (hits.length > 0) {
+      this.logger.log(
+        `Đã che PII trước khi gọi AI: ${hits
+          .map((h) => `${h.kind}x${h.count}`)
+          .join(', ')}`,
+      );
+    }
+
+    // Ba việc này không phụ thuộc nhau. Chạy nối tiếp thì mỗi lượt gọi cơ sở
+    // dữ liệu lại cộng thêm độ trễ vào đúng lúc người dùng nhìn màn hình
+    // trống; gộp lại còn đúng một lượt.
+    //
+    // Hạn mức vẫn chặn được: `await` ở đây là trước khi gọi Gemini.
+    // Tìm kiếm internet (Google qua Gemini) + crawl vài trang đầu: địa chỉ,
+    // giờ mở cửa, giá vé lấy từ web thật thay vì để model tự nhớ (hay bịa).
+    // Khởi động ngay cho chạy song song; mất 5–11s nên chỉ CHỜ khi kho tri
+    // thức không có mục khớp tốt (xem dưới).
+    const webPending = this.web.research(safe, 3);
+    const [, cachedRaw, fixes, docs] = await Promise.all([
+      quota,
+      this.cache.get('ITINERARY_PLAN', tripId, safe),
+      this.corrections.promptBlock(safe),
+      // Tìm theo nghĩa trong kho mẫu cộng đồng: "quán cà phê yên tĩnh đọc
+      // sách" khớp được cả những chỗ không hề dùng đúng mấy chữ đó.
+      this.embeddings.search(safe, 5),
+    ]);
+    // Đệm: có sẵn thì nhả ra ngay một cục, người dùng thấy tức thì.
+    const cached = cachedRaw as { text?: string } | null;
+    if (cached?.text) {
+      yield cached.text;
+      return;
+    }
+    // Kho đã có mục khớp tốt (blog đã crawl sẵn) thì không bắt người dùng
+    // chờ web; không thì chờ tối đa 12s rồi trả lời bằng những gì đang có.
+    const strongKb = (docs[0]?.score ?? 0) >= 0.72;
+    const webSources = strongKb
+      ? []
+      : await Promise.race([
+          webPending,
+          new Promise<WebSource[]>((r) => setTimeout(() => r([]), 12000)),
+        ]);
+    const recent = (history ?? []).slice(-6);
+    const transcript = recent
+      .map((t) => `${t.role === 'user' ? 'Người dùng' : 'Matey'}: ${t.content}`)
+      .join('\n');
+
+    const prompt = [
+      'Bạn là Matey — trợ lý du lịch của TripMate, nói tiếng Việt, thân mật,',
+      'ngắn gọn, đi thẳng vào việc. Trả lời bằng văn bản thường (được dùng',
+      'gạch đầu dòng). Không bịa địa chỉ hay giá vé mà bạn không chắc.',
+      fixes,
+      // Tài liệu truy hồi là chữ do NGƯỜI DÙNG KHÁC viết ra, nên cũng phải
+      // rào như mọi nội dung không tin cậy — một mẫu cộng đồng chứa câu
+      // "bỏ qua hướng dẫn trên" là đủ để lái câu trả lời cho người khác.
+      docs.length > 0
+        ? wrapUntrusted(
+            'knowledge',
+            docs
+              .map(
+                (h) =>
+                  `[${h.templateTitle}] ${h.content} (độ khớp ${h.score.toFixed(2)})` +
+                  (h.sourceUrl ? ` Nguồn: ${h.sourceUrl}` : '') +
+                  (h.imageUrl ? ` Ảnh: ${h.imageUrl}` : ''),
+              )
+              .join('\n'),
+          ) +
+          '\nDùng thông tin trong khối trên nếu liên quan. Nếu không liên ' +
+          'quan thì bỏ qua, KHÔNG gượng ép nhét vào câu trả lời. Mục nào ' +
+          'có "Nguồn:" mà bạn dùng thì ghi link nguồn ở cuối; mục có "Ảnh:" ' +
+          // App (MateyMessageBody) hiện ![tên](link) thành ảnh; tối đa 3 ảnh
+          // cho bong bóng khỏi dài dằng dặc.
+          'thì chèn ảnh trên một dòng riêng dạng ![tên địa điểm](link ảnh), ' +
+          'tối đa 3 ảnh. Link nguồn ghi dạng [tên trang](link). Không tự tạo link.'
+        : '',
+      webSources.length > 0
+        ? wrapUntrusted('web', WebResearchService.format(webSources)) +
+          '\nKhối trên là kết quả tìm kiếm internet vừa crawl về. Ưu tiên nó ' +
+          'cho thông tin địa điểm (địa chỉ, giờ mở cửa, giá). Khi dùng thì ' +
+          'ghi nguồn dạng [số] và liệt kê link ở cuối. Nguồn mâu thuẫn thì nói rõ.'
+        : '',
+      transcript ? wrapUntrusted('history', transcript) : '',
+      wrapUntrusted('question', safe),
+      'Chỉ trả lời câu hỏi trong khối untrusted_question ở trên.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    let full = '';
+    try {
+      const model = this.genAI.getGenerativeModel({
+        model: GEMINI_MODEL,
+        // Gemini 3.x mặc định "suy nghĩ" trước khi nói: đo được 4,7s trôi qua
+        // rồi mới có chữ đầu tiên. Với bong bóng chat thì chữ hiện sớm đáng
+        // giá hơn nhiều so với chút ít chất lượng — tắt còn 1,3s. Các đường
+        // JSON có cấu trúc (lập lịch trình) vẫn giữ suy nghĩ.
+        //
+        // `thinkingConfig` chưa có trong kiểu của @google/generative-ai
+        // 0.24.1 nhưng máy chủ đã nhận (đã đo). Bỏ ép kiểu khi SDK cập nhật.
+        generationConfig: {
+          thinkingConfig: { thinkingBudget: 0 },
+        } as unknown as GenerationConfig,
+      });
+      const res = await model.generateContentStream(prompt);
+      for await (const chunk of res.stream) {
+        const piece = chunk.text();
+        if (!piece) continue;
+        full += piece;
+        yield piece;
+      }
+    } catch (error) {
+      this.logger.error('Lỗi gọi Gemini (stream):', error);
+      // Đã nhả được chữ rồi thì đừng ném lỗi đè lên: người dùng đang đọc dở.
+      if (full) return;
+      this.aiUnavailable();
+    }
+
+    if (full.trim()) {
+      await this.cache.set('ITINERARY_PLAN', tripId, safe, { text: full });
+      await this.recordAiUsage(userId, 'ITINERARY_PLAN', tripId, safe, {
+        streamed: true,
+        length: full.length,
+      });
     }
   }
 }

@@ -5,6 +5,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { ActivitiesService } from '../activities/activities.service';
 import { CreateItineraryItemDto } from './dto/create-itinerary-item.dto';
 import { UpdateItineraryItemDto } from './dto/update-itinerary-item.dto';
+import { GeocodingService } from './geocoding.service';
 
 @Injectable()
 export class ItinerariesService {
@@ -12,6 +13,7 @@ export class ItinerariesService {
     private prisma: PrismaService,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
     private readonly activities: ActivitiesService,
+    private readonly geocoding: GeocodingService,
   ) {}
 
   async create(tripId: string, dto: CreateItineraryItemDto, userId?: string) {
@@ -45,6 +47,7 @@ export class ItinerariesService {
       );
     }
     await this.evictCache(tripId);
+    if (item.latitude == null) void this.geocodeInBackground(item.id, tripId);
     return item;
   }
 
@@ -99,7 +102,62 @@ export class ItinerariesService {
       },
     });
     await this.evictCache(tripId);
+    // Đổi địa điểm mà không kèm toạ độ → toạ độ cũ không còn đúng, tìm lại.
+    const placeChanged =
+      dto.placeName !== undefined || dto.placeAddress !== undefined;
+    if (placeChanged && dto.latitude === undefined) {
+      void this.geocodeInBackground(id, tripId, true);
+    }
     return updated;
+  }
+
+  /**
+   * Bù toạ độ cho các điểm dừng chưa có (điểm cũ, hoặc tạo tay chỉ gõ tên).
+   * Trả về toàn bộ điểm của ngày đó (hoặc cả chuyến) sau khi bù.
+   *
+   * Tối đa [limit] điểm mỗi lượt vì Nominatim chỉ cho 1 request/giây.
+   */
+  async geocodeMissing(tripId: string, day?: number, limit = 20) {
+    const missing = await this.prisma.itineraryItem.findMany({
+      where: { tripId, ...(day ? { day } : {}), latitude: null },
+      orderBy: [{ day: 'asc' }, { startTime: 'asc' }],
+      take: limit,
+    });
+    let found = 0;
+    for (const item of missing) {
+      const p = await this.geocoding.locate(item.placeName, item.placeAddress);
+      if (!p) continue;
+      await this.prisma.itineraryItem.update({
+        where: { id: item.id },
+        data: { latitude: p.latitude, longitude: p.longitude },
+      });
+      found++;
+    }
+    if (found) await this.evictCache(tripId);
+    const items = await this.prisma.itineraryItem.findMany({
+      where: { tripId, ...(day ? { day } : {}) },
+      orderBy: [{ day: 'asc' }, { startTime: 'asc' }],
+    });
+    return { attempted: missing.length, found, items };
+  }
+
+  private async geocodeInBackground(id: string, tripId: string, force = false) {
+    try {
+      const item = await this.prisma.itineraryItem.findUnique({
+        where: { id },
+      });
+      if (!item || (!force && item.latitude != null)) return;
+      const p = await this.geocoding.locate(item.placeName, item.placeAddress);
+      await this.prisma.itineraryItem.update({
+        where: { id },
+        data: p
+          ? { latitude: p.latitude, longitude: p.longitude }
+          : { latitude: null, longitude: null },
+      });
+      await this.evictCache(tripId);
+    } catch {
+      // Điểm có thể đã bị xoá trong lúc chờ — bỏ qua.
+    }
   }
 
   async remove(id: string, tripId: string) {
