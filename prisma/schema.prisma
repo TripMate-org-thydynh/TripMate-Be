@@ -1565,15 +1565,20 @@ enum EmbeddingSource {
 /// ứng nên đọc/ghi bằng SQL thô. 768 chứ không phải 3072 mặc định vì HNSW
 /// chỉ đánh chỉ mục được tới 2000 chiều.
 model AiEmbedding {
-  id         String                      @id @default(uuid()) @db.Uuid
-  source     EmbeddingSource
+  id           String                      @id @default(uuid()) @db.Uuid
+  source       EmbeddingSource
   /// Khoá của bản ghi gốc (template.id hoặc templateItem.id).
-  sourceId   String                      @map("source_id") @db.Uuid
-  /// Mẫu chứa đoạn này — để trả kết quả về đúng mẫu.
-  templateId String                      @map("template_id") @db.Uuid
-  content    String
-  embedding  Unsupported("vector(768)")?
-  updatedAt  DateTime                    @updatedAt @map("updated_at")
+  sourceId     String                      @map("source_id") @db.Uuid
+  /// Mẫu chứa đoạn này — để trả kết quả về đúng mẫu. Null với nguồn không
+  /// thuộc mẫu nào (prod đang có các dòng như vậy).
+  templateId   String?                     @map("template_id") @db.Uuid
+  content      String
+  embedding    Unsupported("vector(768)")?
+  updatedAt    DateTime                    @updatedAt @map("updated_at")
+  /// Nguồn web (ai-embedding.service ghi bằng raw SQL).
+  sourceUrl    String?                     @map("source_url")
+  sourceAuthor String?                     @map("source_author")
+  imageUrl     String?                     @map("image_url")
 
   @@unique([source, sourceId])
   @@index([templateId])
