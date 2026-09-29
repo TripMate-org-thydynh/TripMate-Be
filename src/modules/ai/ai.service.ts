@@ -1371,6 +1371,28 @@ Trả về JSON đúng dạng:
    * base64 thì code gửi 100 ký tự đầu của URL cho model *text* — Gemini
    * không mở được URL nên sẽ **bịa ra một hoá đơn**. Nay từ chối thẳng.
    */
+  /**
+   * Nhập chi tiêu bằng lời: gửi prompt đã dựng sẵn (xem
+   * `expenses/ai-expense-parse.ts`) và trả JSON thô. Việc kiểm tra kết quả nằm
+   * ở phía expenses, vì chỉ ở đó mới có danh sách thành viên để đối chiếu.
+   */
+  async parseExpenseText(
+    userId: string,
+    tripId: string,
+    prompt: string,
+  ): Promise<unknown> {
+    await this.assertAiQuota(userId);
+    const out = await this.callGeminiJSON<object>(prompt);
+    await this.recordAiUsage(
+      userId,
+      'EXPENSE_PARSE',
+      tripId,
+      '[expense-parse]',
+      out,
+    );
+    return out;
+  }
+
   async scanReceiptImage(userId: string, receiptUrlOrBase64: string) {
     if (!this.genAI) this.aiUnavailable();
 

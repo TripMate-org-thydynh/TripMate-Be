@@ -12,6 +12,12 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { ActivitiesService } from '../activities/activities.service';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { AiService } from '../ai/ai.service';
+import { AiParseExpenseDto } from './dto/ai-parse-expense.dto';
+import {
+  buildExpenseParsePrompt,
+  ParseResult,
+  sanitizeExpenseParse,
+} from './ai-expense-parse';
 
 /**
  * Chia tiền hiếm khi ra số tròn: 1.000.000 chia 3 còn dư 0,01.
@@ -587,6 +593,33 @@ export class ExpensesService {
     });
 
     return newCard;
+  }
+
+  /**
+   * Nhập chi tiêu bằng lời → câu hỏi làm rõ hoặc danh sách nháp. Không lưu gì:
+   * app hiện nháp cho người dùng sửa rồi mới gọi `create` từng khoản.
+   */
+  async aiParse(
+    tripId: string,
+    userId: string,
+    dto: AiParseExpenseDto,
+  ): Promise<ParseResult> {
+    const rows = await this.prisma.tripMember.findMany({
+      where: { tripId },
+      include: { user: { select: { id: true, name: true } } },
+      orderBy: { joinedAt: 'asc' },
+    });
+    const members = rows.map((m) => ({
+      id: m.user.id,
+      name: m.user.name?.trim() || 'Thành viên',
+    }));
+    const prompt = buildExpenseParsePrompt(
+      dto.text,
+      members,
+      dto.answers ?? [],
+    );
+    const raw = await this.aiService.parseExpenseText(userId, tripId, prompt);
+    return sanitizeExpenseParse(raw, members);
   }
 
   async scanReceipt(userId: string, receiptUrl: string) {

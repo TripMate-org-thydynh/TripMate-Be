@@ -1229,6 +1229,7 @@ enum AIRequestType {
   SQUAD_MOOD
   RECOMMEND_TIMELINE
   RECEIPT_SCAN
+  EXPENSE_PARSE
 }
 
 enum AIStatus {

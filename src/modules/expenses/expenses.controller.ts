@@ -14,6 +14,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ExpensesService } from './expenses.service';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { LinkBankDto } from './dto/link-bank.dto';
+import { AiParseExpenseDto } from './dto/ai-parse-expense.dto';
 import { AddCardDto } from './dto/add-card.dto';
 import { UpdateBudgetGoalDto } from './dto/update-budget-goal.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -117,6 +118,16 @@ export class ExpensesController {
     @Body() dto: AddCardDto,
   ) {
     return this.expensesService.addPaymentMethod(user.id, dto);
+  }
+
+  @Post('ai-parse')
+  @ApiOperation({ summary: 'AI tách khoản chi từ mô tả bằng lời (không lưu)' })
+  aiParse(
+    @Param('tripId') tripId: string,
+    @Body() dto: AiParseExpenseDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.expensesService.aiParse(tripId, user.id, dto);
   }
 
   @Post('ocr')
