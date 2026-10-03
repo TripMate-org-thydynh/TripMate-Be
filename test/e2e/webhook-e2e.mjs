@@ -158,6 +158,42 @@ async function main() {
   }
 
   await prisma.squadSeat.deleteMany({ where: { subscription: { userId: user.id } } });
+  // ── Google Play RTDN: endpoint thu hồi được quyền của bất kỳ ai ──────────
+  // Không có OIDC token của Google thì "hoàn tiền" giả phải bị từ chối, và
+  // gói không được động tới.
+  await prisma.subscription.create({
+    data: {
+      userId: user.id,
+      plan: 'PLUS',
+      provider: 'GOOGLE_PLAY',
+      externalId: `e2e-play-${Date.now()}`,
+      currentPeriodEnd: new Date(Date.now() + 30 * 86400000),
+    },
+  });
+  const playSub = await prisma.subscription.findFirst({ where: { userId: user.id, provider: 'GOOGLE_PLAY' } });
+  const fakeVoid = {
+    message: {
+      data: Buffer.from(
+        JSON.stringify({
+          packageName: 'com.tripmate.app',
+          voidedPurchaseNotification: { purchaseToken: playSub.externalId, productType: 1 },
+        }),
+      ).toString('base64'),
+    },
+  };
+  const rtdn = await post('/payment/google-play/rtdn', fakeVoid);
+  const rtdnForged = await fetch(BASE + '/payment/google-play/rtdn', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer gia.mao.token' },
+    body: JSON.stringify(fakeVoid),
+  });
+  const after = await prisma.subscription.findUnique({ where: { id: playSub.id } });
+  check(
+    'RTDN không có / sai chữ ký Google → 401, gói Play còn nguyên',
+    rtdn.status === 401 && rtdnForged.status === 401 && after.status === 'ACTIVE',
+    `status=${rtdn.status},${rtdnForged.status} sub=${after.status}`,
+  );
+
   await prisma.subscription.deleteMany({ where: { userId: user.id } });
   await prisma.paymentOrder.deleteMany({ where: { orderId: { in: [orderId, zaloOrderId] } } });
   console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

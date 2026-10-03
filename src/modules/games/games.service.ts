@@ -16,8 +16,8 @@ export class GamesService {
    * Ghi một ván chơi và cộng XP cho người chơi.
    *
    * [userId] có thể thiếu ở các lời gọi cũ — khi đó chỉ ghi ván, không cộng.
-   * `initialState.xpReward` cho phép mỗi thử thách có mức thưởng riêng (dare
-   * dao động 80–300 XP); không có thì dùng mức mặc định của GAME_PLAYED.
+   * Mỗi thử thách có mức thưởng riêng (dare dao động 80–300 XP), tra theo
+   * bảng DARES của server; không khớp thì dùng mức mặc định của GAME_PLAYED.
    */
   async create(
     tripId: string,
@@ -30,11 +30,12 @@ export class GamesService {
     });
 
     if (userId) {
-      const reward = (initialState as { xpReward?: unknown })?.xpReward;
-      const amount =
-        typeof reward === 'number' && reward > 0 && reward <= 500
-          ? reward
-          : undefined;
+      // Mức thưởng tra từ bảng DARES phía server theo nội dung thử thách.
+      // KHÔNG đọc `initialState.xpReward`: đó là số client tự khai, ai cũng
+      // gửi 500 được. Không khớp dare nào → mức mặc định của GAME_PLAYED.
+      const amount = GamesService.dareReward(
+        (initialState as { dare?: unknown })?.dare,
+      );
       try {
         await this.xp.award(userId, 'GAME_PLAYED', {
           refId: session.id,
@@ -82,6 +83,23 @@ export class GamesService {
   /// `{member}` được thay bằng TÊN THẬT của một thành viên trong chuyến.
   /// Trước đây dare hardcode tên "Lê Minh", "Alex Nguyễn" — những người
   /// không hề có trong nhóm.
+  /// XP của một dare theo nội dung client gửi lại. Dare có `{member}` đã được
+  /// thay tên người thật, nên so phần chữ trước và sau chỗ đó.
+  private static dareReward(text: unknown): number | undefined {
+    if (typeof text !== 'string' || text.length === 0 || text.length > 500) {
+      return undefined;
+    }
+    const hit = GamesService.DARES.find((d) => {
+      const [head, tail = ''] = d.text.split('{member}');
+      return (
+        text.length >= head.length + tail.length &&
+        text.startsWith(head) &&
+        text.endsWith(tail)
+      );
+    });
+    return hit?.xp;
+  }
+
   private static readonly DARES: Array<{
     text: string;
     xp: number;

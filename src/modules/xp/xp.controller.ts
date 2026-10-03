@@ -1,9 +1,19 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { User } from '@prisma/client';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { StoreService } from './store.service';
+import { CustomStickerService } from './custom-sticker.service';
 import { XpService } from './xp.service';
 
 @ApiTags('XP & Store')
@@ -14,7 +24,37 @@ export class XpController {
   constructor(
     private readonly xp: XpService,
     private readonly store: StoreService,
+    private readonly custom: CustomStickerService,
   ) {}
+
+  @Get('stickers/custom')
+  @ApiOperation({ summary: 'Sticker cá nhân tôi đã làm' })
+  myCustomStickers(@CurrentUser() user: User) {
+    return this.custom.list(user.id);
+  }
+
+  @Post('stickers/custom')
+  @ApiOperation({ summary: 'Tạo sticker cá nhân từ ảnh đã tải lên Cloudinary' })
+  createCustomSticker(
+    @CurrentUser() user: User,
+    @Body('mediaUrl') mediaUrl: string,
+    @Body('label') label?: string,
+  ) {
+    return this.custom.create(
+      user.id,
+      mediaUrl,
+      typeof label === 'string' ? label : undefined,
+    );
+  }
+
+  @Delete('stickers/custom/:id')
+  @ApiOperation({ summary: 'Xoá sticker cá nhân' })
+  deleteCustomSticker(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.custom.remove(user.id, id);
+  }
 
   @Get('wallet')
   @ApiOperation({ summary: 'Ví XP của tôi: số dư, tổng đã kiếm, cấp, lịch sử' })

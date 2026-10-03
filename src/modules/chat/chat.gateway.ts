@@ -42,6 +42,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   handleConnection(client: Socket) {
+    // Xác thực có truy vấn DB nên bất đồng bộ; client thường phát `join` ngay
+    // sau khi nối. Các handler chờ promise này để không xử lý sự kiện khi
+    // `userId` chưa kịp gắn.
+    client.data.ready = this.authenticate(client);
+  }
+
+  private async authenticate(client: Socket): Promise<void> {
     try {
       const token =
         (client.handshake.auth?.token as string) ||
@@ -53,8 +60,25 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         client.disconnect();
         return;
       }
-      const payload = this.jwtService.verify<{ sub: string }>(token);
-      client.data.userId = payload.sub;
+      const payload = this.jwtService.verify<{
+        sub?: string;
+        purpose?: string;
+      }>(token);
+      // Cùng luật với JwtStrategy: chỉ token đăng nhập, user còn tồn tại và
+      // không bị khoá.
+      if (payload.purpose || typeof payload.sub !== 'string') {
+        client.disconnect();
+        return;
+      }
+      const user = await this.prisma.user.findFirst({
+        where: { id: payload.sub, deletedAt: null, isLocked: false },
+        select: { id: true },
+      });
+      if (!user) {
+        client.disconnect();
+        return;
+      }
+      client.data.userId = user.id;
     } catch {
       client.disconnect();
     }
@@ -76,6 +100,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() body: { tripId: string },
   ) {
+    await client.data.ready;
     const userId = client.data.userId as string | undefined;
     if (!userId || typeof body?.tripId !== 'string') return;
     const member = await this.prisma.tripMember.findFirst({
@@ -112,13 +137,22 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       clientId?: string;
     },
   ) {
+    await client.data.ready;
     const userId = client.data.userId as string | undefined;
     if (!userId || !body?.tripId) return;
-    // Thành viên đã được kiểm lúc join — không tốn thêm truy vấn mỗi tin.
     if (!this.joinedTrips(client).has(body.tripId)) {
       client.emit('message_error', {
         clientId: body.clientId,
         reason: 'NOT_JOINED',
+      });
+      return;
+    }
+    // Kiểm lại tư cách thành viên mỗi tin: socket sống lâu hơn tư cách thành
+    // viên, người đã bị mời ra không được tiếp tục gửi/nghe trong phòng.
+    if (!(await this.stillMember(client, body.tripId, userId))) {
+      client.emit('message_error', {
+        clientId: body.clientId,
+        reason: 'NOT_MEMBER',
       });
       return;
     }
@@ -152,10 +186,29 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() body: { tripId: string; isTyping: boolean },
   ) {
-    if (!body?.tripId) return;
+    const userId = client.data.userId as string | undefined;
+    if (!userId || typeof body?.tripId !== 'string') return;
+    // Chỉ socket đã join (đã qua kiểm thành viên) mới phát được vào phòng.
+    if (!this.joinedTrips(client).has(body.tripId)) return;
     client.to(`trip:${body.tripId}`).emit('typing', {
-      userId: client.data.userId as string,
-      isTyping: body.isTyping,
+      userId,
+      isTyping: body.isTyping === true,
     });
+  }
+
+  /// Còn là thành viên không; nếu không thì đẩy socket ra khỏi phòng luôn.
+  private async stillMember(
+    client: Socket,
+    tripId: string,
+    userId: string,
+  ): Promise<boolean> {
+    const member = await this.prisma.tripMember.findFirst({
+      where: { tripId, userId, trip: { deletedAt: null } },
+      select: { tripId: true },
+    });
+    if (member) return true;
+    this.joinedTrips(client).delete(tripId);
+    void client.leave(`trip:${tripId}`);
+    return false;
   }
 }

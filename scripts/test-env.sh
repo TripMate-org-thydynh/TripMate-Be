@@ -9,6 +9,8 @@ export DIRECT_URL="$DATABASE_URL"
 export REDIS_URL="redis://localhost:6380"
 export PORT=3000
 export PUBLIC_API_URL="http://localhost:3000"
+# Tin 1 lớp proxy để bộ test giả lập IP client qua X-Forwarded-For (giống Render).
+export TRUST_PROXY_HOPS="${TRUST_PROXY_HOPS:-1}"
 
 # Khoá thanh toán GIẢ, đi cùng test/e2e/stub-gateway.mjs.
 export MOMO_PARTNER_CODE=TESTPARTNER MOMO_ACCESS_KEY=testaccess MOMO_SECRET_KEY=testsecret

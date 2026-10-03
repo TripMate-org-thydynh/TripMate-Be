@@ -18,6 +18,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { ResourceOwnerGuard } from '../../common/guards/resource-owner.guard';
 import { OwnedResource } from '../../common/decorators/resource-owner.decorator';
+import { InTrip } from '../../common/guards/trip-resource.guard';
 
 @Controller('trips/:tripId/reservations')
 @UseGuards(JwtAuthGuard, TripMemberGuard)
@@ -75,6 +76,7 @@ export class ReservationsController {
     );
   }
 
+  @InTrip('reservation', 'itemId')
   @Patch(':itemId')
   update(
     @Param('itemId') itemId: string,
@@ -86,6 +88,7 @@ export class ReservationsController {
 
   @UseGuards(ResourceOwnerGuard)
   @OwnedResource('reservation', 'itemId')
+  @InTrip('reservation', 'itemId')
   @Delete(':itemId')
   remove(@Param('itemId') itemId: string, @Request() req: RequestWithUser) {
     return this.reservationsService.remove(itemId, req.user.id);

@@ -22,6 +22,11 @@ const ALLOWED: Record<
   'application/pdf': { ext: 'pdf', kind: 'raw' },
 };
 
+const SIGNED_FORMATS: Partial<Record<'image' | 'video' | 'raw', string>> = {
+  image: 'jpg,png,webp,heic,heif,avif,gif',
+  video: 'mp4,mov,webm',
+};
+
 const MAX_BYTES: Record<'image' | 'video' | 'raw', number> = {
   image: 10 * 1024 * 1024, // 10 MB
   video: 60 * 1024 * 1024, // 60 MB
@@ -120,6 +125,12 @@ export class StorageService {
       public_id: publicId,
       timestamp: String(timestamp),
     };
+    // Ký luôn danh sách định dạng: thiếu nó, vé xin cho "image/jpeg" vẫn tải
+    // được SVG/HTML vì chữ ký chỉ ràng public_id + timestamp, còn kiểm
+    // `contentType` ở trên chỉ là lời khai của client. Cloudinary từ chối file
+    // có định dạng thật nằm ngoài danh sách. (`raw` không hỗ trợ tham số này.)
+    const formats = SIGNED_FORMATS[allowed.kind];
+    if (formats) params.allowed_formats = formats;
     const signature = this.sign(params);
 
     return {
@@ -148,10 +159,23 @@ export class StorageService {
     contentType: string,
     sizeBytes?: number,
   ) {
+    // Route này nhận body trần (không DTO) nên tự kiểm: chỉ URL https, có
+    // giới hạn độ dài, và kích thước phải là số hợp lệ.
+    if (
+      typeof url !== 'string' ||
+      url.length > 2048 ||
+      !/^https:\/\/[^\s]+$/.test(url)
+    ) {
+      throw new BadRequestException('errors.storage.invalidUrl');
+    }
+    const size =
+      typeof sizeBytes === 'number' && Number.isFinite(sizeBytes) && sizeBytes >= 0
+        ? Math.floor(sizeBytes)
+        : null;
     const kind = ALLOWED[contentType]?.kind ?? 'raw';
     const type: MediaType = kind === 'video' ? 'VIDEO' : 'IMAGE';
     return this.prisma.media.create({
-      data: { userId, type, url, sizeBytes: sizeBytes ?? null },
+      data: { userId, type, url, sizeBytes: size },
     });
   }
 

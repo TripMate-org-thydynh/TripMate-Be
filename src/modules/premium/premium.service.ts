@@ -25,6 +25,11 @@ import {
   priceOf,
 } from './pricing';
 import { playProductOf, playProductIdFor } from './google-play';
+import {
+  GooglePlayBillingService,
+  PlayReceiptRejected,
+  PlaySubscriptionV2,
+} from './google-play-billing.service';
 
 export interface BillingItem {
   id: string;
@@ -56,6 +61,7 @@ export class PremiumService {
     private trials: TrialService,
     private promos: PromoService,
     private referrals: ReferralService,
+    private play: GooglePlayBillingService,
   ) {}
 
   /// Trạng thái gói hiện tại, đọc từ bảng `Subscription`.
@@ -91,13 +97,27 @@ export class PremiumService {
       orderBy: { currentPeriodEnd: 'desc' },
     });
 
+    // Gói Play tự gia hạn và chỉ huỷ được trên Google Play — app phải nói
+    // đúng điều đó và chỉ đường sang. Kỳ hạn lấy từ hoá đơn Play gần nhất.
+    const play =
+      sub?.provider === 'GOOGLE_PLAY' && ent.via === 'own'
+        ? await this.playManageInfo(userId, sub.plan)
+        : null;
+
     return {
       userId,
       plan: ent.plan,
       status: ent.isTrial ? 'TRIALING' : 'ACTIVE',
       // Giá đọc từ bảng giá dùng chung với lúc tạo đơn, không chép lại số.
-      price: isPaidPlan(ent.plan) ? MONTHLY_PRICE[ent.plan] : 0,
-      billingCycle: 'MONTHLY',
+      price: play
+        ? play.price
+        : isPaidPlan(ent.plan)
+          ? MONTHLY_PRICE[ent.plan]
+          : 0,
+      billingCycle: play?.months === 12 ? 'YEARLY' : 'MONTHLY',
+      provider: ent.via === 'own' ? (sub?.provider ?? null) : null,
+      autoRenew: !!play && !(sub?.cancelAtPeriodEnd ?? false),
+      manageUrl: play?.manageUrl ?? null,
       activeUntil: ent.activeUntil,
       // Dùng ghế của người khác thì không có gì để tự gia hạn hay huỷ.
       via: ent.via,
@@ -113,8 +133,45 @@ export class PremiumService {
     return this.entitlements.of(userId);
   }
 
+  /// Kỳ hạn, giá và link "Quản lý gói" trên Google Play cho gói Play.
+  private async playManageInfo(userId: string, plan: string) {
+    const order = await this.prisma.paymentOrder.findFirst({
+      where: { userId, provider: 'GOOGLE_PLAY', status: 'SUCCESS' },
+      orderBy: { createdAt: 'desc' },
+      select: { months: true },
+    });
+    const months = order?.months ?? 1;
+    const productId = isPaidPlan(plan)
+      ? playProductIdFor(plan, months)
+      : null;
+    const pkg = process.env.ANDROID_PACKAGE_NAME || 'com.tripmate.app';
+    return {
+      months,
+      price: isPaidPlan(plan) ? priceOf(plan, months) : 0,
+      // Link chính thức của Google: mở thẳng trang gói này trong Play Store.
+      manageUrl: productId
+        ? `https://play.google.com/store/account/subscriptions?sku=${productId}&package=${pkg}`
+        : `https://play.google.com/store/account/subscriptions?package=${pkg}`,
+    };
+  }
+
   /// Huỷ gia hạn; vẫn dùng được tới hết kỳ đã trả.
   async cancelSubscription(userId: string) {
+    // Gói Play do Google trừ tiền. Đánh dấu huỷ ở phía mình thì Google VẪN
+    // trừ kỳ sau — người dùng tưởng đã huỷ mà vẫn mất tiền. Chỉ đường sang
+    // Google Play; trạng thái huỷ sẽ về qua RTDN.
+    const latest = await this.prisma.subscription.findFirst({
+      where: { userId, status: 'ACTIVE' },
+      orderBy: { currentPeriodEnd: 'desc' },
+      select: { provider: true, plan: true },
+    });
+    if (latest?.provider === 'GOOGLE_PLAY') {
+      throw new BadRequestException({
+        code: 'MANAGED_BY_PLAY',
+        message: 'errors.premium.managedByPlay',
+        manageUrl: (await this.playManageInfo(userId, latest.plan)).manageUrl,
+      });
+    }
     const res = await this.entitlements.cancel(userId);
     if (res) {
       await this.trials.log(userId, 'SUBSCRIPTION_CANCELED', {
@@ -254,6 +311,7 @@ export class PremiumService {
 
     try {
       const res = await fetch(endpoint, {
+        signal: AbortSignal.timeout(15000),
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -341,6 +399,7 @@ export class PremiumService {
 
     try {
       const res = await fetch(endpoint, {
+        signal: AbortSignal.timeout(15000),
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(
@@ -579,6 +638,29 @@ export class PremiumService {
           : Number(amount) === 0;
 
     if (isZeroAmount) {
+      // Giành lượt dùng mã TRƯỚC, cấp quyền SAU. Thứ tự cũ (cấp rồi mới ghi
+      // lượt) cho phép N request song song cùng qua `validate()` khi chưa có
+      // lượt nào được ghi, và mỗi request cộng thêm một kỳ premium. `redeem`
+      // khoá dòng mã rồi đếm lại, nên chỉ đúng số lượt cho phép giành được.
+      const claimed =
+        appliedCode !== null &&
+        (await this.promos.redeem({
+          code: appliedCode,
+          userId,
+          orderId,
+          discountApplied: discount,
+        }));
+      if (!claimed) {
+        await this.prisma.paymentOrder.update({
+          where: { orderId },
+          data: { status: 'CANCELLED', failureReason: 'PROMO_ALREADY_USED' },
+        });
+        throw new BadRequestException({
+          code: 'PROMO_ALREADY_USED',
+          message: 'errors.promo.alreadyUsed',
+        });
+      }
+
       await this.prisma.paymentOrder.update({
         where: { orderId },
         data: {
@@ -594,15 +676,6 @@ export class PremiumService {
         provider: 'CASH',
         externalId: undefined,
       });
-
-      if (appliedCode && discount > 0) {
-        await this.promos.redeem({
-          code: appliedCode,
-          userId,
-          orderId,
-          discountApplied: discount,
-        });
-      }
 
       await this.trials.markConverted(userId);
 
@@ -745,6 +818,11 @@ export class PremiumService {
       });
     }
 
+    if (this.play.configured()) {
+      return this.verifyWithGoogle(userId, token, productId);
+    }
+
+    // ── Từ đây: CHƯA cấu hình Google (dev/test) ──────────────────────────
     // Biên lai đã dùng rồi thì trả về kết quả cũ, KHÔNG cộng thêm hạn.
     //
     // Chốt này phải đứng **trước** mọi nhánh cấp quyền, kể cả nhánh giả lập lúc
@@ -870,34 +948,58 @@ export class PremiumService {
       });
     }
 
-    const packageName = process.env.ANDROID_PACKAGE_NAME || 'com.tripmate.app';
-    let accessToken: string | null | undefined;
-    let data: any;
-    try {
-      const { GoogleAuth } = await import('google-auth-library');
-      const auth = new GoogleAuth({
-        credentials: JSON.parse(serviceAccountJson),
-        scopes: ['https://www.googleapis.com/auth/androidpublisher'],
-      });
-      const client = await auth.getClient();
-      accessToken = (await client.getAccessToken()).token;
+    // Không tới được đây: nhánh trên luôn trả về hoặc ném. Có cấu hình thì
+    // đã rẽ sang `verifyWithGoogle` từ đầu hàm.
+    throw new ServiceUnavailableException({
+      code: 'VERIFY_NOT_CONFIGURED',
+      message: 'errors.premium.verifyNotConfigured',
+    });
+  }
 
-      const res = await fetch(
-        `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${packageName}/purchases/subscriptionsv2/tokens/${encodeURIComponent(token)}`,
-        { headers: { Authorization: `Bearer ${accessToken}` } },
+  /// Xác thực biên lai với Google thật và chép trạng thái về.
+  ///
+  /// Khác bản cũ ở chỗ biên lai **đã thấy** không còn trả "đã xử lý" ngay: gói
+  /// Play giữ nguyên token qua mọi kỳ gia hạn, nên mỗi lần app khôi phục giao
+  /// dịch là một lần tra lại Google và cập nhật hạn. Đó là đường gia hạn dự
+  /// phòng khi RTDN chưa cấu hình hoặc bị lỡ.
+  private async verifyWithGoogle(
+    userId: string,
+    token: string,
+    productId?: string,
+  ) {
+    // Biên lai đã thuộc tài khoản khác thì dừng trước khi gọi Google.
+    const owner =
+      (await this.prisma.subscription.findFirst({
+        where: { provider: 'GOOGLE_PLAY', externalId: token },
+        select: { userId: true },
+      })) ??
+      (await this.prisma.paymentOrder.findFirst({
+        where: { provider: 'GOOGLE_PLAY', externalId: token },
+        select: { userId: true },
+      }));
+    if (owner && owner.userId !== userId) {
+      this.logger.warn(
+        `Biên lai Play đã thuộc user khác: token dùng bởi ${owner.userId}, nay ${userId} đòi`,
       );
-      data = await res.json();
-      if (!res.ok) {
+      throw new BadRequestException({
+        code: 'RECEIPT_ALREADY_USED',
+        message: 'errors.premium.receiptAlreadyUsed',
+      });
+    }
+
+    let data: PlaySubscriptionV2;
+    try {
+      data = await this.play.fetchSubscription(token);
+    } catch (err: any) {
+      if (err instanceof PlayReceiptRejected) {
         this.logger.error(
-          `Google từ chối tra biên lai (${res.status}): ${JSON.stringify(data?.error ?? data)}`,
+          `Google từ chối tra biên lai (${err.status}): ${err.message}`,
         );
         throw new BadRequestException({
           code: 'RECEIPT_INVALID',
           message: 'errors.premium.receiptInvalid',
         });
       }
-    } catch (err: any) {
-      if (err instanceof BadRequestException) throw err;
       // Không gọi được Google KHÁC với biên lai giả. Trả 503 để client biết
       // đường thử lại; trả 400 thì app coi như hỏng hẳn và vứt luôn biên lai
       // hợp lệ mà người dùng đã trả tiền.
@@ -906,43 +1008,6 @@ export class PremiumService {
         code: 'VERIFY_UNREACHABLE',
         message: 'errors.premium.verifyUnreachable',
       });
-    }
-
-    // Trạng thái phải là đang hoạt động hoặc đang trong thời gian gia hạn treo.
-    // Gói đã huỷ nhưng còn hạn thì Google vẫn trả ACTIVE, nên không cần liệt kê riêng.
-    const state = data?.subscriptionState;
-    if (
-      state !== 'SUBSCRIPTION_STATE_ACTIVE' &&
-      state !== 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD'
-    ) {
-      this.logger.warn(`Biên lai Play chưa dùng được: state=${state}`);
-      throw new BadRequestException({
-        code: 'RECEIPT_NOT_ACTIVE',
-        message: 'errors.premium.receiptNotActive',
-      });
-    }
-
-    // Mã sản phẩm THẬT, do Google trả về.
-    const line = Array.isArray(data?.lineItems) ? data.lineItems[0] : null;
-    const realProductId: string | undefined = line?.productId;
-    const product = playProductOf(realProductId);
-    if (!product) {
-      // Sản phẩm có thật trên Play nhưng server chưa khai — thiếu sót cấu hình
-      // của mình, không phải lỗi người mua. Ghi rõ để sửa nhanh.
-      this.logger.error(
-        `Biên lai Play hợp lệ nhưng sản phẩm "${realProductId}" không có trong PLAY_PRODUCTS`,
-      );
-      throw new ServiceUnavailableException({
-        code: 'PRODUCT_NOT_MAPPED',
-        message: 'errors.premium.productNotMapped',
-      });
-    }
-    if (productId && productId !== realProductId) {
-      // Không chặn — Google mới là bên nói đúng, và mình đã dùng số của Google.
-      // Nhưng lệch thì đáng ghi lại: hoặc client có lỗi, hoặc ai đó đang dò.
-      this.logger.warn(
-        `Client khai productId="${productId}" nhưng Google nói "${realProductId}" (user=${userId})`,
-      );
     }
 
     // Ràng biên lai vào đúng tài khoản đã bấm mua.
@@ -963,109 +1028,72 @@ export class PremiumService {
       });
     }
 
-    const amount = priceOf(product.plan, product.months);
-    const playOrderId = `play.${token.slice(-16).replace(/[^a-zA-Z0-9]/g, '')}.${Date.now()}`;
-
-    const runPlayGrant = async (tx: Prisma.TransactionClient) => {
-      // Ghi nhận PaymentOrder để lịch sử hoá đơn hiển thị giao dịch Google Play
-      await tx.paymentOrder.create({
-        data: {
-          orderId: playOrderId,
-          userId,
-          plan: product.plan,
-          months: product.months,
-          amount,
-          baseAmount: amount,
-          discountAmount: 0,
-          provider: 'GOOGLE_PLAY',
-          status: 'SUCCESS',
-          externalId: token,
-          paidAt: new Date(),
-        },
-      });
-
-      await this.entitlements.grant({
-        userId,
-        plan: product.plan,
-        months: product.months,
-        provider: 'GOOGLE_PLAY',
-        externalId: token,
-        tx,
-      });
-
-      await this.trials.markConverted(userId, tx);
-
-      await this.trials.log(
-        userId,
-        'SUBSCRIPTION_GRANTED',
-        {
-          actor: 'google_play',
-          toStatus: 'ACTIVE',
-          plan: product.plan,
-          meta: { externalId: token, months: product.months },
-        },
-        tx,
+    // Mã sản phẩm THẬT, do Google trả về.
+    const realProductId = data?.lineItems?.[0]?.productId;
+    const product = playProductOf(realProductId);
+    if (!product) {
+      // Sản phẩm có thật trên Play nhưng server chưa khai — thiếu sót cấu hình
+      // của mình, không phải lỗi người mua. Ghi rõ để sửa nhanh.
+      this.logger.error(
+        `Biên lai Play hợp lệ nhưng sản phẩm "${realProductId}" không có trong PLAY_PRODUCTS`,
       );
-
-      if ((tx as any).notification?.create) {
-        await (tx as any).notification.create({
-          data: {
-            userId,
-            type: 'PAYMENT_RECEIVED',
-            title: 'Nâng cấp thành công qua Google Play',
-            body: `Gói ${product.plan === 'SQUAD' ? 'Squad Pass' : 'TripMate+'} (${product.months} tháng) của bạn đã được kích hoạt!`,
-            data: { provider: 'GOOGLE_PLAY', plan: product.plan, months: product.months },
-          },
-        });
-      }
-    };
-
-    try {
-      if (typeof this.prisma.$transaction === 'function') {
-        await this.prisma.$transaction(runPlayGrant);
-      } else {
-        await runPlayGrant(this.prisma);
-      }
-    } catch (err: any) {
-      if (err?.code === 'P2002' || err?.message?.includes('Unique constraint')) {
-        return { success: true, plan: product.plan, alreadyProcessed: true };
-      }
-      throw err;
+      throw new ServiceUnavailableException({
+        code: 'PRODUCT_NOT_MAPPED',
+        message: 'errors.premium.productNotMapped',
+      });
+    }
+    if (productId && productId !== realProductId) {
+      // Không chặn — Google mới là bên nói đúng, và mình đã dùng số của Google.
+      // Nhưng lệch thì đáng ghi lại: hoặc client có lỗi, hoặc ai đó đang dò.
+      this.logger.warn(
+        `Client khai productId="${productId}" nhưng Google nói "${realProductId}" (user=${userId})`,
+      );
     }
 
-    // Xác nhận đã giao hàng. **Bắt buộc**: biên lai không được acknowledge
-    // trong 3 ngày sẽ bị Google tự động hoàn tiền và huỷ gói — khách mất
-    // Premium mà mình không hề biết, vì phía mình đã cấp xong từ lâu.
-    //
-    // Đặt SAU `grant()` và nuốt lỗi: acknowledge hỏng thì tệ nhất là bị hoàn
-    // tiền, còn để nó ném ra thì khách đã trả tiền mà không nhận được gói.
-    if (data?.acknowledgementState === 'ACKNOWLEDGEMENT_STATE_PENDING') {
-      try {
-        const ack = await fetch(
-          `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${packageName}/purchases/subscriptions/${encodeURIComponent(realProductId as string)}/tokens/${encodeURIComponent(token)}:acknowledge`,
-          {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              'content-type': 'application/json',
-            },
-            body: JSON.stringify({}),
+    // Chép trạng thái về TRƯỚC khi kết luận: biên lai đã hết hạn/bị treo cũng
+    // phải hạ quyền phía mình xuống cho khớp, rồi mới báo "không dùng được".
+    const result = await this.play.apply(userId, token, data, 'google_play');
+    if (!GooglePlayBillingService.isUsable(data?.subscriptionState) || !result) {
+      this.logger.warn(
+        `Biên lai Play chưa dùng được: state=${data?.subscriptionState}`,
+      );
+      throw new BadRequestException({
+        code: 'RECEIPT_NOT_ACTIVE',
+        message: 'errors.premium.receiptNotActive',
+      });
+    }
+
+    if (result.created && (this.prisma as any).notification?.create) {
+      await (this.prisma as any).notification.create({
+        data: {
+          userId,
+          type: 'PAYMENT_RECEIVED',
+          title: 'Nâng cấp thành công qua Google Play',
+          body: `Gói ${product.plan === 'SQUAD' ? 'Squad Pass' : 'TripMate+'} (${product.months} tháng) của bạn đã được kích hoạt!`,
+          data: {
+            provider: 'GOOGLE_PLAY',
+            plan: product.plan,
+            months: product.months,
           },
-        );
-        if (!ack.ok) {
-          this.logger.error(
-            `Acknowledge biên lai Play thất bại (${ack.status}) cho user=${userId} — Google sẽ hoàn tiền sau 3 ngày nếu không xử lý`,
-          );
-        }
-      } catch (e) {
-        this.logger.error(`Acknowledge biên lai Play lỗi: ${String(e)}`);
-      }
+        },
+      });
+    }
+
+    // Xác nhận đã giao hàng — sau khi đã cấp. Xem `GooglePlayBillingService.acknowledge`.
+    if (data?.acknowledgementState === 'ACKNOWLEDGEMENT_STATE_PENDING') {
+      await this.play.acknowledge(realProductId as string, token);
     }
 
     this.logger.log(
-      `Google Play: cấp ${product.plan} ${product.months} tháng cho user=${userId} (product=${realProductId})`,
+      `Google Play: ${result.created ? 'cấp' : 'đồng bộ'} ${product.plan} tới ${result.currentPeriodEnd.toISOString()} cho user=${userId} (product=${realProductId})`,
     );
-    return { success: true, plan: product.plan, months: product.months };
+    return {
+      success: true,
+      plan: product.plan,
+      months: product.months,
+      currentPeriodEnd: result.currentPeriodEnd,
+      alreadyProcessed: !result.created && !result.newPeriod,
+    };
   }
 
   /// Lịch sử thanh toán của chính người dùng.
@@ -1472,6 +1500,11 @@ export class PremiumService {
     const transferAmount = Number(
       payload?.transferAmount ?? payload?.amount ?? 0,
     );
+    // NaN lọt qua mọi phép so sánh `<` / `!==` bên dưới thành "khớp tiền".
+    if (!Number.isFinite(transferAmount) || transferAmount <= 0) {
+      this.logger.warn(`SePay: số tiền không hợp lệ cho đơn ${orderCode}`);
+      return { success: true, message: 'Invalid transfer amount' };
+    }
     const externalId = String(
       payload?.id ?? payload?.referenceCode ?? orderCode,
     );
@@ -1559,7 +1592,10 @@ export class PremiumService {
     const expectedAmount = Number(order.amount);
     const amountWrong =
       paidAmount !== undefined &&
-      (allowOverpay ? paidAmount < expectedAmount : paidAmount !== expectedAmount);
+      (!Number.isFinite(paidAmount) ||
+        (allowOverpay
+          ? paidAmount < expectedAmount
+          : paidAmount !== expectedAmount));
     if (amountWrong) {
       this.logger.error(
         `IPN sai số tiền: đơn ${orderId} cần ${order.amount.toString()}, cổng báo ${paidAmount}`,

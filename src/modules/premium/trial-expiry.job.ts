@@ -88,4 +88,27 @@ export class TrialExpiryJob {
       this.logger.error(`Dọn hạn thất bại: ${String(e)}`);
     }
   }
+
+  /**
+   * Hạn lưu băm thiết bị/dải mạng: 12 tháng (đã công bố ở trang
+   * tripmate.app/delete-account và trong khai báo Data safety). Chỉ xoá hai
+   * tín hiệu đó; hàng TrialClaim vẫn giữ để luật "mỗi tài khoản một lần" còn
+   * đúng.
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_4AM, { name: 'trial-signal-retention' })
+  async purgeOldSignals() {
+    try {
+      const cutoff = new Date(Date.now() - 365 * 86400000);
+      const r = await this.prisma.trialClaim.updateMany({
+        where: {
+          startedAt: { lt: cutoff },
+          OR: [{ deviceHash: { not: null } }, { networkHash: { not: null } }],
+        },
+        data: { deviceHash: null, networkHash: null },
+      });
+      if (r.count) this.logger.log(`Xoá tín hiệu dùng thử cũ: ${r.count} hàng`);
+    } catch (e) {
+      this.logger.error(`Xoá tín hiệu dùng thử cũ thất bại: ${String(e)}`);
+    }
+  }
 }

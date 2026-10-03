@@ -20,6 +20,7 @@ import { ResourceOwnerGuard } from '../../common/guards/resource-owner.guard';
 import { OwnedResource } from '../../common/decorators/resource-owner.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { User } from '@prisma/client';
+import { InTrip } from '../../common/guards/trip-resource.guard';
 
 @ApiTags('Journal')
 @UseGuards(JwtAuthGuard, TripMemberGuard)
@@ -34,6 +35,7 @@ export class JournalController {
     return this.journalService.getAll(tripId);
   }
 
+  @InTrip('journalEntry', 'entryId')
   @Get(':entryId')
   @ApiOperation({ summary: 'Chi tiết nhật ký entry' })
   getOne(@Param('entryId') entryId: string) {
@@ -50,6 +52,7 @@ export class JournalController {
     return this.journalService.create(tripId, user.id, dto);
   }
 
+  @InTrip('journalEntry', 'entryId')
   @Patch(':entryId')
   @ApiOperation({ summary: 'Cập nhật nhật ký' })
   update(
@@ -62,6 +65,7 @@ export class JournalController {
 
   @UseGuards(ResourceOwnerGuard)
   @OwnedResource('journalEntry', 'entryId')
+  @InTrip('journalEntry', 'entryId')
   @Delete(':entryId')
   @ApiOperation({ summary: 'Xóa nhật ký' })
   delete(@Param('entryId') entryId: string, @CurrentUser() user: User) {

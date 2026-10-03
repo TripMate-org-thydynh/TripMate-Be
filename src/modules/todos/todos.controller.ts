@@ -18,6 +18,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { ResourceOwnerGuard } from '../../common/guards/resource-owner.guard';
 import { OwnedResource } from '../../common/decorators/resource-owner.decorator';
+import { InTrip } from '../../common/guards/trip-resource.guard';
 
 @Controller('trips/:tripId/todos')
 @UseGuards(JwtAuthGuard, TripMemberGuard)
@@ -49,6 +50,7 @@ export class TodosController {
     return this.todosService.addItem(tripId, req.user.id, dto);
   }
 
+  @InTrip('todoItem', 'itemId')
   @Patch(':itemId')
   updateItem(
     @Param('itemId') itemId: string,
@@ -60,6 +62,7 @@ export class TodosController {
 
   @UseGuards(ResourceOwnerGuard)
   @OwnedResource('todoItem', 'itemId')
+  @InTrip('todoItem', 'itemId')
   @Delete(':itemId')
   deleteItem(@Param('itemId') itemId: string) {
     return this.todosService.deleteItem(itemId);

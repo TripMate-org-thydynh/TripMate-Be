@@ -53,6 +53,7 @@ export class GeocodingService {
           'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1' +
           `&accept-language=vi&q=${encodeURIComponent(query)}`;
         const res = await fetch(url, {
+          signal: AbortSignal.timeout(10000),
           headers: { 'User-Agent': 'TripMate/1.0 (travel app)' },
         });
         if (!res.ok) return null; // lỗi tạm thời: không nhớ, lần sau thử lại

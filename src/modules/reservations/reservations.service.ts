@@ -44,7 +44,7 @@ export class ReservationsService {
     const trip = await this.prisma.trip.findUnique({ where: { id: tripId } });
     if (!trip) throw new NotFoundException('Trip not found');
 
-    const parsed = await this.ai.parseBookingText(text);
+    const parsed = await this.ai.parseBookingText(userId, text);
     if (parsed.length === 0) {
       return { created: 0, items: [], expensesCreated: 0 };
     }

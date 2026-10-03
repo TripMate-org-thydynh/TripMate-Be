@@ -22,6 +22,7 @@ import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { ResourceOwnerGuard } from '../../common/guards/resource-owner.guard';
 import { OwnedResource } from '../../common/decorators/resource-owner.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { InTrip } from '../../common/guards/trip-resource.guard';
 @ApiTags('Expenses')
 @UseGuards(JwtAuthGuard, TripMemberGuard)
 @ApiBearerAuth('JWT')
@@ -58,6 +59,7 @@ export class ExpensesController {
     return this.expensesService.getBalances(tripId);
   }
 
+  @InTrip('expense', 'expenseId')
   @Patch(':expenseId/splits/:userId/pay')
   @ApiOperation({ summary: 'Đánh dấu đã hoàn tiền' })
   markPaid(
@@ -70,6 +72,7 @@ export class ExpensesController {
 
   @UseGuards(ResourceOwnerGuard)
   @OwnedResource('expense', 'expenseId')
+  @InTrip('expense', 'expenseId')
   @Delete(':expenseId')
   @ApiOperation({ summary: 'Xóa chi phí (soft delete)' })
   delete(

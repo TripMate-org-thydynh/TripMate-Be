@@ -3,10 +3,12 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { I18nContext } from 'nestjs-i18n';
+import { visibleMomentWhere } from '../moments/ghost';
 
 /**
  * Khoảng cách great-circle giữa hai toạ độ, đơn vị km.
@@ -81,15 +83,35 @@ export class UsersService {
     });
     if (!user) throw new NotFoundException('User not found');
 
-    const stamp = Date.now();
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        deletedAt: new Date(),
-        email: `deleted_${stamp}_${user.email}`,
-        username: user.username ? `deleted_${stamp}_${user.username}` : null,
-      },
-    });
+    // Google Play yêu cầu xoá dữ liệu cá nhân, không chỉ khoá đăng nhập. Giữ
+    // lại hàng User (ẩn danh) vì khoản chi, ảnh, tin nhắn trong chuyến đi
+    // chung là dữ liệu của cả nhóm — xoá cứng sẽ làm lệch sổ nợ của người
+    // khác. Đơn thanh toán giữ lại theo nghĩa vụ kế toán.
+    //
+    // supabaseId cũng phải đổi: tài khoản mật khẩu sinh supabaseId từ
+    // username, nên đăng ký lại đúng username đó sẽ đụng unique nếu giữ cũ.
+    await this.prisma.$transaction([
+      this.prisma.deviceToken.deleteMany({ where: { userId } }),
+      this.prisma.userPresence.deleteMany({ where: { userId } }),
+      this.prisma.notification.deleteMany({ where: { userId } }),
+      this.prisma.linkedBank.deleteMany({ where: { userId } }),
+      this.prisma.paymentCard.deleteMany({ where: { userId } }),
+      this.prisma.bucketItem.deleteMany({ where: { userId } }),
+      this.prisma.user.update({
+        where: { id: userId },
+        data: {
+          deletedAt: new Date(),
+          supabaseId: randomUUID(),
+          email: `deleted_${userId}@deleted.tripmate.local`,
+          username: null,
+          name: 'Người dùng đã xoá',
+          passwordHash: null,
+          avatarUrl: null,
+          bio: null,
+          vibeTags: [],
+        },
+      }),
+    ]);
     return { success: true, message: 'Tài khoản đã được xoá.' };
   }
 
@@ -591,6 +613,8 @@ export class UsersService {
           latitude: { not: null },
           longitude: { not: null },
           deletedAt: null,
+          // Ghost Cam: ảnh người khác chưa tráng không lộ toạ độ/caption.
+          ...visibleMomentWhere(userId),
         },
         select: {
           latitude: true,

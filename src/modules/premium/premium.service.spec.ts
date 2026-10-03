@@ -9,6 +9,7 @@ import { TrialService } from './trial.service';
 import { PromoService } from './promo.service';
 import { ReferralService } from './referral.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { GooglePlayBillingService } from './google-play-billing.service';
 import { priceOf, MONTHLY_PRICE } from './pricing';
 
 /**
@@ -105,6 +106,7 @@ describe('PremiumService — đơn hàng và webhook', () => {
         { provide: TrialService, useValue: trials },
         { provide: PromoService, useValue: promos },
         { provide: ReferralService, useValue: {} },
+        { provide: GooglePlayBillingService, useValue: { configured: () => false } },
       ],
     }).compile();
     service = mod.get(PremiumService);

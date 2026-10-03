@@ -7,6 +7,10 @@ import {
 import { MessageType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { findSticker } from '../xp/store.catalog';
+import {
+  CUSTOM_STICKER_PREFIX,
+  CustomStickerService,
+} from '../xp/custom-sticker.service';
 import { StoreService } from '../xp/store.service';
 
 @Injectable()
@@ -14,6 +18,7 @@ export class ChatService {
   constructor(
     private prisma: PrismaService,
     private store: StoreService,
+    private customStickers: CustomStickerService,
   ) {}
 
   async sendMessage(
@@ -28,17 +33,27 @@ export class ChatService {
   ) {
     // Gửi sticker phải sở hữu sticker đó. Không kiểm thì ai cũng gửi được mọi
     // sticker và việc đổi XP mua sticker trở nên vô nghĩa.
+    let mediaUrl = data.mediaUrl;
     if (data.type === 'STICKER') {
       const stickerId = data.content?.trim();
       if (!stickerId) {
         throw new BadRequestException('errors.store.stickerRequired');
       }
-      if (!findSticker(stickerId)) {
+      // Ảnh của tin sticker do SERVER quyết định, không lấy từ client: sticker
+      // cá nhân lấy đúng ảnh của sticker đó, sticker emoji thì không có ảnh.
+      mediaUrl = undefined;
+      if (stickerId.startsWith(CUSTOM_STICKER_PREFIX)) {
+        mediaUrl = await this.customStickers.resolveForSend(
+          senderId,
+          stickerId,
+        );
+      } else if (!findSticker(stickerId)) {
         throw new NotFoundException('errors.store.stickerNotFound');
-      }
-      const owns = await this.store.ownsSticker(senderId, stickerId);
-      if (!owns) {
-        throw new ForbiddenException('errors.store.stickerNotOwned');
+      } else {
+        const owns = await this.store.ownsSticker(senderId, stickerId);
+        if (!owns) {
+          throw new ForbiddenException('errors.store.stickerNotOwned');
+        }
       }
     }
 
@@ -47,7 +62,7 @@ export class ChatService {
         tripId,
         senderId,
         content: data.content,
-        mediaUrl: data.mediaUrl,
+        mediaUrl,
         type: data.type ?? 'TEXT',
         replyToId: data.replyToId,
       },
@@ -136,6 +151,9 @@ export class ChatService {
         reactions: true,
       },
       orderBy: { createdAt: 'desc' },
+      // `contains` không dùng được index: giới hạn kết quả để một từ khoá
+      // phổ biến ("ok") không kéo cả lịch sử chat của chuyến về.
+      take: 50,
     });
   }
 }

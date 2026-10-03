@@ -7,6 +7,8 @@ export const envValidationSchema = Joi.object({
     .default('development'),
   PORT: Joi.number().default(3000),
   ALLOWED_ORIGINS: Joi.string().default('http://localhost:3000'),
+  // Số lớp reverse proxy đứng trước app (Render = 1). Xem main.ts.
+  TRUST_PROXY_HOPS: Joi.number().integer().min(0).max(5).optional(),
   // Cửa hậu đăng nhập dev (mock-google-token). Chỉ 'true' ở máy local.
   ALLOW_DEV_AUTH_BYPASS: Joi.string().valid('true', 'false').default('false'),
 

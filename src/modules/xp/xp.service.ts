@@ -139,6 +139,12 @@ export class XpService {
     startOfDay.setHours(0, 0, 0, 0);
 
     try {
+      // Khoá dòng user trước khi đếm: đếm-rồi-ghi không khoá thì N request
+      // song song cùng thấy "chưa chạm trần" và cùng được cộng. Ở READ
+      // COMMITTED, giao dịch sau chờ ở đây rồi mới đếm, nên thấy dòng sổ cái
+      // của giao dịch trước.
+      await client.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
+
       const todayCount = await client.xpLedger.count({
         where: {
           userId,

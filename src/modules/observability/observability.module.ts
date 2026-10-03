@@ -1,3 +1,4 @@
+import { ClientErrorsController } from './client-errors.controller';
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../../prisma/prisma.module';
 import { MetricsBufferService } from './metrics-buffer.service';
@@ -6,7 +7,7 @@ import { ObservabilityController } from './observability.controller';
 
 @Module({
   imports: [PrismaModule],
-  controllers: [ObservabilityController],
+  controllers: [ObservabilityController, ClientErrorsController],
   providers: [MetricsBufferService, ObservabilityService],
   exports: [MetricsBufferService, ObservabilityService],
 })

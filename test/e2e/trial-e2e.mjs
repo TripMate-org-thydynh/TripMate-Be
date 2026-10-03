@@ -22,12 +22,14 @@ const check = (name, ok, detail = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ' — ' + detail : ''}`);
 };
 
-async function call(method, path, { token, body } = {}) {
+async function call(method, path, { token, body, ip } = {}) {
   const res = await fetch(B + path, {
     method,
     headers: {
       'content-type': 'application/json',
       ...(token ? { authorization: `Bearer ${token}` } : {}),
+      // Server test tin 1 lớp proxy (scripts/test-env.sh) nên đây là IP client.
+      ...(ip ? { 'x-forwarded-for': ip } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
@@ -193,6 +195,84 @@ check(
 );
 const deniedEvents = await prisma.subscriptionEvent.findMany({ where: { userId: c3.id } });
 check('Có nhật ký TRIAL_DENIED kèm lý do', deniedEvents.some((e) => e.type === 'TRIAL_DENIED'));
+
+// ── Bấm song song: chỉ một gói dùng thử được tạo ────────────────────────────
+const p1 = await newUser('p1');
+const burst = await Promise.all(
+  Array.from({ length: 5 }, () =>
+    call('POST', '/premium/trial/start', { token: p1.token, body: { deviceId: `dev-${stamp}-p1` } }),
+  ),
+);
+const p1Subs = await prisma.subscription.count({ where: { userId: p1.id, status: 'TRIALING' } });
+const p1Claims = await prisma.trialClaim.count({ where: { userId: p1.id } });
+check(
+  '5 request song song → đúng 1 gói dùng thử, 1 claim',
+  p1Subs === 1 && p1Claims === 1 && burst.filter((r) => r.data?.active).length === 1,
+  `subs=${p1Subs} claims=${p1Claims} ok=${burst.filter((r) => r.data?.active).length}`,
+);
+
+// ── Bấm lại sau khi đã dùng thử không làm phình bảng ────────────────────────
+const before = await prisma.trialClaim.count({ where: { userId: u1.id } });
+await call('POST', '/premium/trial/start', { token: u1.token, body: { deviceId: `dev-${stamp}-1` } });
+await call('POST', '/premium/trial/start', { token: u1.token, body: { deviceId: `dev-${stamp}-1` } });
+const after = await prisma.trialClaim.count({ where: { userId: u1.id } });
+check('Từ chối vì đã dùng thử → không ghi thêm dòng', after === before, `${before} → ${after}`);
+
+// ── deviceId rác không làm sập request ──────────────────────────────────────
+const j1 = await newUser('j1');
+const junk = await call('POST', '/premium/trial/start', {
+  token: j1.token,
+  body: { deviceId: { $ne: null } },
+});
+check('deviceId là object → không 500, coi như không gửi', junk.status < 500, `status=${junk.status}`);
+const j1Claim = await prisma.trialClaim.findFirst({ where: { userId: j1.id } });
+check(
+  '  → tài khoản mật khẩu không có deviceId: được thử nhưng REVIEW',
+  junk.data?.active === true && j1Claim?.verdict === 'REVIEW' && j1Claim.deviceHash === null,
+  `verdict=${j1Claim?.verdict} reasons=${j1Claim?.reasons}`,
+);
+
+// ── Cày dùng thử bằng tài khoản mật khẩu mới, mỗi lần một deviceId bịa ──────
+// Thứ duy nhất người gian không tự đặt được là dải mạng.
+const farmIp = `203.0.${stamp % 250}.`;
+const farm = [];
+for (let i = 0; i < 4; i++) {
+  const u = await newUser(`farm${i}`);
+  farm.push(
+    await call('POST', '/premium/trial/start', {
+      token: u.token,
+      ip: farmIp + (10 + i),
+      // Lần 3–4 gửi kèm token Play Integrity bịa (một ngắn, một quá dài):
+      // không được tính là bảo chứng, không được làm sập request.
+      body: {
+        deviceId: `dev-${stamp}-farm-${i}`,
+        ...(i === 2 && { integrityToken: 'eyJhbGciOiJBMjU2S1ci.gia.mao' }),
+        ...(i === 3 && { integrityToken: 'x'.repeat(20000) }),
+      },
+    }),
+  );
+}
+check(
+  'Token Integrity bịa / quá dài → không 500, không DEVICE_ATTESTED',
+  farm.every((r) => r.status < 500) &&
+    !farm.some((r) => r.json?.reasons?.includes('DEVICE_ATTESTED')),
+  farm.map((r) => r.status).join(','),
+);
+check('Cùng dải mạng, tài khoản mật khẩu: 2 lần đầu được thử', farm[0].data?.active === true && farm[1].data?.active === true);
+check(
+  '  → lần thứ 3 trở đi bị chặn dù deviceId mới',
+  farm[2].json?.reasons?.includes('NETWORK_UNVERIFIED_REPEAT') && farm[3].json?.code === 'TRIAL_NOT_ELIGIBLE',
+  JSON.stringify(farm[2].json)?.slice(0, 140),
+);
+check('  → server chỉ lối ra: xác minh danh tính', farm[2].json?.needsVerification === true);
+
+const other = await newUser('othernet');
+const otherNet = await call('POST', '/premium/trial/start', {
+  token: other.token,
+  ip: `198.51.${stamp % 250}.7`,
+  body: { deviceId: `dev-${stamp}-othernet` },
+});
+check('Dải mạng khác không bị vạ lây', otherNet.data?.active === true, JSON.stringify(otherNet.json)?.slice(0, 100));
 
 // ── Không xác thực thì không đụng được ──────────────────────────────────────
 const noAuth = await call('POST', '/premium/trial/start', { body: { deviceId: 'x' } });

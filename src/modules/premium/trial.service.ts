@@ -137,24 +137,36 @@ export class TrialService {
     if (result.verdict === 'INELIGIBLE') {
       // Vẫn ghi lại lần bị từ chối: không ghi thì không đo được tầng xét duyệt
       // có chặn oan hay không, và lần sau cũng không biết đã từ chối vì gì.
-      await this.prisma.trialClaim.create({
-        data: {
-          userId,
-          ...result.hashes,
-          verdict: result.verdict,
-          reasons: result.reasons,
-          outcome: 'CANCELED',
-          endedAt: now,
-        },
-      });
-      await this.log(userId, 'TRIAL_DENIED', {
-        actor: 'user',
-        meta: { reasons: result.reasons },
-      });
+      //
+      // Trừ hai lý do CHẮC CHẮN (đã dùng thử / đã trả tiền): ở đó không có gì
+      // để đo, mà mỗi lần bấm lại nút là thêm một dòng — bảng phình theo số lần
+      // bấm chứ không theo số người.
+      const certain = result.reasons.some(
+        (r) => r === 'ALREADY_TRIALED' || r === 'ALREADY_PAID',
+      );
+      if (!certain) {
+        await this.prisma.trialClaim.create({
+          data: {
+            userId,
+            ...result.hashes,
+            verdict: result.verdict,
+            reasons: result.reasons,
+            outcome: 'CANCELED',
+            endedAt: now,
+          },
+        });
+        await this.log(userId, 'TRIAL_DENIED', {
+          actor: 'user',
+          meta: { reasons: result.reasons },
+        });
+      }
       throw new BadRequestException({
         code: 'TRIAL_NOT_ELIGIBLE',
         message: 'errors.premium.trialNotEligible',
         reasons: result.reasons,
+        // Lối ra cho người thật bị chặn vì tài khoản chưa xác minh: đăng nhập
+        // bằng Google/OTP. Client dựa vào cờ này để nói đúng việc cần làm.
+        needsVerification: result.reasons.includes('UNVERIFIED_IDENTITY'),
       });
     }
 
@@ -164,6 +176,30 @@ export class TrialService {
     const endsAt = new Date(now.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
 
     const sub = await this.prisma.$transaction(async (tx) => {
+      // Hai request song song của cùng một người đều qua được các kiểm tra ở
+      // trên (đếm-rồi-ghi) và tạo ra hai gói dùng thử. Khoá dòng user rồi kiểm
+      // lại bên trong giao dịch để lượt sau thấy kết quả của lượt trước.
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
+      const raced =
+        (await tx.subscription.findFirst({
+          where: {
+            userId,
+            status: { in: ['ACTIVE', 'TRIALING'] },
+            currentPeriodEnd: { gt: now },
+          },
+          select: { id: true },
+        })) ??
+        (await tx.trialClaim.findFirst({
+          where: { userId, verdict: { not: 'INELIGIBLE' } },
+          select: { id: true },
+        }));
+      if (raced) {
+        throw new BadRequestException({
+          code: 'ALREADY_SUBSCRIBED',
+          message: 'errors.premium.alreadySubscribed',
+        });
+      }
+
       const createdSub = await tx.subscription.create({
         data: {
           userId,

@@ -8,15 +8,38 @@ import { PrismaClientExceptionFilter } from './common/filters/prisma-exception.f
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { I18nValidationPipe, I18nValidationExceptionFilter } from 'nestjs-i18n';
 import { json, urlencoded } from 'express';
+import type { NextFunction, Request, Response } from 'express';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { MetricsBufferService } from './modules/observability/metrics-buffer.service';
 import { makeMetricsMiddleware } from './modules/observability/metrics.middleware';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const isProd = process.env.NODE_ENV === 'production';
 
-  // Tăng giới hạn body để nhận ảnh base64 (photo-location). Mặc định 100kb quá nhỏ.
-  app.use(json({ limit: '25mb' }));
-  app.use(urlencoded({ limit: '25mb', extended: true }));
+  // Sau reverse proxy (Render) `req.ip` mặc định là IP của proxy, nên rate
+  // limit theo IP dồn MỌI người dùng vào một xô: 100 req/phút cho cả hệ thống
+  // và một client đủ làm tất cả ăn 429. Tin đúng số hop proxy phía trước để
+  // `req.ip` là IP thật. Đặt TRUST_PROXY_HOPS nếu hạ tầng có nhiều lớp hơn;
+  // đừng đặt lớn hơn thực tế — client sẽ giả được X-Forwarded-For.
+  const trustProxyHops = Number(
+    process.env.TRUST_PROXY_HOPS ?? (isProd ? 1 : 0),
+  );
+  if (Number.isInteger(trustProxyHops) && trustProxyHops > 0) {
+    app.set('trust proxy', trustProxyHops);
+  }
+
+  // Body mặc định 1MB. Chỉ các route nhận ảnh base64 mới được 25MB — nếu để
+  // 25MB toàn cục thì cả route chưa đăng nhập cũng buộc server đọc và parse
+  // 25MB JSON cho mỗi request.
+  const LARGE_BODY_ROUTE =
+    /^\/api\/v1\/(ai\/photo-location|trips\/[^/]+\/reservations\/import(-image)?|trips\/[^/]+\/expenses\/ocr)\/?$/;
+  const largeJson = json({ limit: '25mb' });
+  const smallJson = json({ limit: '1mb' });
+  app.use((req: Request, res: Response, next: NextFunction) =>
+    (LARGE_BODY_ROUTE.test(req.path) ? largeJson : smallJson)(req, res, next),
+  );
+  app.use(urlencoded({ limit: '1mb', extended: true }));
 
   // Global prefix
   app.setGlobalPrefix('api/v1');
@@ -27,7 +50,6 @@ async function bootstrap() {
   app.use(makeMetricsMiddleware(metricsBuffer));
 
   // Security headers. Tắt CSP ở dev để Swagger UI hoạt động.
-  const isProd = process.env.NODE_ENV === 'production';
   app.use(
     helmet({
       contentSecurityPolicy: isProd ? undefined : false,

@@ -31,7 +31,8 @@
     "selfReferral": "You cannot use your own referral code! 🤪",
     "couponInvalid": "Coupon code has expired or does not exist! 😢",
     "checkoutNotAvailable": "Premium checkout isn't open yet. We're finishing the payment integration — check back soon! 🙏",
-    "verifyNotConfigured": "Google Play purchase verification is not configured yet. Please try again later."
+    "verifyNotConfigured": "Google Play purchase verification is not configured yet. Please try again later.",
+    "managedByPlay": "This plan is billed through Google Play. Cancel it in Google Play → Subscriptions to stop future charges."
   },
   "ai": {
     "unavailable": "AI is busy or unavailable right now. Please try again in a few minutes. 🤖"
@@ -49,7 +50,8 @@
     "themeNotFound": "That theme is no longer available.",
     "alreadyOwned": "You already own this.",
     "stickerRequired": "Sticker id is missing.",
-    "stickerNotOwned": "You don't own this sticker yet. Grab it in the store with XP!"
+    "stickerNotOwned": "You don't own this sticker yet. Grab it in the store with XP!",
+    "customStickerLimit": "You already have the maximum of 30 personal stickers. Delete some to make more."
   },
   "storage": {
     "notConfigured": "Uploads are not configured yet. Please contact an admin.",
@@ -62,5 +64,8 @@
     "emptyItinerary": "This trip has no stops to publish as a template",
     "cannotRateOwn": "You can't rate your own template",
     "mustUseFirst": "Use this template for a trip before rating it"
+  },
+  "reports": {
+    "self": "You cannot report yourself."
   }
 }

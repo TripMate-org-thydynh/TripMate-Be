@@ -7,6 +7,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { ActivitiesService } from '../activities/activities.service';
 import { CreateMomentDto } from './dto/create-moment.dto';
 import { EntitlementService } from '../premium/entitlement.service';
+import { ghostRevealAt, isDeveloping, visibleMomentWhere } from './ghost';
 
 @Injectable()
 export class MomentsService {
@@ -20,8 +21,12 @@ export class MomentsService {
     // Hạn mức khoảnh khắc mỗi chuyến.
     //
     // Đếm cả moment của mọi thành viên, vì `momentsPerTrip` là giới hạn của
-    // chuyến — chi phí lưu trữ nằm ở chuyến, không ở người đăng.
-    const moments = await this.prisma.moment.count({ where: { tripId } });
+    // chuyến — chi phí lưu trữ nằm ở chuyến, không ở người đăng. Ảnh đã xoá
+    // không tính: trước đây xoá bớt cũng không đăng thêm được, người dùng
+    // không có cách nào tự gỡ khỏi trạng thái "đầy".
+    const moments = await this.prisma.moment.count({
+      where: { tripId, deletedAt: null },
+    });
     await this.entitlements.assertTripWithin(
       tripId,
       'momentsPerTrip',
@@ -51,25 +56,75 @@ export class MomentsService {
       tripId,
       userId,
       'MOMENT_SHARED',
-      { caption: row.caption ?? '' },
+      // Ảnh ghost: không lộ caption trước khi tráng.
+      { caption: row.isGhost ? '' : (row.caption ?? '') },
       row.id,
     );
     return row;
   }
 
-  async findAll(tripId: string) {
-    return this.prisma.moment.findMany({
-      where: { tripId, deletedAt: null },
-      include: {
-        user: { select: { id: true, name: true, avatarUrl: true } },
-        reactions: true,
-        _count: { select: { reactions: true, comments: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+  async findAll(tripId: string, viewerId: string) {
+    const [trip, rows] = await Promise.all([
+      this.prisma.trip.findUnique({
+        where: { id: tripId },
+        select: { endDate: true },
+      }),
+      this.prisma.moment.findMany({
+        where: { tripId, deletedAt: null, ...visibleMomentWhere(viewerId) },
+        include: {
+          user: { select: { id: true, name: true, avatarUrl: true } },
+          reactions: true,
+          _count: { select: { reactions: true, comments: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        // Chặn trên an toàn: gói trả phí cho tới 1000 khoảnh khắc/chuyến, mà
+        // app vẽ cả danh sách một lần. Nên chuyển sang phân trang con trỏ.
+        take: 500,
+      }),
+    ]);
+    // Ảnh ghost của chính mình vẫn thấy, kèm cờ để app vẽ nhãn "đang tráng".
+    return rows.map((m) =>
+      trip && isDeveloping(m, trip.endDate)
+        ? { ...m, developing: true, revealAt: ghostRevealAt(trip.endDate) }
+        : m,
+    );
   }
 
-  async findOne(id: string) {
+  /**
+   * Số ảnh ghost đang tráng trong chuyến. Thành viên khác chỉ biết con số,
+   * không thấy ảnh — đủ để tò mò mà không lộ nội dung.
+   */
+  async developing(tripId: string, viewerId: string) {
+    const trip = await this.prisma.trip.findUnique({
+      where: { id: tripId },
+      select: { endDate: true },
+    });
+    if (!trip) throw new NotFoundException('errors.database.notFound');
+    const revealAt = ghostRevealAt(trip.endDate);
+    if (revealAt.getTime() <= Date.now()) {
+      return { total: 0, mine: 0, revealAt, revealed: true };
+    }
+    const [total, mine] = await Promise.all([
+      this.prisma.moment.count({
+        where: { tripId, deletedAt: null, isGhost: true },
+      }),
+      this.prisma.moment.count({
+        where: { tripId, deletedAt: null, isGhost: true, userId: viewerId },
+      }),
+    ]);
+    return { total, mine, revealAt, revealed: false };
+  }
+
+  /** 404 nếu người xem chưa được thấy ảnh này (ghost chưa tráng). */
+  private async assertVisible(id: string, viewerId: string) {
+    const ok = await this.prisma.moment.count({
+      where: { id, deletedAt: null, ...visibleMomentWhere(viewerId) },
+    });
+    if (!ok) throw new NotFoundException('Moment not found');
+  }
+
+  async findOne(id: string, viewerId: string) {
+    await this.assertVisible(id, viewerId);
     const moment = await this.prisma.moment.findUnique({
       where: { id, deletedAt: null },
       include: {
@@ -138,6 +193,7 @@ export class MomentsService {
   }
 
   async addComment(momentId: string, userId: string, content: string) {
+    await this.assertVisible(momentId, userId);
     return this.prisma.momentComment.create({
       data: { momentId, userId, content },
       include: { user: { select: { id: true, name: true, avatarUrl: true } } },
@@ -145,6 +201,7 @@ export class MomentsService {
   }
 
   async toggleReaction(momentId: string, userId: string, emoji: string) {
+    await this.assertVisible(momentId, userId);
     const existing = await this.prisma.momentReaction.findUnique({
       where: { momentId_userId_emoji: { momentId, userId, emoji } },
     });

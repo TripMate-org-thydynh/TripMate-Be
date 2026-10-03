@@ -14,6 +14,9 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { User } from '@prisma/client';
+import { Throttle } from '@nestjs/throttler';
+import { userOrIpTracker } from '../../common/throttle/user-tracker';
+import { InTrip } from '../../common/guards/trip-resource.guard';
 
 @ApiTags('Invites')
 @UseGuards(JwtAuthGuard)
@@ -40,6 +43,7 @@ export class InvitesController {
     return this.invitesService.getInvites(tripId);
   }
 
+  @InTrip('tripInvite', 'inviteId')
   @Delete(':tripId/invites/:inviteId')
   @UseGuards(TripMemberGuard)
   @ApiOperation({ summary: 'Vô hiệu hóa invite link' })
@@ -47,6 +51,8 @@ export class InvitesController {
     return this.invitesService.deactivateInvite(inviteId, user.id);
   }
 
+  // Theo người dùng, không theo IP: cả nhóm chung Wi-Fi cùng bấm link mời.
+  @Throttle({ default: { limit: 10, ttl: 60000, getTracker: userOrIpTracker } })
   @Post('join-link/:code')
   @ApiOperation({ summary: 'Tham gia trip bằng invite link code' })
   joinByCode(@Param('code') code: string, @CurrentUser() user: User) {

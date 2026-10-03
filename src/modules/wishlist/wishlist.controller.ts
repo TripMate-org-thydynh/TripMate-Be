@@ -16,6 +16,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { ResourceOwnerGuard } from '../../common/guards/resource-owner.guard';
 import { OwnedResource } from '../../common/decorators/resource-owner.decorator';
+import { InTrip } from '../../common/guards/trip-resource.guard';
 
 @Controller('trips/:tripId/wishlist')
 @UseGuards(JwtAuthGuard, TripMemberGuard)
@@ -39,6 +40,7 @@ export class WishlistController {
     return this.wishlistService.addItem(tripId, req.user.id, dto);
   }
 
+  @InTrip('wishlistItem', 'itemId')
   @Post(':itemId/vote')
   toggleVote(@Param('itemId') itemId: string, @Request() req: RequestWithUser) {
     return this.wishlistService.toggleVote(itemId, req.user.id);
@@ -46,6 +48,7 @@ export class WishlistController {
 
   @UseGuards(ResourceOwnerGuard)
   @OwnedResource('wishlistItem', 'itemId')
+  @InTrip('wishlistItem', 'itemId')
   @Delete(':itemId')
   deleteItem(@Param('itemId') itemId: string, @Request() req: RequestWithUser) {
     return this.wishlistService.deleteItem(itemId, req.user.id);

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Chạy các bộ e2e trên hạ tầng test (npm run test:db:up trước).
+# Cháº¡y cĂ¡c bá»™ e2e trĂªn háº¡ táº§ng test (npm run test:db:up trÆ°á»›c).
 #
-# Mỗi bộ chạy trên một tiến trình server MỚI: vài bộ đổi trạng thái toàn cục
-# (hạn mức, throttle) nên chạy nối tiếp trên cùng tiến trình sẽ ảnh hưởng nhau.
+# Má»—i bá»™ cháº¡y trĂªn má»™t tiáº¿n trĂ¬nh server Má»I: vĂ i bá»™ Ä‘á»•i tráº¡ng thĂ¡i toĂ n cá»¥c
+# (háº¡n má»©c, throttle) nĂªn cháº¡y ná»‘i tiáº¿p trĂªn cĂ¹ng tiáº¿n trĂ¬nh sáº½ áº£nh hÆ°á»Ÿng nhau.
 #
 #   npm run test:e2e:all
 #   SUITES="webhook-e2e sepay-e2e" npm run test:e2e:all
@@ -12,9 +12,9 @@ source scripts/test-env.sh
 
 LOG_DIR="${LOG_DIR:-test/e2e/.logs}"
 mkdir -p "$LOG_DIR"
-SUITES="${SUITES:-api-e2e webhook-e2e sepay-e2e payment-e2e checkout-e2e entitlement-e2e gating-e2e trial-e2e referral-promo-e2e concurrency-security-e2e}"
+SUITES="${SUITES:-api-e2e webhook-e2e sepay-e2e payment-e2e checkout-e2e entitlement-e2e gating-e2e trial-e2e referral-promo-e2e concurrency-security-e2e account-delete-e2e ghost-e2e reports-e2e custom-sticker-e2e}"
 
-npm run build >/dev/null || { echo "build lỗi"; exit 1; }
+npm run build >/dev/null || { echo "build lá»—i"; exit 1; }
 
 node test/e2e/stub-gateway.mjs >"$LOG_DIR/stub.log" 2>&1 &
 STUB=$!
@@ -31,7 +31,7 @@ for suite in $SUITES; do
   if node "test/e2e/$suite.mjs" >"$LOG_DIR/$suite.log" 2>&1; then
     echo "PASS  $suite  ($(grep -aiE 'pass' "$LOG_DIR/$suite.log" | tail -1 | tr -s ' '))"
   else
-    echo "FAIL  $suite  — xem $LOG_DIR/$suite.log"
+    echo "FAIL  $suite  â€” xem $LOG_DIR/$suite.log"
     grep -a "FAIL" "$LOG_DIR/$suite.log" | head -10
     failed+=("$suite")
   fi
@@ -40,7 +40,7 @@ for suite in $SUITES; do
 done
 
 if [ ${#failed[@]} -gt 0 ]; then
-  echo "Hỏng: ${failed[*]}"
+  echo "Há»ng: ${failed[*]}"
   exit 1
 fi
-echo "Tất cả bộ e2e đều qua."
+echo "Táº¥t cáº£ bá»™ e2e Ä‘á»u qua."

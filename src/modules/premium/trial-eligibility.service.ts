@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { createHmac } from 'crypto';
 import { TrialVerdict } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { isPrivateIp } from '../ai/web-research.service';
 
 /** Tín hiệu thô do lớp gọi thu thập từ request. Không cái nào bắt buộc. */
 export interface TrialSignals {
@@ -11,6 +12,12 @@ export interface TrialSignals {
   deviceId?: string | null;
   /** IP của request. Được rút về dải /24 rồi băm — không lưu IP đầy đủ. */
   ip?: string | null;
+  /**
+   * `deviceId` đã được Play Integrity bảo chứng (app thật từ Play, máy thật,
+   * token gắn đúng mã này). Khi đó mã thiết bị đáng tin và luật theo dải mạng
+   * dành cho tài khoản chưa xác minh không áp dụng nữa.
+   */
+  deviceAttested?: boolean;
 }
 
 export interface EligibilityResult {
@@ -53,6 +60,16 @@ export class TrialEligibilityService {
   /** Ngưỡng điểm để chuyển kết luận. */
   private static readonly REVIEW_AT = 2;
   private static readonly BLOCK_AT = 4;
+  /** Số lần dùng thử của tài khoản chưa xác minh cho mỗi dải mạng / 30 ngày. */
+  private static readonly UNVERIFIED_PER_NETWORK = 2;
+
+  /**
+   * Tài khoản `register-password`: email là địa chỉ nội bộ ghép từ username,
+   * không ai chứng minh quyền sở hữu gì cả.
+   */
+  static isUnverifiedIdentity(email: string): boolean {
+    return email.toLowerCase().endsWith('@tripmate.local');
+  }
 
   constructor(private prisma: PrismaService) {}
 
@@ -63,6 +80,7 @@ export class TrialEligibilityService {
     const hashes = this.hashesOf(signals);
     const reasons: string[] = [];
     let score = 0;
+    const attested = !!signals.deviceAttested && !!hashes.deviceHash;
 
     // ── Tín hiệu chắc chắn: chính tài khoản này đã dùng thử ────────────────
     const own = await this.prisma.trialClaim.findFirst({
@@ -97,6 +115,7 @@ export class TrialEligibilityService {
     }
 
     // ── Tín hiệu mạnh: cùng thiết bị đã dùng thử ───────────────────────────
+    if (attested) reasons.push('DEVICE_ATTESTED');
     if (hashes.deviceHash) {
       const sameDevice = await this.prisma.trialClaim.count({
         where: { deviceHash: hashes.deviceHash, userId: { not: userId } },
@@ -149,6 +168,45 @@ export class TrialEligibilityService {
       if (this.isDisposableEmail(user.email)) {
         score += 3;
         reasons.push('DISPOSABLE_EMAIL');
+      }
+
+      // ── Tài khoản chưa chứng minh danh tính ──────────────────────────────
+      // Đăng ký bằng username + mật khẩu không tốn gì và không gắn với hộp thư
+      // nào: tín hiệu email luôn "mới", còn `deviceId` thì client tự khai. Chỉ
+      // còn dải mạng là thứ người gian không tự đặt được, nên với RIÊNG nhóm
+      // này nó được tính nặng hơn. Người thật bị chặn oan vẫn có lối ra rõ
+      // ràng: đăng nhập Google/OTP — xem `needsVerification` ở TrialService.
+      //
+      // Ngoại lệ: máy đã được Play Integrity bảo chứng. Mã thiết bị lúc đó là
+      // thật, luật theo máy ở trên đã đủ chặn người cày nhiều tài khoản trên
+      // một máy — còn luật dải mạng chỉ chặn oan người dùng 4G chung CGNAT.
+      if (TrialEligibilityService.isUnverifiedIdentity(user.email)) {
+        reasons.push('UNVERIFIED_IDENTITY');
+        if (!hashes.deviceHash) {
+          score += 2;
+          reasons.push('UNVERIFIED_NO_DEVICE');
+        }
+        if (hashes.networkHash && !attested) {
+          // Chỉ đếm các lần thử KHÔNG bảo chứng: người thật đã bảo chứng trên
+          // cùng dải không được làm hết suất của người khác.
+          const sameNetworkUnverified = await this.prisma.trialClaim.count({
+            where: {
+              networkHash: hashes.networkHash,
+              userId: { not: userId },
+              verdict: { not: 'INELIGIBLE' },
+              reasons: { has: 'UNVERIFIED_IDENTITY' },
+              NOT: { reasons: { has: 'DEVICE_ATTESTED' } },
+              startedAt: { gte: this.daysAgo(30) },
+            },
+          });
+          if (
+            sameNetworkUnverified >=
+            TrialEligibilityService.UNVERIFIED_PER_NETWORK
+          ) {
+            score += 4;
+            reasons.push('NETWORK_UNVERIFIED_REPEAT');
+          }
+        }
       }
     }
 
@@ -235,6 +293,10 @@ export class TrialEligibilityService {
   private networkOf(ip?: string | null): string | null {
     if (!ip) return null;
     const clean = ip.replace(/^::ffff:/, '').trim();
+    // IP nội bộ/loopback nghĩa là đang đứng sau proxy chưa cấu hình đúng (hoặc
+    // chạy máy dev): mọi người dùng sẽ hiện ra cùng một "dải mạng". Thà không
+    // có tín hiệu còn hơn có tín hiệu sai chặn oan cả hệ thống.
+    if (isPrivateIp(clean)) return null;
     if (clean.includes('.')) {
       const parts = clean.split('.');
       if (parts.length !== 4) return null;

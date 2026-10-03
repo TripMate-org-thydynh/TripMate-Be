@@ -14,6 +14,7 @@ import { GamesService } from './games.service';
 import { CreateGameSessionDto, UpdateGameStateDto } from './dto/game.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
+import { InTrip } from '../../common/guards/trip-resource.guard';
 
 @ApiTags('Games')
 @UseGuards(JwtAuthGuard, TripMemberGuard)
@@ -81,18 +82,21 @@ export class GamesController {
     return this.gamesService.getLeaderboard(tripId);
   }
 
+  @InTrip('gameSession', 'id')
   @Get(':id')
   @ApiOperation({ summary: 'Xem trạng thái game' })
   findOne(@Param('id') id: string) {
     return this.gamesService.findOne(id);
   }
 
+  @InTrip('gameSession', 'id')
   @Patch(':id/state')
   @ApiOperation({ summary: 'Cập nhật trạng thái game realtime' })
   updateState(@Param('id') id: string, @Body() dto: UpdateGameStateDto) {
     return this.gamesService.updateState(id, dto.stateJson);
   }
 
+  @InTrip('gameSession', 'id')
   @Patch(':id/end')
   @ApiOperation({ summary: 'Kết thúc game session' })
   end(@Param('id') id: string) {

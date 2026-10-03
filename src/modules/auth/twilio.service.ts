@@ -39,6 +39,7 @@ export class TwilioService {
       );
 
       const response = await fetch(twilioUrl, {
+        signal: AbortSignal.timeout(10000),
         method: 'POST',
         headers: {
           Authorization: `Basic ${basicAuth}`,

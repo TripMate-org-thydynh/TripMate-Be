@@ -31,7 +31,8 @@
     "selfReferral": "Không thể tự nhập mã giới thiệu của mình nha cưng! 🤪",
     "couponInvalid": "Mã giảm giá đã hết hạn hoặc không tồn tại! 😢",
     "checkoutNotAvailable": "Thanh toán Premium hiện chưa mở. Bọn mình đang hoàn tất tích hợp cổng thanh toán, quay lại sau ít hôm nha! 🙏",
-    "verifyNotConfigured": "Xác thực thanh toán Google Play chưa được cấu hình. Vui lòng thử lại sau."
+    "verifyNotConfigured": "Xác thực thanh toán Google Play chưa được cấu hình. Vui lòng thử lại sau.",
+    "managedByPlay": "Gói này thanh toán qua Google Play. Hãy huỷ trong Google Play → Gói thuê bao để ngừng bị trừ tiền."
   },
   "ai": {
     "unavailable": "AI đang bận hoặc chưa sẵn sàng. Thử lại sau ít phút nha! 🤖"
@@ -49,7 +50,8 @@
     "themeNotFound": "Theme này không còn trong chợ.",
     "alreadyOwned": "Bạn đã sở hữu món này rồi.",
     "stickerRequired": "Thiếu mã sticker.",
-    "stickerNotOwned": "Bạn chưa sở hữu sticker này. Ghé cửa hàng đổi bằng XP nha!"
+    "stickerNotOwned": "Bạn chưa sở hữu sticker này. Ghé cửa hàng đổi bằng XP nha!",
+    "customStickerLimit": "Bạn đã có tối đa 30 sticker cá nhân. Xoá bớt để tạo thêm."
   },
   "storage": {
     "notConfigured": "Chức năng tải ảnh chưa được cấu hình. Báo admin giúp mình nha!",
@@ -62,5 +64,8 @@
     "emptyItinerary": "Chuyến chưa có điểm dừng nào để đăng thành mẫu",
     "cannotRateOwn": "Không tự chấm điểm mẫu của mình",
     "mustUseFirst": "Dùng mẫu này cho một chuyến trước rồi hãy chấm điểm"
+  },
+  "reports": {
+    "self": "Không thể tự báo cáo chính mình."
   }
 }

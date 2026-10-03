@@ -17,6 +17,7 @@ import { ResourceOwnerGuard } from '../../common/guards/resource-owner.guard';
 import { OwnedResource } from '../../common/decorators/resource-owner.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { User } from '@prisma/client';
+import { InTrip } from '../../common/guards/trip-resource.guard';
 
 @ApiTags('Notes')
 @UseGuards(JwtAuthGuard, TripMemberGuard)
@@ -41,6 +42,7 @@ export class NotesController {
     return this.notesService.create(tripId, user.id, dto);
   }
 
+  @InTrip('tripNote', 'noteId')
   @Patch(':noteId')
   @ApiOperation({ summary: 'Cập nhật ghi chú' })
   update(
@@ -53,6 +55,7 @@ export class NotesController {
 
   @UseGuards(ResourceOwnerGuard)
   @OwnedResource('tripNote', 'noteId')
+  @InTrip('tripNote', 'noteId')
   @Delete(':noteId')
   @ApiOperation({ summary: 'Xóa ghi chú' })
   delete(@Param('noteId') noteId: string, @CurrentUser() user: User) {

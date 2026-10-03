@@ -41,6 +41,7 @@ import { ReservationsModule } from './modules/reservations/reservations.module';
 import { TodosModule } from './modules/todos/todos.module';
 import { InvitesModule } from './modules/invites/invites.module';
 import { NotesModule } from './modules/notes/notes.module';
+import { ReportsModule } from './modules/reports/reports.module';
 import { CheckinsModule } from './modules/checkins/checkins.module';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { JournalModule } from './modules/journal/journal.module';
@@ -159,6 +160,7 @@ import { AppService } from './app.service';
     TodosModule,
     InvitesModule,
     NotesModule,
+    ReportsModule,
     CheckinsModule,
     DocumentsModule,
     JournalModule,

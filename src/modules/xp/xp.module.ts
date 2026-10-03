@@ -1,6 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { PrismaModule } from '../../prisma/prisma.module';
 import { StoreService } from './store.service';
+import { CustomStickerService } from './custom-sticker.service';
 import { XpController } from './xp.controller';
 import { XpService } from './xp.service';
 
@@ -12,7 +13,7 @@ import { XpService } from './xp.service';
 @Module({
   imports: [PrismaModule],
   controllers: [XpController],
-  providers: [XpService, StoreService],
-  exports: [XpService, StoreService],
+  providers: [XpService, StoreService, CustomStickerService],
+  exports: [XpService, StoreService, CustomStickerService],
 })
 export class XpModule {}

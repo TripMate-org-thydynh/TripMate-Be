@@ -83,6 +83,8 @@ model User {
   journalEntries     JournalEntry[]
   vacationDays       VacationDay[]
   adminAuditLogs     AdminAuditLog[]
+  reportsFiled       ContentReport[]
+  customStickers     CustomSticker[]
 
   @@map("users")
 }
@@ -342,6 +344,8 @@ model Subscription {
   @@unique([provider, externalId])
   @@index([userId])
   @@index([userId, status])
+  /// Cron hết hạn quét `status = ACTIVE AND current_period_end <= now` mỗi giờ.
+  @@index([status, currentPeriodEnd])
   @@map("subscriptions")
 }
 
@@ -853,6 +857,8 @@ model AIRequest {
   @@index([userId])
   @@index([tripId])
   @@index([status])
+  /// Đếm lượt AI trong tháng của một người (hạn mức aiPerMonth).
+  @@index([userId, createdAt])
   @@map("ai_requests")
 }
 
@@ -1583,4 +1589,64 @@ model AiEmbedding {
   @@unique([source, sourceId])
   @@index([templateId])
   @@map("ai_embeddings")
+}
+
+/// Báo cáo nội dung vi phạm — bắt buộc với app có nội dung người dùng tạo
+/// (chính sách UGC của Google Play). `targetId` không có khoá ngoại vì trỏ
+/// vào nhiều bảng khác nhau theo `targetType`.
+model ContentReport {
+  id         String       @id @default(uuid()) @db.Uuid
+  reporterId String       @map("reporter_id") @db.Uuid
+  targetType ReportTarget @map("target_type")
+  targetId   String       @map("target_id") @db.Uuid
+  reason     ReportReason
+  note       String?
+  status     ReportStatus @default(OPEN)
+  createdAt  DateTime     @default(now()) @map("created_at")
+  resolvedAt DateTime?    @map("resolved_at")
+  reporter   User         @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+
+  @@unique([reporterId, targetType, targetId])
+  @@index([targetType, targetId])
+  @@index([status, createdAt])
+  @@map("content_reports")
+}
+
+enum ReportTarget {
+  TEMPLATE
+  MOMENT
+  CHAT_MESSAGE
+  USER
+}
+
+enum ReportReason {
+  SPAM
+  SEXUAL
+  VIOLENCE
+  HATE
+  HARASSMENT
+  ILLEGAL
+  OTHER
+}
+
+enum ReportStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+/// Sticker cá nhân người dùng tự làm từ ảnh của mình. Chỉ người tạo gửi
+/// được; tin nhắn sticker chép `mediaUrl` vào `chat_messages` nên người nhận
+/// vẫn thấy dù người tạo đã xoá sticker.
+model CustomSticker {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  mediaUrl  String    @map("media_url")
+  label     String?
+  createdAt DateTime  @default(now()) @map("created_at")
+  deletedAt DateTime? @map("deleted_at")
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, deletedAt])
+  @@map("custom_stickers")
 }

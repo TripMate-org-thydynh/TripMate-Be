@@ -86,6 +86,14 @@ export class ResourceOwnerGuard implements CanActivate {
       throw new NotFoundException('errors.database.notFound');
     }
 
+    // Tài nguyên phải thuộc đúng chuyến trên URL. TripMemberGuard chỉ xác nhận
+    // người gọi là thành viên của `:tripId`; thiếu bước này thì thành viên
+    // chuyến A sửa/xoá được tài nguyên của chuyến B bằng cách gọi qua URL A.
+    const urlTripId: string | undefined = request.params.tripId;
+    if (urlTripId && resource.tripId && resource.tripId !== urlTripId) {
+      throw new NotFoundException('errors.database.notFound');
+    }
+
     // 1) Owner check
     if (resource[ownerField] === user.id) return true;
 

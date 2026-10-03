@@ -1,3 +1,5 @@
+import { Throttle } from '@nestjs/throttler';
+import { userOrIpTracker } from '../../common/throttle/user-tracker';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { User } from '@prisma/client';
 import {
@@ -32,6 +34,8 @@ export class TripsController {
     return this.tripsService.create(user.id, dto);
   }
 
+  // Mã mời chỉ 6 ký tự: giới hạn chặt để không dò mã hàng loạt được.
+  @Throttle({ default: { limit: 10, ttl: 60000, getTracker: userOrIpTracker } })
   @Post('join')
   @ApiOperation({ summary: 'Tham gia chuyến đi bằng invite code' })
   join(@CurrentUser() user: User, @Body() dto: JoinTripDto) {

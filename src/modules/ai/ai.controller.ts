@@ -1,9 +1,11 @@
 import type { User } from '@prisma/client';
 import type { Response } from 'express';
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
+  HttpException,
   Param,
   Post,
   Query,
@@ -11,6 +13,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import { userOrIpTracker } from '../../common/throttle/user-tracker';
 import { AiService } from './ai.service';
 import { CreateAIRequestDto } from './dto/ai-request.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -20,6 +24,19 @@ import { AdminGuard } from '../../common/guards/admin.guard';
 import { AiCorrectionsService } from './ai-corrections.service';
 import { AiEmbeddingService } from './ai-embedding.service';
 import { SubmitCorrectionDto } from './dto/correction.dto';
+// Mỗi lời gọi ở đây là tiền trả cho Gemini; giới hạn chặt hơn mức chung 100/phút
+// để một phiên không đốt hạn mức bằng request song song.
+const ALLOWED_IMAGE_MIME = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+]);
+
+@Throttle({
+  default: { limit: 30, ttl: 60000, getTracker: userOrIpTracker },
+})
 @ApiTags('AI')
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth('JWT')
@@ -71,10 +88,13 @@ export class AiController {
     } catch (e) {
       // Header đã gửi rồi nên không đặt được mã lỗi HTTP nữa — báo lỗi qua
       // chính luồng sự kiện để app hiện được thông báo tử tế.
-      const err = e as { status?: number; message?: string };
+      // Chỉ lỗi nghiệp vụ (HttpException: hết lượt, không phải thành viên…)
+      // mới mang thông báo viết cho người dùng. Lỗi khác (Prisma, mạng) có thể
+      // chứa tên host DB hay chi tiết nội bộ → trả câu chung.
+      const isHttp = e instanceof HttpException;
       send('error', {
-        status: err?.status ?? 500,
-        message: err?.message ?? 'Lỗi không xác định',
+        status: isHttp ? e.getStatus() : 500,
+        message: isHttp ? e.message : 'AI đang bận, bạn thử lại sau nhé.',
       });
     } finally {
       res.end();
@@ -86,7 +106,8 @@ export class AiController {
     summary: 'Tìm mẫu/điểm dừng theo NGHĨA (pgvector), không phải từ khoá',
   })
   semanticSearch(@Query('q') q: string) {
-    return this.embeddings.search(q ?? '', 8);
+    // Cắt độ dài: câu truy vấn đi thẳng vào lời gọi embedding tính tiền.
+    return this.embeddings.search(String(q ?? '').slice(0, 300), 8);
   }
 
   @Post('reindex')
@@ -147,10 +168,22 @@ export class AiController {
     @CurrentUser() user: User,
     @Body() dto: { imageBase64: string; mimeType?: string; tripId?: string },
   ) {
+    // Body này không qua DTO nên tự kiểm: phải là chuỗi base64, tối đa ~15MB
+    // ảnh, và mime chỉ trong danh sách ảnh cho phép.
+    if (
+      typeof dto?.imageBase64 !== 'string' ||
+      dto.imageBase64.length === 0 ||
+      dto.imageBase64.length > 20_000_000
+    ) {
+      throw new BadRequestException('Ảnh không hợp lệ hoặc quá lớn');
+    }
+    const mimeType = ALLOWED_IMAGE_MIME.has(dto.mimeType ?? '')
+      ? (dto.mimeType as string)
+      : 'image/jpeg';
     return this.aiService.photoLocation(
       user.id,
       dto.imageBase64,
-      dto.mimeType ?? 'image/jpeg',
+      mimeType,
       typeof dto.tripId === 'string' ? dto.tripId : undefined,
     );
   }

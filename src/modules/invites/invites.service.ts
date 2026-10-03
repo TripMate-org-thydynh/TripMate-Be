@@ -63,6 +63,17 @@ export class InvitesService {
       where: { id: inviteId },
     });
     if (!invite) throw new NotFoundException('Invite not found');
+    // Chỉ người tạo link hoặc trưởng chuyến được tắt link — không phải mọi
+    // thành viên.
+    if (invite.createdBy !== userId) {
+      const trip = await this.prisma.trip.findUnique({
+        where: { id: invite.tripId },
+        select: { createdBy: true },
+      });
+      if (trip?.createdBy !== userId) {
+        throw new ForbiddenException('errors.auth.notOwner');
+      }
+    }
     return this.prisma.tripInvite.update({
       where: { id: inviteId },
       data: { isActive: false },
@@ -75,7 +86,7 @@ export class InvitesService {
       include: { trip: true },
     });
 
-    if (!invite || !invite.isActive) {
+    if (!invite || !invite.isActive || invite.trip.deletedAt) {
       throw new NotFoundException('Invite link is invalid or inactive');
     }
 

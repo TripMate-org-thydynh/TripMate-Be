@@ -7,7 +7,10 @@ import {
   HttpStatus,
   Param,
   Post,
+  ServiceUnavailableException,
+  UnauthorizedException,
 } from '@nestjs/common';
+import { GooglePlayBillingService } from './google-play-billing.service';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { PremiumService } from './premium.service';
@@ -17,7 +20,10 @@ import { RawResponse } from '../../common/interceptors/transform.interceptor';
 @ApiTags('Payment Webhook')
 @Controller('payment')
 export class PaymentWebhookController {
-  constructor(private readonly premiumService: PremiumService) {}
+  constructor(
+    private readonly premiumService: PremiumService,
+    private readonly play: GooglePlayBillingService,
+  ) {}
 
   @Get('order-status/:orderCode')
   @ApiOperation({ summary: 'Kiểm tra trạng thái đơn hàng công khai' })
@@ -54,6 +60,27 @@ export class PaymentWebhookController {
       body,
       authHeader || apiKeyHeader,
     );
+  }
+
+  /**
+   * Google Play RTDN (Pub/Sub push): gia hạn, huỷ, treo, hết hạn, thu hồi,
+   * hoàn tiền. Pub/Sub coi mọi mã 2xx là "đã nhận" và gửi lại khi gặp mã khác,
+   * nên chỉ trả lỗi khi thật sự muốn được gửi lại.
+   */
+  @RawResponse()
+  @Post('google-play/rtdn')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Google Play Real-time Developer Notifications' })
+  async handlePlayRtdn(
+    @Body() body: any,
+    @Headers('authorization') authHeader?: string,
+  ) {
+    if (!(await this.play.verifyPush(authHeader))) {
+      throw new UnauthorizedException();
+    }
+    const r = await this.play.handleNotification(body);
+    if (r.retry) throw new ServiceUnavailableException();
+    return { ok: true };
   }
 }
 

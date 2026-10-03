@@ -6,6 +6,7 @@ import { CreatePollDto } from './dto/create-poll.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { InTrip } from '../../common/guards/trip-resource.guard';
 @ApiTags('Polls')
 @UseGuards(JwtAuthGuard, TripMemberGuard)
 @ApiBearerAuth('JWT')
@@ -29,6 +30,7 @@ export class PollsController {
     return this.pollsService.findAll(tripId);
   }
 
+  @InTrip('pollOption', 'optionId')
   @Post('options/:optionId/vote')
   @ApiOperation({ summary: 'Bỏ phiếu / rút phiếu (toggle)' })
   vote(@Param('optionId') optionId: string, @CurrentUser() user: User) {

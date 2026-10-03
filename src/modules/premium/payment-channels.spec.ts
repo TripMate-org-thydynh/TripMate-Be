@@ -8,6 +8,7 @@ import { TrialService } from './trial.service';
 import { PromoService } from './promo.service';
 import { ReferralService } from './referral.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { GooglePlayBillingService } from './google-play-billing.service';
 import { priceOf } from './pricing';
 import { playProductOf, playProductIdFor, PLAY_PRODUCTS } from './google-play';
 
@@ -70,6 +71,7 @@ describe('Kênh thanh toán — SePay và Google Play', () => {
         { provide: TrialService, useValue: { markConverted: jest.fn(), log: jest.fn() } },
         { provide: PromoService, useValue: { validate: jest.fn(), redeem: jest.fn() } },
         { provide: ReferralService, useValue: {} },
+        { provide: GooglePlayBillingService, useValue: { configured: () => false } },
       ],
     }).compile();
     service = mod.get(PremiumService);
@@ -257,6 +259,7 @@ describe('Kênh thanh toán — SePay và Google Play', () => {
             useValue: { validate: jest.fn(), redeem: jest.fn() },
           },
           { provide: ReferralService, useValue: {} },
+          { provide: GooglePlayBillingService, useValue: { configured: () => false } },
         ],
       }).compile();
       service = mod.get(PremiumService);

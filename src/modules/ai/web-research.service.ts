@@ -1,5 +1,5 @@
 import { lookup } from 'dns/promises';
-import { isIP } from 'net';
+import { BlockList, isIP } from 'net';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
@@ -34,29 +34,42 @@ const GROUNDING_TIMEOUT_MS = 8000;
 const NOT_ARTICLE_HOST =
   /(^|\.)(facebook\.com|instagram\.com|tiktok\.com|youtube\.com|youtu\.be|x\.com|twitter\.com|scribd\.com|threads\.net)$/;
 
-function isPrivateIp(ip: string): boolean {
-  if (isIP(ip) === 6) {
-    const v = ip.toLowerCase();
-    if (v.startsWith('::ffff:')) return isPrivateIp(v.slice(7));
-    return (
-      v === '::1' ||
-      v === '::' ||
-      v.startsWith('fc') ||
-      v.startsWith('fd') ||
-      v.startsWith('fe80')
-    );
-  }
-  const [a, b] = ip.split('.').map(Number);
-  return (
-    a === 10 ||
-    a === 127 ||
-    a === 0 ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    a >= 224
-  );
+// Dải không được phép gọi tới: loopback, mạng riêng, link-local (metadata
+// cloud 169.254.169.254), CGNAT, multicast, và các dải IPv6 tương ứng.
+// Dùng BlockList của Node thay cho so chuỗi: nó hiểu cả IPv4 viết trong vỏ
+// IPv6 ở mọi dạng (`::ffff:127.0.0.1`, `::ffff:7f00:1`) — dạng hex từng lọt
+// qua bản so chuỗi cũ và mở đường gọi vào chính máy chủ.
+const PRIVATE_NETS = new BlockList();
+for (const [net, prefix] of [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['224.0.0.0', 3],
+] as const) {
+  PRIVATE_NETS.addSubnet(net, prefix, 'ipv4');
+}
+for (const [net, prefix] of [
+  ['::', 127], // :: và ::1
+  ['64:ff9b::', 96], // NAT64
+  ['2002::', 16], // 6to4
+  ['fc00::', 7], // unique local
+  ['fe80::', 10], // link-local
+  ['ff00::', 8], // multicast
+] as const) {
+  PRIVATE_NETS.addSubnet(net, prefix, 'ipv6');
+}
+
+export function isPrivateIp(ip: string): boolean {
+  const family = isIP(ip);
+  // Không phải IP hợp lệ thì coi như không an toàn.
+  if (family === 0) return true;
+  return PRIVATE_NETS.check(ip, family === 6 ? 'ipv6' : 'ipv4');
 }
 
 async function assertPublicUrl(raw: string): Promise<URL> {
@@ -125,30 +138,112 @@ function relevant(query: string, results: WebSource[]): WebSource[] {
   });
 }
 
+// Các hàm dưới đây quét TUYẾN TÍNH thay cho regex lười (`[\s\S]*?</tag>`,
+// `<[^>]+>`). HTML là của trang bên ngoài: vài trăm KB thẻ mở không đóng làm
+// các regex đó chạy bậc hai và treo event loop hàng chục giây — tức treo cả
+// server — chỉ với một trang được crawl.
+
+/** Bỏ mọi thẻ `<...>`, thay bằng `sub`. `<` không có `>` thì giữ nguyên. */
+function removeTags(s: string, sub = ''): string {
+  let out = '';
+  let i = 0;
+  for (;;) {
+    const lt = s.indexOf('<', i);
+    if (lt === -1) break;
+    const gt = s.indexOf('>', lt + 1);
+    if (gt === -1) break;
+    out += s.slice(i, lt) + sub;
+    i = gt + 1;
+  }
+  return out + s.slice(i);
+}
+
+/** Bỏ nguyên khối `<tag ...>...</tag>` cho từng tag trong danh sách. */
+function dropBlocks(html: string, tags: readonly string[]): string {
+  const open = new RegExp(`<(${tags.join('|')})`, 'gi');
+  const closers = new Map<string, RegExp>();
+  // Tag đã tìm một lần mà không có thẻ đóng thì phía sau cũng không có —
+  // nhớ lại để không quét tới cuối chuỗi thêm lần nào nữa.
+  const unclosed = new Set<string>();
+  let out = '';
+  let pos = 0;
+  let m: RegExpExecArray | null;
+  while ((m = open.exec(html))) {
+    const tag = m[1].toLowerCase();
+    if (unclosed.has(tag)) continue;
+    let closeRe = closers.get(tag);
+    if (!closeRe) {
+      closeRe = new RegExp(`</${tag}>`, 'gi');
+      closers.set(tag, closeRe);
+    }
+    closeRe.lastIndex = m.index;
+    const c = closeRe.exec(html);
+    if (!c) {
+      unclosed.add(tag);
+      continue;
+    }
+    out += html.slice(pos, m.index) + ' ';
+    pos = c.index + c[0].length;
+    open.lastIndex = pos;
+  }
+  return out + html.slice(pos);
+}
+
+function dropComments(html: string): string {
+  let out = '';
+  let i = 0;
+  for (;;) {
+    const start = html.indexOf('<!--', i);
+    if (start === -1) break;
+    const end = html.indexOf('-->', start + 4);
+    if (end === -1) break;
+    out += html.slice(i, start) + ' ';
+    i = end + 3;
+  }
+  return out + html.slice(i);
+}
+
+/** Phần tử `<tag>...</tag>` đầu tiên, hoặc null. */
+function firstElement(html: string, tag: string): string | null {
+  const open = new RegExp(`<${tag}`, 'i').exec(html);
+  if (!open) return null;
+  const closeRe = new RegExp(`</${tag}>`, 'gi');
+  closeRe.lastIndex = open.index;
+  const close = closeRe.exec(html);
+  return close ? html.slice(open.index, close.index + close[0].length) : null;
+}
+
+const NON_CONTENT_TAGS = [
+  'script',
+  'style',
+  'noscript',
+  'svg',
+  'nav',
+  'footer',
+  'header',
+  'aside',
+  'form',
+] as const;
+
 function stripTags(s: string): string {
-  return decodeEntities(s.replace(/<[^>]+>/g, ''))
+  return decodeEntities(removeTags(s))
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 /** HTML → chữ thuần: bỏ script/style/nav/footer, giữ ngắt đoạn. */
 export function htmlToText(html: string): string {
-  const body = html
-    .replace(
-      /<(script|style|noscript|svg|nav|footer|header|aside|form)[\s\S]*?<\/\1>/gi,
-      ' ',
-    )
-    .replace(/<!--[\s\S]*?-->/g, ' ');
+  const body = dropComments(dropBlocks(html, NON_CONTENT_TAGS));
   // Ưu tiên <article>/<main> nếu có — ít menu, quảng cáo hơn.
   const main =
-    /<article[\s\S]*?<\/article>/i.exec(body)?.[0] ??
-    /<main[\s\S]*?<\/main>/i.exec(body)?.[0] ??
-    body;
+    firstElement(body, 'article') ?? firstElement(body, 'main') ?? body;
   return decodeEntities(
-    main
-      .replace(/<\/(p|div|li|h[1-6]|tr|br)>/gi, '\n')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<[^>]+>/g, ' '),
+    removeTags(
+      main
+        .replace(/<\/(p|div|li|h[1-6]|tr|br)>/gi, '\n')
+        .replace(/<br\s*\/?>/gi, '\n'),
+      ' ',
+    ),
   )
     .split('\n')
     .map((l) => l.replace(/\s+/g, ' ').trim())
@@ -328,6 +423,7 @@ export class WebResearchService {
         const uri = c.web?.uri;
         if (!uri) return null;
         try {
+          await assertPublicUrl(uri);
           const r = await fetch(uri, {
             method: 'HEAD',
             redirect: 'manual',

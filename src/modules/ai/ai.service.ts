@@ -467,7 +467,11 @@ Quy tắc chấm "confidence":
    * danh sách đặt chỗ có cấu trúc. Mirror logic KI-reservation của TREK nhưng
    * dùng Gemini JSON. Trả [] khi không có AI hoặc parse fail (caller tự xử lý).
    */
-  async parseBookingText(text: string): Promise<ParsedReservation[]> {
+  async parseBookingText(
+    userId: string,
+    text: string,
+  ): Promise<ParsedReservation[]> {
+    await this.assertAiQuota(userId);
     const prompt =
       'Bạn là trợ lý bóc tách thông tin đặt chỗ du lịch. Đọc đoạn text xác nhận ' +
       'dưới đây (có thể là email vé máy bay, khách sạn, nhà hàng...) và trích ra ' +
@@ -485,6 +489,13 @@ Quy tắc chấm "confidence":
     const result = await this.callGeminiJSON<{
       reservations: ParsedReservation[];
     }>(prompt);
+    // Tính vào hạn mức như bản nhập từ ảnh. Không lưu nội dung email/vé.
+    await this.recordAiUsage(
+      userId,
+      'BOOKING_PARSE',
+      undefined,
+      '[booking-import text]',
+    );
 
     if (!Array.isArray(result.reservations)) return [];
     const allowed = new Set([
@@ -607,6 +618,7 @@ Quy tắc chấm "confidence":
     try {
       const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&accept-language=vi`;
       const res = await fetch(url, {
+        signal: AbortSignal.timeout(60000),
         headers: { 'User-Agent': 'TripMate/1.0 (travel app)' },
       });
       if (!res.ok) return null;
@@ -645,6 +657,14 @@ Quy tắc chấm "confidence":
     prompt: string,
     history?: ChatTurn[],
   ) {
+    // Yêu cầu gắn với một chuyến thì người gọi phải là thành viên chuyến đó.
+    // Thiếu bước này, ai đăng nhập cũng đọc được chi tiêu, tên thành viên của
+    // chuyến bất kỳ qua EXPENSE_ROAST (và qua đệm theo tripId ở dưới).
+    await this.assertTripAccess(userId, tripId);
+    // Kiểm hạn mức TRƯỚC bước viết lại câu hỏi: bước đó cũng là một lời gọi
+    // model tốn tiền, người đã hết lượt không được kích hoạt nó.
+    await this.assertAiQuota(userId);
+
     // Câu hỏi nối tiếp ("chỗ đó vé bao nhiêu?") phải thành câu độc lập trước,
     // nếu không cả đệm lẫn đính chính đều không khớp được vào đâu.
     const standalone = await this.rewriter.rewrite(prompt, history ?? []);
@@ -675,12 +695,18 @@ Quy tắc chấm "confidence":
     // Đếm theo **tháng dương lịch** chứ không phải 30 ngày trượt: người dùng
     // hiểu "hết lượt tháng này, đầu tháng có lại", còn cửa sổ trượt thì không
     // ai đoán được lúc nào lượt hồi.
-    await this.assertAiQuota(userId);
+    //
+    // (Đã kiểm ở đầu hàm, trước cả bước viết lại câu hỏi.)
 
     try {
       const out = await this.runRequest(userId, tripId, type, safePrompt);
       const resp = (out as { response?: object })?.response;
-      if (resp) await this.cache.set(type, tripId, safePrompt, resp);
+      // Câu trả lời dựng từ `history` do client gửi thì không đưa vào đệm dùng
+      // chung: khoá đệm chỉ là câu hỏi, nên một người có thể cài câu trả lời
+      // sai cho mọi người hỏi cùng câu đó.
+      if (resp && !history?.length) {
+        await this.cache.set(type, tripId, safePrompt, resp);
+      }
       return out;
     } catch (e) {
       await this.prisma.aIRequest.create({
@@ -697,6 +723,22 @@ Quy tắc chấm "confidence":
    * `AIRequest`. Nếu đã đạt hoặc vượt trần (Free: 15 lượt/tháng), ném ngoại lệ
    * chặn lời gọi tiếp theo.
    */
+  /// `tripId` do client gửi trong body (không qua TripMemberGuard) phải thuộc
+  /// một chuyến người gọi đang là thành viên. Trả 404 để không lộ id tồn tại.
+  private async assertTripAccess(
+    userId: string,
+    tripId: string | undefined,
+  ): Promise<void> {
+    if (!tripId) return;
+    const member = /^[0-9a-f-]{36}$/i.test(tripId)
+      ? await this.prisma.tripMember.findFirst({
+          where: { tripId, userId, trip: { deletedAt: null } },
+          select: { tripId: true },
+        })
+      : null;
+    if (!member) throw new NotFoundException('errors.auth.notMember');
+  }
+
   private async assertAiQuota(userId: string): Promise<void> {
     await this.entitlements.assertWithin(
       userId,
@@ -1395,6 +1437,7 @@ Trả về JSON đúng dạng:
 
   async scanReceiptImage(userId: string, receiptUrlOrBase64: string) {
     if (!this.genAI) this.aiUnavailable();
+    await this.assertAiQuota(userId);
 
     const raw = (receiptUrlOrBase64 ?? '').trim();
     const m = /^data:(image\/[\w.+-]+);base64,(.+)$/s.exec(raw);
@@ -1469,8 +1512,11 @@ Trả về JSON đúng dạng:
   ): AsyncGenerator<string> {
     if (!this.genAI) this.aiUnavailable();
 
-    // Hạn mức khởi động ngay, chờ chung với đệm và đính chính ở dưới.
-    const quota = this.assertAiQuota(userId);
+    await this.assertTripAccess(userId, tripId);
+    // Hạn mức phải xong TRƯỚC mọi lời gọi tốn tiền bên dưới (viết lại câu
+    // hỏi, tìm web qua Gemini, embedding). Trước đây chạy song song để đỡ
+    // trễ, nên người đã hết lượt vẫn làm phát sinh chi phí ở mỗi request.
+    await this.assertAiQuota(userId);
     const standalone = await this.rewriter.rewrite(question, history ?? []);
     const { text: safe, hits } = redactPii(standalone);
     if (hits.length > 0) {
@@ -1485,14 +1531,12 @@ Trả về JSON đúng dạng:
     // dữ liệu lại cộng thêm độ trễ vào đúng lúc người dùng nhìn màn hình
     // trống; gộp lại còn đúng một lượt.
     //
-    // Hạn mức vẫn chặn được: `await` ở đây là trước khi gọi Gemini.
     // Tìm kiếm internet (Google qua Gemini) + crawl vài trang đầu: địa chỉ,
     // giờ mở cửa, giá vé lấy từ web thật thay vì để model tự nhớ (hay bịa).
     // Khởi động ngay cho chạy song song; mất 5–11s nên chỉ CHỜ khi kho tri
     // thức không có mục khớp tốt (xem dưới).
     const webPending = this.web.research(safe, 3);
-    const [, cachedRaw, fixes, docs] = await Promise.all([
-      quota,
+    const [cachedRaw, fixes, docs] = await Promise.all([
       this.cache.get('ITINERARY_PLAN', tripId, safe),
       this.corrections.promptBlock(safe),
       // Tìm theo nghĩa trong kho mẫu cộng đồng: "quán cà phê yên tĩnh đọc
@@ -1590,7 +1634,10 @@ Trả về JSON đúng dạng:
     }
 
     if (full.trim()) {
-      await this.cache.set('ITINERARY_PLAN', tripId, safe, { text: full });
+      // Không đệm câu trả lời dựng từ `history` của client (xem createRequest).
+      if (!history?.length) {
+        await this.cache.set('ITINERARY_PLAN', tripId, safe, { text: full });
+      }
       await this.recordAiUsage(userId, 'ITINERARY_PLAN', tripId, safe, {
         streamed: true,
         length: full.length,

@@ -1,4 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ActivitiesService } from '../activities/activities.service';
 
@@ -58,7 +62,18 @@ export class PollsService {
   }
 
   async vote(optionId: string, userId: string) {
-    // Check if already voted
+    const option = await this.prisma.pollOption.findUnique({
+      where: { id: optionId },
+      select: {
+        pollId: true,
+        poll: { select: { closesAt: true, isMultiple: true } },
+      },
+    });
+    if (!option) throw new NotFoundException('errors.database.notFound');
+    if (option.poll.closesAt && option.poll.closesAt.getTime() < Date.now()) {
+      throw new BadRequestException('Bình chọn này đã đóng');
+    }
+
     const existing = await this.prisma.pollVote.findUnique({
       where: { optionId_userId: { optionId, userId } },
     });
@@ -68,7 +83,18 @@ export class PollsService {
       });
       return { action: 'unvoted' };
     }
-    await this.prisma.pollVote.create({ data: { optionId, userId } });
+
+    // Bình chọn một lựa chọn: bỏ phiếu mới thay cho phiếu cũ, không cộng dồn.
+    await this.prisma.$transaction([
+      ...(option.poll.isMultiple
+        ? []
+        : [
+            this.prisma.pollVote.deleteMany({
+              where: { userId, option: { pollId: option.pollId } },
+            }),
+          ]),
+      this.prisma.pollVote.create({ data: { optionId, userId } }),
+    ]);
     return { action: 'voted' };
   }
 }

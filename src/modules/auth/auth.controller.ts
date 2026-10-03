@@ -17,12 +17,16 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('register')
-  @ApiOperation({ summary: 'Đăng ký tài khoản mới qua Supabase Auth' })
+  @ApiOperation({
+    summary: 'Hoàn tất đăng ký bằng vé từ verify-otp / google',
+  })
   register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
   }
 
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('login')
   @ApiOperation({ summary: 'Đăng nhập bằng Supabase ID - nhận JWT' })
   login(@Body() dto: LoginDto) {
@@ -45,6 +49,8 @@ export class AuthController {
     return this.authService.verifyOtp(dto.phoneNumber, dto.code);
   }
 
+  // Theo IP (chưa có token). 20/phút để cả nhóm chung Wi-Fi đăng ký cùng lúc được.
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @Post('register-password')
   @ApiOperation({
     summary: 'Đăng ký nhanh bằng username + mật khẩu (+ xác nhận) - nhận JWT',
@@ -60,6 +66,7 @@ export class AuthController {
     return this.authService.loginWithPassword(dto);
   }
 
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('google')
   @ApiOperation({
     summary: 'Đăng nhập Google - nhận JWT hoặc thông tin đăng ký',

@@ -7,15 +7,19 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { EntitlementService } from '../premium/entitlement.service';
 import { ReferralService } from '../premium/referral.service';
+import { randomInt } from 'node:crypto';
 import { StorageService } from '../storage/storage.service';
 import { CreateTripDto } from './dto/create-trip.dto';
 import { UpdateTripDto } from './dto/update-trip.dto';
 import { JoinTripDto } from './dto/join-trip.dto';
+import { revealedMomentWhere } from '../moments/ghost';
 
 function generateInviteCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  // Mã mời là thứ duy nhất chặn người lạ vào chuyến → phải dùng CSPRNG,
+  // Math.random đoán trước được.
   return Array.from({ length: 6 }, () =>
-    chars.charAt(Math.floor(Math.random() * chars.length)),
+    chars.charAt(randomInt(chars.length)),
   ).join('');
 }
 
@@ -214,9 +218,25 @@ export class TripsService {
     if (requesterId === targetUserId) {
       throw new ForbiddenException('errors.trips.creatorCannotLeave');
     }
-    return this.prisma.tripMember.delete({
+    const removed = await this.prisma.tripMember.delete({
       where: { tripId_userId: { tripId, userId: targetUserId } },
     });
+
+    // Người bị mời ra vẫn biết mã mời và các link mời cũ; không thu hồi thì
+    // họ vào lại ngay được. Đổi mã + tắt link đang mở.
+    let inviteCode: string;
+    do {
+      inviteCode = generateInviteCode();
+    } while (await this.prisma.trip.findUnique({ where: { inviteCode } }));
+    await this.prisma.$transaction([
+      this.prisma.trip.update({ where: { id: tripId }, data: { inviteCode } }),
+      this.prisma.tripInvite.updateMany({
+        where: { tripId, isActive: true },
+        data: { isActive: false },
+      }),
+    ]);
+
+    return removed;
   }
 
   async regenerateInviteCode(tripId: string, userId: string) {
@@ -287,7 +307,8 @@ export class TripsService {
         _count: { _all: true },
       }),
       this.prisma.moment.findMany({
-        where: { tripId, deletedAt: null },
+        // Ghost Cam: ảnh chưa tráng không lên recap.
+        where: { tripId, deletedAt: null, ...revealedMomentWhere() },
         include: {
           user: { select: { id: true, name: true, avatarUrl: true } },
           _count: { select: { reactions: true, comments: true } },

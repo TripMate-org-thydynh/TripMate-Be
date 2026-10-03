@@ -65,6 +65,105 @@ describe('TrialEligibilityService', () => {
     });
   });
 
+  describe('tài khoản chưa xác minh (username + mật khẩu)', () => {
+    const asPasswordAccount = () =>
+      prisma.user.findUnique.mockResolvedValue({
+        createdAt: new Date(),
+        email: 'minhnhat@tripmate.local',
+      });
+    // Chỉ truy vấn đếm theo `reasons` mới là truy vấn của nhóm này.
+    const unverifiedOnNetwork = (n: number) =>
+      prisma.trialClaim.count.mockImplementation(({ where }: any) =>
+        Promise.resolve(where.reasons ? n : 0),
+      );
+
+    it('có deviceId, dải mạng sạch → ELIGIBLE (không chặn oan người thật)', async () => {
+      asPasswordAccount();
+      const r = await service.evaluate(USER, signals);
+      expect(r.verdict).toBe('ELIGIBLE');
+      expect(r.reasons).toContain('UNVERIFIED_IDENTITY');
+    });
+
+    it('không gửi deviceId → REVIEW, vẫn được thử', async () => {
+      asPasswordAccount();
+      const r = await service.evaluate(USER, { ...signals, deviceId: null });
+      expect(r.verdict).toBe('REVIEW');
+      expect(r.reasons).toContain('UNVERIFIED_NO_DEVICE');
+    });
+
+    it('dải mạng đã có 2 lần thử của tài khoản chưa xác minh → INELIGIBLE', async () => {
+      asPasswordAccount();
+      unverifiedOnNetwork(2);
+      const r = await service.evaluate(USER, signals);
+      expect(r.verdict).toBe('INELIGIBLE');
+      expect(r.reasons).toContain('NETWORK_UNVERIFIED_REPEAT');
+    });
+
+    it('cùng dải mạng đó nhưng tài khoản ĐÃ xác minh → không bị vạ lây', async () => {
+      unverifiedOnNetwork(50);
+      const r = await service.evaluate(USER, signals);
+      expect(r.verdict).toBe('ELIGIBLE');
+    });
+
+    it('IP nội bộ (proxy cấu hình sai) → bỏ tín hiệu mạng, không gộp mọi người làm một', async () => {
+      asPasswordAccount();
+      unverifiedOnNetwork(50);
+      for (const ip of ['10.0.3.7', '127.0.0.1', '::1', '::ffff:192.168.1.4']) {
+        const r = await service.evaluate(USER, { ...signals, ip });
+        expect(r.hashes.networkHash).toBeNull();
+        expect(r.verdict).toBe('ELIGIBLE');
+      }
+    });
+
+    describe('máy đã được Play Integrity bảo chứng', () => {
+      it('4G chung CGNAT đầy lượt thử → vẫn ELIGIBLE, bỏ luật dải mạng', async () => {
+        asPasswordAccount();
+        unverifiedOnNetwork(50);
+        const r = await service.evaluate(USER, {
+          ...signals,
+          deviceAttested: true,
+        });
+        expect(r.verdict).toBe('ELIGIBLE');
+        expect(r.reasons).toContain('DEVICE_ATTESTED');
+        expect(r.reasons).not.toContain('NETWORK_UNVERIFIED_REPEAT');
+      });
+
+      it('cày nhiều tài khoản trên cùng máy thật → vẫn chặn theo máy', async () => {
+        asPasswordAccount();
+        prisma.trialClaim.count.mockImplementation(({ where }: any) =>
+          Promise.resolve(where.deviceHash ? 2 : 0),
+        );
+        const r = await service.evaluate(USER, {
+          ...signals,
+          deviceAttested: true,
+        });
+        expect(r.verdict).toBe('INELIGIBLE');
+        expect(r.reasons).toContain('DEVICE_MULTIPLE_TRIALS');
+      });
+
+      it('cờ bảo chứng mà không có deviceId → không tính là bảo chứng', async () => {
+        asPasswordAccount();
+        unverifiedOnNetwork(2);
+        const r = await service.evaluate(USER, {
+          ...signals,
+          deviceId: null,
+          deviceAttested: true,
+        });
+        expect(r.reasons).not.toContain('DEVICE_ATTESTED');
+        expect(r.verdict).toBe('INELIGIBLE');
+      });
+
+      it('máy không bảo chứng: chỉ đếm lượt thử KHÔNG bảo chứng trên dải', async () => {
+        asPasswordAccount();
+        await service.evaluate(USER, signals);
+        const q = prisma.trialClaim.count.mock.calls
+          .map((c: any[]) => c[0].where)
+          .find((w: any) => w.reasons);
+        expect(q.NOT).toEqual({ reasons: { has: 'DEVICE_ATTESTED' } });
+      });
+    });
+  });
+
   describe('bằng chứng chắc chắn → INELIGIBLE', () => {
     it('chính tài khoản này đã dùng thử', async () => {
       prisma.trialClaim.findFirst.mockResolvedValueOnce({ id: 'c1' });

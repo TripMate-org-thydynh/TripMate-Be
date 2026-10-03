@@ -7,6 +7,8 @@ import { PaymentGatewayService } from './payment-gateway.service';
 import { TrialService } from './trial.service';
 import { TrialEligibilityService } from './trial-eligibility.service';
 import { TrialExpiryJob } from './trial-expiry.job';
+import { PlayIntegrityService } from './play-integrity.service';
+import { GooglePlayBillingService } from './google-play-billing.service';
 import { PromoService } from './promo.service';
 import { ReferralService } from './referral.service';
 import { PrismaModule } from '../../prisma/prisma.module';
@@ -23,6 +25,8 @@ import { PrismaModule } from '../../prisma/prisma.module';
     TrialService,
     TrialEligibilityService,
     TrialExpiryJob,
+    PlayIntegrityService,
+    GooglePlayBillingService,
     PromoService,
     ReferralService,
   ],

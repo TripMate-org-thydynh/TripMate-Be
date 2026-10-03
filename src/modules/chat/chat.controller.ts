@@ -20,6 +20,7 @@ import { SendMessageDto, ReactionDto } from './dto/chat.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { InTrip } from '../../common/guards/trip-resource.guard';
 @ApiTags('Chat')
 @UseGuards(JwtAuthGuard, TripMemberGuard)
 @ApiBearerAuth('JWT')
@@ -56,6 +57,7 @@ export class ChatController {
     return this.chatService.getMessages(tripId, cursor, limit ? +limit : 30);
   }
 
+  @InTrip('chatMessage', 'messageId')
   @Post(':messageId/reactions')
   @ApiOperation({ summary: 'Thả cảm xúc tin nhắn (toggle)' })
   toggleReaction(
@@ -66,6 +68,7 @@ export class ChatController {
     return this.chatService.toggleReaction(messageId, user.id, dto.emoji);
   }
 
+  @InTrip('chatMessage', 'messageId')
   @Delete(':messageId')
   @ApiOperation({ summary: 'Xóa tin nhắn (soft delete)' })
   delete(@Param('messageId') messageId: string, @CurrentUser() user: User) {

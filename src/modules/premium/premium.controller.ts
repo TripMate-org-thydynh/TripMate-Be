@@ -9,8 +9,11 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import { userOrIpTracker } from '../../common/throttle/user-tracker';
 import { PremiumService } from './premium.service';
 import { TrialService } from './trial.service';
+import { PlayIntegrityService } from './play-integrity.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
@@ -22,6 +25,7 @@ export class PremiumController {
   constructor(
     private readonly premiumService: PremiumService,
     private readonly trials: TrialService,
+    private readonly integrity: PlayIntegrityService,
   ) {}
 
   @Get('subscriptions')
@@ -52,17 +56,39 @@ export class PremiumController {
     return this.trials.status(user.id);
   }
 
+  // Mỗi lần gọi chạy cả tầng xét duyệt (5–6 truy vấn) và có thể ghi một dòng
+  // từ chối; không ai cần bấm nút này quá vài lần.
+  @Throttle({ default: { limit: 5, ttl: 60000, getTracker: userOrIpTracker } })
   @Post('trial/start')
   @ApiOperation({ summary: 'Bắt đầu 3 ngày dùng thử' })
-  startTrial(
+  async startTrial(
     @CurrentUser() user: { id: string },
     @Ip() ip: string,
-    @Body('deviceId') deviceId?: string,
+    @Body('deviceId') rawDeviceId?: unknown,
+    @Body('integrityToken') rawToken?: unknown,
   ) {
     // IP lấy từ tầng vận chuyển, không nhận từ thân request: client tự khai
     // thì tín hiệu mạng thành vô nghĩa. `deviceId` thì client vẫn bịa được —
     // đó là lý do nó chỉ là một trong nhiều tín hiệu, không phải chốt chặn.
-    return this.trials.start(user.id, { ip, deviceId });
+    //
+    // Body đi thẳng vào hàm băm: thứ không phải chuỗi ngắn (object, mảng,
+    // chuỗi hàng MB) thì coi như không gửi, thay vì để nó làm sập request.
+    const deviceId =
+      typeof rawDeviceId === 'string' && /^[\w.:-]{8,128}$/.test(rawDeviceId)
+        ? rawDeviceId
+        : undefined;
+    // Token Play Integrity (vài KB). Có và hợp lệ thì `deviceId` mới đáng tin;
+    // không có hoặc sai thì vẫn xét bình thường theo luật cũ.
+    const token =
+      typeof rawToken === 'string' && rawToken.length <= 16384
+        ? rawToken
+        : undefined;
+    const integrity = await this.integrity.verify(token, deviceId);
+    return this.trials.start(user.id, {
+      ip,
+      deviceId,
+      deviceAttested: integrity.verified,
+    });
   }
 
   @Post('trial/cancel')

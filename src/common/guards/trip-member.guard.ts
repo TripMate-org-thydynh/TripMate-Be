@@ -34,9 +34,11 @@ export class TripMemberGuard implements CanActivate {
 
     const member = await this.prisma.tripMember.findUnique({
       where: { tripId_userId: { tripId, userId: user.id } },
+      include: { trip: { select: { deletedAt: true } } },
     });
 
-    if (!member) {
+    // Chuyến đã xoá mềm coi như không tồn tại với mọi tài nguyên con.
+    if (!member || member.trip.deletedAt) {
       throw new NotFoundException('errors.auth.notMember');
     }
 

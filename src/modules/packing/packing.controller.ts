@@ -19,6 +19,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { ResourceOwnerGuard } from '../../common/guards/resource-owner.guard';
 import { OwnedResource } from '../../common/decorators/resource-owner.decorator';
+import { InTrip } from '../../common/guards/trip-resource.guard';
 
 @Controller('trips/:tripId/packing')
 @UseGuards(JwtAuthGuard, TripMemberGuard)
@@ -59,6 +60,7 @@ export class PackingController {
     return this.packingService.applyTemplate(tripId, req.user.id, dto.template);
   }
 
+  @InTrip('packingItem', 'itemId')
   @Patch(':itemId')
   updateItem(
     @Param('itemId') itemId: string,
@@ -70,6 +72,7 @@ export class PackingController {
 
   @UseGuards(ResourceOwnerGuard)
   @OwnedResource('packingItem', 'itemId')
+  @InTrip('packingItem', 'itemId')
   @Delete(':itemId')
   deleteItem(@Param('itemId') itemId: string) {
     return this.packingService.deleteItem(itemId);

@@ -53,10 +53,15 @@ export class AuthService {
   }
 
   async register(dto: RegisterDto) {
-    const validSupabaseId = this.ensureValidUuid(dto.supabaseId);
+    // Danh tính (email + supabaseId) lấy từ vé do verify-otp / google cấp,
+    // không lấy từ body: body là thứ client tự khai.
+    const ticket = this.verifyRegistrationTicket(dto.registrationToken);
+    const email = ticket.email;
+    const validSupabaseId = this.ensureValidUuid(ticket.sid);
+
     const existing = await this.prisma.user.findFirst({
       where: {
-        OR: [{ email: dto.email }, { supabaseId: validSupabaseId }],
+        OR: [{ email }, { supabaseId: validSupabaseId }],
       },
     });
     if (existing) {
@@ -65,18 +70,19 @@ export class AuthService {
       );
     }
 
-    if (dto.username) {
+    const username = dto.username?.trim().toLowerCase() || undefined;
+    if (username) {
       const usernameExists = await this.prisma.user.findUnique({
-        where: { username: dto.username },
+        where: { username },
       });
       if (usernameExists) throw new ConflictException('Username already taken');
     }
 
     const user = await this.prisma.user.create({
       data: {
-        email: dto.email,
-        name: dto.name,
-        username: dto.username,
+        email,
+        name: dto.name.trim(),
+        username,
         supabaseId: validSupabaseId,
         avatarUrl: dto.avatarUrl,
       },
@@ -185,15 +191,21 @@ export class AuthService {
     const username = dto.username.trim().toLowerCase();
     const user = await this.prisma.user.findUnique({
       where: { username },
+      // PrismaService mặc định bỏ passwordHash khỏi mọi kết quả.
+      omit: { passwordHash: false },
     });
 
-    if (!user || !user.passwordHash) {
+    if (!user || !user.passwordHash || user.deletedAt) {
       throw new UnauthorizedException('Sai username hoặc mật khẩu');
     }
 
     const valid = await bcrypt.compare(dto.password, user.passwordHash);
     if (!valid) {
       throw new UnauthorizedException('Sai username hoặc mật khẩu');
+    }
+    // Kiểm sau khi mật khẩu đúng để không lộ trạng thái khoá cho người lạ.
+    if (user.isLocked) {
+      throw new UnauthorizedException('errors.auth.user_locked');
     }
 
     const token = this.generateToken(user.id, user.email);
@@ -336,12 +348,17 @@ export class AuthService {
       const token = this.generateToken(user.id, user.email);
       return { exists: true, token, user };
     } else {
+      const newEmail = isEmail
+        ? cleanedPhone
+        : `${cleanedPhone.replace(/\D/g, '')}@tripmate.com`;
       return {
         exists: false,
         supabaseId: clientSupabaseId,
-        email: isEmail
-          ? cleanedPhone
-          : `${cleanedPhone.replace(/\D/g, '')}@tripmate.com`,
+        email: newEmail,
+        registrationToken: this.issueRegistrationTicket(
+          newEmail,
+          clientSupabaseId,
+        ),
       };
     }
   }
@@ -373,9 +390,9 @@ export class AuthService {
           throw new UnauthorizedException('Invalid Google ID token payload');
         }
 
-        if (!payload.email) {
+        if (!payload.email || payload.email_verified !== true) {
           throw new UnauthorizedException(
-            'Google ID token is missing email address',
+            'Google ID token is missing a verified email address',
           );
         }
         email = payload.email;
@@ -408,12 +425,16 @@ export class AuthService {
       }
     }
 
-    const clientSupabaseId = `sb-google-${email.split('@')[0]}`;
-    const validSupabaseId = this.ensureValidUuid(clientSupabaseId);
+    email = email.trim().toLowerCase();
+    // supabaseId sinh từ CẢ địa chỉ email. Trước đây chỉ lấy phần trước '@',
+    // nên `an@gmail.com` và `an@ten-mien-bat-ky.com` trùng id và người sau
+    // đăng nhập thẳng vào tài khoản người trước. Tài khoản cũ vẫn tìm được
+    // qua email, nên chỉ khớp theo email — không khớp theo supabaseId nữa.
+    const clientSupabaseId = `sb-google-${email}`;
 
     const user = await this.prisma.user.findFirst({
       where: {
-        OR: [{ supabaseId: validSupabaseId }, { email: email }],
+        email: { equals: email, mode: 'insensitive' },
         deletedAt: null,
       },
       select: {
@@ -432,14 +453,9 @@ export class AuthService {
     });
 
     if (user) {
-      if (user.supabaseId !== validSupabaseId) {
-        await this.prisma.user.update({
-          where: { id: user.id },
-          data: { supabaseId: validSupabaseId },
-        });
-      }
+      const { supabaseId: _supabaseId, ...safeUser } = user;
       const token = this.generateToken(user.id, user.email);
-      return { exists: true, token, user };
+      return { exists: true, token, user: safeUser };
     } else {
       return {
         exists: false,
@@ -447,6 +463,10 @@ export class AuthService {
         email: email,
         name: name,
         avatarUrl: avatarUrl,
+        registrationToken: this.issueRegistrationTicket(
+          email,
+          clientSupabaseId,
+        ),
       };
     }
   }
@@ -458,6 +478,7 @@ export class AuthService {
         throw new Error('SUPABASE_URL environment variable is not configured');
       }
       const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+        signal: AbortSignal.timeout(10000),
         method: 'GET',
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -487,6 +508,37 @@ export class AuthService {
 
   private generateToken(userId: string, email: string) {
     return this.jwtService.sign({ sub: userId, email });
+  }
+
+  /// Vé đăng ký ngắn hạn: bằng chứng người gọi vừa xác minh được email/số
+  /// điện thoại này. Không có `sub`, và JwtStrategy từ chối mọi token có
+  /// `purpose`, nên vé không dùng làm access token được.
+  private issueRegistrationTicket(email: string, supabaseId: string) {
+    return this.jwtService.sign(
+      { purpose: 'register', email, sid: supabaseId },
+      { expiresIn: '15m' },
+    );
+  }
+
+  private verifyRegistrationTicket(token: string): {
+    email: string;
+    sid: string;
+  } {
+    try {
+      const payload = this.jwtService.verify<{
+        purpose?: string;
+        email?: string;
+        sid?: string;
+      }>(token);
+      if (payload.purpose !== 'register' || !payload.email || !payload.sid) {
+        throw new Error('wrong purpose');
+      }
+      return { email: payload.email, sid: payload.sid };
+    } catch {
+      throw new UnauthorizedException(
+        'Phiên đăng ký đã hết hạn, vui lòng xác minh lại email hoặc số điện thoại.',
+      );
+    }
   }
 
   private decodeJwtPayload(token: string): any {

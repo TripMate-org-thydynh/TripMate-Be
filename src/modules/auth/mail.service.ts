@@ -24,6 +24,7 @@ export class MailService {
 
     try {
       const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        signal: AbortSignal.timeout(10000),
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,

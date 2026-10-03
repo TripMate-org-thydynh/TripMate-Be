@@ -156,14 +156,25 @@ export class PromoService {
     orderId: string;
     discountApplied: number;
     tx?: Prisma.TransactionClient;
-  }) {
-    const runInTx = async (tx: Prisma.TransactionClient) => {
+  }): Promise<boolean> {
+    // Trả `true` khi đơn này CÓ một lượt dùng được ghi (mới ghi hoặc đã ghi từ
+    // trước), `false` khi bị bỏ qua vì mã lạ / hết lượt. Đường webhook không
+    // cần giá trị này; đường đơn 0đ dùng nó làm điều kiện cấp quyền.
+    const runInTx = async (tx: Prisma.TransactionClient): Promise<boolean> => {
       const promo = await tx.promoCode.findUnique({
         where: { code: params.code.toUpperCase() },
       });
       if (!promo) {
         this.logger.warn(`Đơn ${params.orderId} mang mã lạ "${params.code}"`);
-        return;
+        return false;
+      }
+
+      // Khoá dòng mã khi tự mở giao dịch (đường đơn 0đ): đếm-rồi-ghi không
+      // khoá thì N request song song cùng thấy "còn lượt" và cùng ghi. Không
+      // khoá khi chạy trong giao dịch của fulfill() — ở đó tuyệt đối không
+      // được thêm thứ gì có thể ném lỗi (xem ghi chú bên dưới).
+      if (!params.tx) {
+        await tx.$queryRaw`SELECT id FROM promo_codes WHERE id = ${promo.id}::uuid FOR UPDATE`;
       }
 
       // Kiểm tra xem đơn này đã được ghi nhận chưa (idempotency khi webhook gọi lại)
@@ -172,7 +183,7 @@ export class PromoService {
       });
       if (existing) {
         this.logger.log(`Lượt dùng mã của đơn ${params.orderId} đã được ghi`);
-        return;
+        return true;
       }
 
       // LƯU Ý: Hàm redeem() chạy trong luồng xử lý webhook thanh toán (fulfill),
@@ -191,7 +202,7 @@ export class PromoService {
           this.logger.warn(
             `Không ghi nhận mã "${params.code}" cho đơn ${params.orderId} (userId: ${params.userId}): mã đã hết lượt dùng (${used}/${promo.maxRedemptions})`,
           );
-          return;
+          return false;
         }
       }
 
@@ -203,7 +214,7 @@ export class PromoService {
         this.logger.warn(
           `Không ghi nhận mã "${params.code}" cho đơn ${params.orderId} (userId: ${params.userId}): người dùng đã vượt giới hạn lượt dùng (${mine}/${promo.perUserLimit})`,
         );
-        return;
+        return false;
       }
 
       try {
@@ -219,6 +230,7 @@ export class PromoService {
         // `@unique(orderId)`: webhook gọi lại. Không phải lỗi.
         this.logger.log(`Lượt dùng mã của đơn ${params.orderId} đã được ghi`);
       }
+      return true;
     };
 
     if (params.tx) {

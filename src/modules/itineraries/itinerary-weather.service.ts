@@ -248,7 +248,7 @@ export class ItineraryWeatherService {
         '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max' +
         '&hourly=precipitation_probability' +
         '&timezone=Asia%2FHo_Chi_Minh&forecast_days=16';
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
       if (!res.ok) return null;
       const data = (await res.json()) as OpenMeteo;
       try {
