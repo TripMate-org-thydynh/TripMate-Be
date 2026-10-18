@@ -1,0 +1,28 @@
+# Giữ Supabase (gói miễn phí) không bị pause.
+#
+# Supabase tự pause project sau ~7 ngày không có hoạt động. Health check của
+# backend chạy một truy vấn thật vào DB, nên gọi nó định kỳ là đủ.
+# Lưu ý: GitHub tắt lịch chạy nếu repo không có commit nào trong 60 ngày —
+# khi đó vào tab Actions bật lại.
+name: db-keepalive
+
+on:
+  schedule:
+    # 02:00 UTC mỗi thứ Hai và thứ Năm (cách nhau tối đa 4 ngày).
+    - cron: '0 2 * * 1,4'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gọi health check (chạm DB)
+        run: |
+          for i in 1 2 3; do
+            body=$(curl -s -m 90 https://tripmate-api-p6un.onrender.com/api/v1/health) || true
+            echo "$body"
+            echo "$body" | grep -q '"database":"up"' && exit 0
+            sleep 30
+          done
+          echo "DB không phản hồi" >&2
+          exit 1
