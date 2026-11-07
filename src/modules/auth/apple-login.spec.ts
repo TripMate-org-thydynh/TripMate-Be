@@ -3,7 +3,7 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { JwtService } from '@nestjs/jwt';
 import { UnauthorizedException } from '@nestjs/common';
 import * as crypto from 'node:crypto';
-import { AuthService } from './auth.service';
+import { AuthService, normalizeIdentifier } from './auth.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TwilioService } from './twilio.service';
 import { MailService } from './mail.service';
@@ -47,6 +47,7 @@ describe('AuthService.appleLogin', () => {
     aud: 'com.tripmate.tripmate',
     sub: '001234.abc',
     email: victim.email,
+    email_verified: 'true',
     exp: Math.floor(Date.now() / 1000) + 600,
     ...over,
   });
@@ -102,6 +103,47 @@ describe('AuthService.appleLogin', () => {
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
+  it('token Apple thật KHÔNG có email: không dùng email client gửi để vào tài khoản người khác', async () => {
+    prisma.user.findFirst.mockResolvedValue(null);
+    prisma.user.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 'new', ...data }),
+    );
+    const noEmail = sign(
+      claims({ email: undefined, sub: 'attacker.sub' }),
+      appleKey.privateKey,
+    );
+    await service.appleLogin({
+      identityToken: noEmail,
+      email: victim.email,
+    } as any);
+    const where = prisma.user.findFirst.mock.calls[0][0].where;
+    expect(JSON.stringify(where)).not.toContain(victim.email);
+    expect(prisma.user.create.mock.calls[0][0].data.email).toContain(
+      '@privaterelay.appleid.com',
+    );
+  });
+
+  it('email Apple chưa xác minh không được dùng để liên kết tài khoản', async () => {
+    prisma.user.findFirst.mockResolvedValue(null);
+    prisma.user.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 'new', ...data }),
+    );
+    const unverified = sign(
+      claims({ email_verified: 'false' }),
+      appleKey.privateKey,
+    );
+    await service.appleLogin({ identityToken: unverified } as any);
+    const where = prisma.user.findFirst.mock.calls[0][0].where;
+    expect(JSON.stringify(where)).not.toContain(victim.email);
+  });
+
+  it('từ chối token không có exp', async () => {
+    const noExp = sign(claims({ exp: undefined }), appleKey.privateKey);
+    await expect(
+      service.appleLogin({ identityToken: noExp } as any),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
   describe('resetPassword', () => {
     let cache: Map<string, unknown>;
     beforeEach(() => {
@@ -141,5 +183,14 @@ describe('AuthService.appleLogin', () => {
     const res = await service.appleLogin({ identityToken: valid } as any);
     expect(res.token).toBe('jwt');
     expect(res.user.email).toBe(victim.email);
+  });
+});
+
+describe('normalizeIdentifier', () => {
+  it('email về chữ thường để không thành 2 tài khoản/2 khoá OTP', () => {
+    expect(normalizeIdentifier('  An@Gmail.COM ')).toBe('an@gmail.com');
+  });
+  it('SĐT giữ nguyên (chỉ trim)', () => {
+    expect(normalizeIdentifier(' +84901234567 ')).toBe('+84901234567');
   });
 });

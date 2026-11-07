@@ -24,6 +24,16 @@ import { LoginPasswordDto } from './dto/login-password.dto';
 import * as crypto from 'node:crypto';
 import { OAuth2Client } from 'google-auth-library';
 
+/**
+ * Chuẩn hoá email/SĐT dùng làm khoá OTP và tra tài khoản. Email về chữ thường:
+ * trước đây "An@gmail.com" và "an@gmail.com" là hai khoá OTP khác nhau và có
+ * thể tạo hai tài khoản trùng (cột email phân biệt hoa thường).
+ */
+export function normalizeIdentifier(raw: string): string {
+  const s = (raw ?? '').trim();
+  return s.includes('@') ? s.toLowerCase() : s;
+}
+
 /** Khoá công khai JWKS của Apple (https://appleid.apple.com/auth/keys). */
 type AppleJwk = crypto.JsonWebKey & { kid?: string };
 
@@ -66,7 +76,10 @@ export class AuthService {
 
     const existing = await this.prisma.user.findFirst({
       where: {
-        OR: [{ email }, { supabaseId: validSupabaseId }],
+        OR: [
+          { email: { equals: email, mode: 'insensitive' } },
+          { supabaseId: validSupabaseId },
+        ],
       },
     });
     if (existing) {
@@ -240,7 +253,7 @@ export class AuthService {
   }
 
   async sendOtp(phoneNumber: string) {
-    const cleanedPhone = phoneNumber.trim();
+    const cleanedPhone = normalizeIdentifier(phoneNumber);
     // Generate a cryptographically secure 6-digit code
     const code = crypto.randomInt(100000, 1000000).toString();
 
@@ -298,7 +311,7 @@ export class AuthService {
    * → nút "Quên mật khẩu" luôn hỏng.
    */
   async resetPassword(identifier: string, code: string, newPassword: string) {
-    const email = identifier.trim();
+    const email = normalizeIdentifier(identifier);
     await this.consumeOtp(email, code);
     const user = await this.prisma.user.findFirst({
       where: { email: { equals: email, mode: 'insensitive' }, deletedAt: null },
@@ -359,7 +372,7 @@ export class AuthService {
   }
 
   async verifyOtp(phoneNumber: string, code: string) {
-    const cleanedPhone = phoneNumber.trim();
+    const cleanedPhone = normalizeIdentifier(phoneNumber);
     await this.consumeOtp(cleanedPhone, code);
 
     // Formulate a client-friendly mock supabaseId
@@ -373,7 +386,9 @@ export class AuthService {
       where: {
         OR: [
           { supabaseId: validSupabaseId },
-          ...(isEmail ? [{ email: cleanedPhone }] : []),
+          ...(isEmail
+            ? [{ email: { equals: cleanedPhone, mode: 'insensitive' as const } }]
+            : []),
         ],
         deletedAt: null,
       },
@@ -544,10 +559,14 @@ export class AuthService {
       process.env.ALLOW_DEV_AUTH_BYPASS === 'true';
 
     let appleSub = '';
-    let email = dto.email?.trim().toLowerCase();
+    // KHÔNG tin `dto.email`: client tự khai. Trước đây khi token Apple không
+    // có claim email, code dùng email client gửi để tìm tài khoản → người có
+    // token Apple hợp lệ của CHÍNH MÌNH vào được tài khoản người khác.
+    let email: string | undefined;
     const name = dto.name?.trim();
 
     if (dto.identityToken === 'mock-apple-token' && isDevelopment) {
+      email = dto.email?.trim().toLowerCase();
       appleSub = email || 'mock-apple-sub';
     } else {
       const payload = await this.verifyAppleIdentityToken(dto.identityToken);
@@ -559,10 +578,10 @@ export class AuthService {
       ) {
         throw new UnauthorizedException('Invalid Apple identity token');
       }
+      // exp bắt buộc: token thiếu exp trước đây được chấp nhận vĩnh viễn.
       if (
-        typeof payload.exp === 'number' &&
-        payload.exp * 1000 < Date.now() &&
-        !isDevelopment
+        typeof payload.exp !== 'number' ||
+        (payload.exp * 1000 < Date.now() && !isDevelopment)
       ) {
         throw new UnauthorizedException('Apple identity token has expired');
       }
@@ -576,7 +595,11 @@ export class AuthService {
         throw new UnauthorizedException('Apple identity token audience mismatch');
       }
       appleSub = payload.sub;
-      if (typeof payload.email === 'string' && payload.email.trim()) {
+      // Chỉ dùng email Apple ĐÃ XÁC MINH (Apple gửi true hoặc "true") để
+      // liên kết với tài khoản sẵn có cùng email.
+      const verified =
+        payload.email_verified === true || payload.email_verified === 'true';
+      if (verified && typeof payload.email === 'string' && payload.email.trim()) {
         email = payload.email.trim().toLowerCase();
       }
     }
