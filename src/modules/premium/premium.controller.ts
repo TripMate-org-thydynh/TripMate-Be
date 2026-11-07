@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   Ip,
@@ -168,6 +169,51 @@ export class PremiumController {
       token,
       productId,
     );
+  }
+
+  @Post('apple/verify')
+  @ApiOperation({
+    summary: 'Xác thực biên lai thanh toán từ Apple App Store (StoreKit 2)',
+  })
+  verifyApple(
+    @CurrentUser() user: { id: string },
+    @Body('transactionId') transactionId?: string,
+    @Body('receiptData') receiptData?: string,
+    @Body('productId') productId?: string,
+  ) {
+    return this.premiumService.verifyApplePurchase(user.id, {
+      transactionId,
+      receiptData,
+      productId,
+    });
+  }
+
+  @Get('squad/seats')
+  @ApiOperation({ summary: 'Danh sách ghế Squad Pass đang cấp cho thành viên' })
+  getSquadSeats(@CurrentUser() user: { id: string }) {
+    return this.premiumService.getSquadSeats(user.id);
+  }
+
+  @Post('squad/seats')
+  @ApiOperation({ summary: 'Cấp ghế Squad Pass cho một thành viên' })
+  grantSquadSeat(
+    @CurrentUser() user: { id: string },
+    @Body('email') email?: string,
+    @Body('userId') targetUserId?: string,
+  ) {
+    return this.premiumService.grantSquadSeat(user.id, {
+      email,
+      userId: targetUserId,
+    });
+  }
+
+  @Delete('squad/seats/:seatId')
+  @ApiOperation({ summary: 'Thu hồi hoặc rời ghế Squad Pass' })
+  revokeSquadSeat(
+    @CurrentUser() user: { id: string },
+    @Param('seatId') seatId: string,
+  ) {
+    return this.premiumService.revokeSquadSeat(user.id, seatId);
   }
 
   @Get('billing-history')

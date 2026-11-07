@@ -1,6 +1,8 @@
 import {
   Injectable,
   BadRequestException,
+  ForbiddenException,
+  NotFoundException,
   ServiceUnavailableException,
   Logger,
 } from '@nestjs/common';
@@ -443,8 +445,9 @@ export class PremiumService {
   /// Choice Billing" của Google chưa mở cho Việt Nam, nên bày song song là
   /// đường ngắn nhất tới việc bị gỡ app. Khi nào VN được mở, bật
   /// `USER_CHOICE_BILLING=true` là hiện cả hai — không phải sửa dòng code nào.
-  private clientChannel(raw?: string): 'play' | 'direct' | 'web' {
+  private clientChannel(raw?: string): 'play' | 'ios' | 'direct' | 'web' {
     const v = (raw ?? '').trim().toLowerCase();
+    if (v === 'ios' || v === 'appstore' || v === 'apple') return 'ios';
     if (v === 'play' || v === 'direct' || v === 'web') return v;
     // Không khai thì coi như `play` — chọn phía an toàn về chính sách. Đoán sai
     // theo hướng này thì người dùng thiếu một lựa chọn thanh toán; đoán sai theo
@@ -458,6 +461,20 @@ export class PremiumService {
     return (
       process.env.NODE_ENV !== 'production' &&
       process.env.MOCK_GOOGLE_PLAY === 'true'
+    );
+  }
+
+  /// Apple App Store In-App Purchase đã đủ cấu hình để bán chưa.
+  private appleBillingReady(): boolean {
+    if (
+      process.env.APPLE_APP_STORE_SHARED_SECRET ||
+      process.env.APPLE_ISSUER_ID
+    ) {
+      return true;
+    }
+    return (
+      process.env.NODE_ENV !== 'production' &&
+      process.env.MOCK_APPLE_APP_STORE === 'true'
     );
   }
 
@@ -475,7 +492,7 @@ export class PremiumService {
   }
 
   /// Danh sách cổng được phép hiện cho kênh phân phối này.
-  gatewaysFor(channel: 'play' | 'direct' | 'web'): string[] {
+  gatewaysFor(channel: 'play' | 'ios' | 'direct' | 'web'): string[] {
     const out: string[] = [];
     if (channel === 'play') {
       if (this.playBillingReady()) out.push('GOOGLE_PLAY');
@@ -484,8 +501,11 @@ export class PremiumService {
       }
       return out;
     }
-    // Ngoài CH Play thì Play Billing không tồn tại (không có thư viện billing để
-    // gọi), nên chỉ còn chuyển khoản và ví.
+    if (channel === 'ios') {
+      out.push('APPLE_APP_STORE');
+      return out;
+    }
+    // Ngoài CH Play / App Store thì chỉ còn chuyển khoản và ví.
     if (this.sepayReady()) out.push('SEPAY');
     out.push(...this.gateways.availableGateways());
     return out;
@@ -1579,8 +1599,15 @@ export class PremiumService {
     }
 
     // Đơn đã kết thúc ở trạng thái khác PENDING (FAILED, CANCELLED...) thì bỏ qua,
-    // không cấp quyền cho đơn đã huỷ hoặc thất bại.
-    if (order.status !== 'PENDING') {
+    // ngoại trừ trường hợp đơn vừa bị đóng CANCELLED do hết hạn QR nhưng tiền chuyển
+    // khoản/ví đến trễ với số tiền hợp lệ (>= expectedAmount).
+    const canRecoverCancelled =
+      order.status === 'CANCELLED' &&
+      paidAmount !== undefined &&
+      Number.isFinite(paidAmount) &&
+      paidAmount >= Number(order.amount);
+
+    if (order.status !== 'PENDING' && !canRecoverCancelled) {
       this.logger.warn(
         `Bỏ qua IPN: đơn ${orderId} đang ở trạng thái "${order.status}", không phải PENDING`,
       );
@@ -1593,7 +1620,7 @@ export class PremiumService {
     const amountWrong =
       paidAmount !== undefined &&
       (!Number.isFinite(paidAmount) ||
-        (allowOverpay
+        (allowOverpay || canRecoverCancelled
           ? paidAmount < expectedAmount
           : paidAmount !== expectedAmount));
     if (amountWrong) {
@@ -1609,7 +1636,7 @@ export class PremiumService {
       // khỏi tài khoản của họ mà mã đơn thì chết hẳn, chuyển bù thêm cũng không
       // cứu được. Để PENDING thì lần chuyển đúng số tiếp theo vẫn hoàn tất được
       // chính đơn đó.
-      if (!allowOverpay) {
+      if (!allowOverpay && order.status === 'PENDING') {
         await this.prisma.paymentOrder.update({
           where: { orderId: order.orderId },
           data: {
@@ -1688,13 +1715,13 @@ export class PremiumService {
     }
 
     const runFulfillTx = async (tx: Prisma.TransactionClient) => {
-      // Giành quyền xử lý bằng atomic update (chuyển PENDING -> SUCCESS trước khi
+      // Giành quyền xử lý bằng atomic update (chuyển PENDING/CANCELLED -> SUCCESS trước khi
       // thực hiện side-effects). Vì enum PaymentStatus không có 'PROCESSING', việc
-      // cập nhật có điều kiện `where: { status: 'PENDING' }` tận dụng cơ chế khóa
+      // cập nhật có điều kiện `where: { status: order.status }` tận dụng cơ chế khóa
       // hàng (row-level lock) của database để đảm bảo chỉ đúng MỘT tiến trình
       // giành được quyền xử lý, loại bỏ hoàn toàn race condition check-then-act.
       const claimed = await tx.paymentOrder.updateMany({
-        where: { orderId: order.orderId, status: 'PENDING' },
+        where: { orderId: order.orderId, status: order.status },
         data: { status: 'SUCCESS', externalId, paidAt: new Date() },
       });
       if (claimed.count === 0) {
@@ -1813,5 +1840,457 @@ export class PremiumService {
       data: { status: 'FAILED', failureReason: reason, externalId },
     });
     this.logger.warn(`Đơn ${orderId} thất bại: ${reason}`);
+  }
+
+  /// Ánh xạ productId của Apple App Store hoặc Google Play sang (plan, months).
+  private resolveStoreProduct(productId?: string) {
+    if (!productId || typeof productId !== 'string') return null;
+    const normalized = productId
+      .trim()
+      .toLowerCase()
+      .replace(/^com\.tripmate\./, 'tripmate_')
+      .replace(/\./g, '_');
+    return playProductOf(productId) ?? playProductOf(normalized);
+  }
+
+  /// Xác thực giao dịch Apple App Store (StoreKit 2 / App Store Server API).
+  async verifyApplePurchase(
+    userId: string,
+    body: {
+      transactionId?: string;
+      receiptData?: string;
+      productId?: string;
+    },
+  ) {
+    const externalId = (body.transactionId || body.receiptData || '').trim();
+    if (!externalId) {
+      throw new BadRequestException({
+        code: 'MISSING_TOKEN',
+        message: 'errors.premium.missingPurchaseToken',
+      });
+    }
+
+    const existingOrder =
+      typeof this.prisma.paymentOrder?.findFirst === 'function'
+        ? await this.prisma.paymentOrder.findFirst({
+            where: { provider: 'APPLE_APP_STORE', externalId },
+          })
+        : null;
+    if (existingOrder) {
+      if (existingOrder.userId !== userId) {
+        throw new BadRequestException({
+          code: 'RECEIPT_ALREADY_USED',
+          message: 'errors.premium.receiptAlreadyUsed',
+        });
+      }
+      return {
+        success: true,
+        plan: existingOrder.plan,
+        alreadyProcessed: true,
+      };
+    }
+
+    const seenSub = await this.prisma.subscription.findFirst({
+      where: { provider: 'APPLE_APP_STORE', externalId },
+    });
+    if (seenSub) {
+      if (seenSub.userId !== userId) {
+        throw new BadRequestException({
+          code: 'RECEIPT_ALREADY_USED',
+          message: 'errors.premium.receiptAlreadyUsed',
+        });
+      }
+      return {
+        success: true,
+        plan: seenSub.plan,
+        alreadyProcessed: true,
+        currentPeriodEnd: seenSub.currentPeriodEnd,
+      };
+    }
+
+    let resolvedProductId = body.productId;
+
+    // Nếu receiptData là JWS của StoreKit 2 (3 phần base64url), giải mã payload để đối chiếu.
+    if (body.receiptData && body.receiptData.split('.').length === 3) {
+      try {
+        const [, payloadB64] = body.receiptData.split('.');
+        const decoded = JSON.parse(
+          Buffer.from(payloadB64, 'base64url').toString('utf8'),
+        );
+        if (decoded?.productId && typeof decoded.productId === 'string') {
+          resolvedProductId = decoded.productId;
+        }
+        if (
+          decoded?.appAccountToken &&
+          typeof decoded.appAccountToken === 'string' &&
+          decoded.appAccountToken.toLowerCase() !== userId.toLowerCase()
+        ) {
+          throw new BadRequestException({
+            code: 'RECEIPT_ACCOUNT_MISMATCH',
+            message: 'errors.premium.receiptAccountMismatch',
+          });
+        }
+      } catch (err) {
+        if (err instanceof BadRequestException) throw err;
+      }
+    }
+
+    const product = this.resolveStoreProduct(resolvedProductId);
+    if (!product) {
+      throw new BadRequestException({
+        code: 'UNKNOWN_PRODUCT',
+        message: 'errors.premium.unknownProduct',
+      });
+    }
+
+    const isMock =
+      process.env.NODE_ENV !== 'production' &&
+      process.env.MOCK_APPLE_APP_STORE === 'true';
+    const sharedSecret = process.env.APPLE_APP_STORE_SHARED_SECRET;
+
+    if (!isMock && !sharedSecret) {
+      throw new ServiceUnavailableException({
+        code: 'VERIFY_NOT_CONFIGURED',
+        message: 'errors.premium.verifyNotConfigured',
+      });
+    }
+
+    if (!isMock && sharedSecret && body.receiptData) {
+      const verifyUrl =
+        process.env.APPLE_VERIFY_RECEIPT_URL ||
+        'https://buy.itunes.apple.com/verifyReceipt';
+      const res = await fetch(verifyUrl, {
+        signal: AbortSignal.timeout(15000),
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          'receipt-data': body.receiptData,
+          password: sharedSecret,
+          'exclude-old-transactions': true,
+        }),
+      });
+      let data = (await res.json()) as { status?: number };
+      // Status 21007 = biên lai Sandbox gửi nhầm vào Production; Apple yêu cầu gọi lại Sandbox.
+      if (data?.status === 21007) {
+        const sandboxRes = await fetch(
+          'https://sandbox.itunes.apple.com/verifyReceipt',
+          {
+            signal: AbortSignal.timeout(15000),
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              'receipt-data': body.receiptData,
+              password: sharedSecret,
+              'exclude-old-transactions': true,
+            }),
+          },
+        );
+        data = (await sandboxRes.json()) as { status?: number };
+      }
+      if (data?.status !== 0) {
+        throw new BadRequestException({
+          code: 'RECEIPT_INVALID',
+          message: 'errors.premium.receiptInvalid',
+        });
+      }
+    }
+
+    const amount = priceOf(product.plan, product.months);
+    const appleOrderId = `apple.${externalId.slice(-16).replace(/[^a-zA-Z0-9]/g, '')}.${Date.now()}`;
+    const runGrant = async (tx: Prisma.TransactionClient) => {
+      await tx.paymentOrder.create({
+        data: {
+          orderId: appleOrderId,
+          userId,
+          plan: product.plan,
+          months: product.months,
+          amount,
+          baseAmount: amount,
+          discountAmount: 0,
+          provider: 'APPLE_APP_STORE',
+          status: 'SUCCESS',
+          externalId,
+          paidAt: new Date(),
+        },
+      });
+      await this.entitlements.grant({
+        userId,
+        plan: product.plan,
+        months: product.months,
+        provider: 'APPLE_APP_STORE',
+        externalId,
+        tx,
+      });
+    };
+
+    if (typeof this.prisma.$transaction === 'function') {
+      await this.prisma.$transaction(runGrant);
+    } else {
+      await runGrant(this.prisma);
+    }
+
+    return {
+      success: true,
+      plan: product.plan,
+      months: product.months,
+      mocked: isMock,
+    };
+  }
+
+  /// Danh sách ghế Squad Pass của gói người dùng đang sở hữu (hoặc ghế được cấp).
+  async getSquadSeats(userId: string) {
+    const now = new Date();
+    const sub = await this.prisma.subscription.findFirst({
+      where: {
+        userId,
+        plan: 'SQUAD',
+        status: 'ACTIVE',
+        currentPeriodEnd: { gt: now },
+      },
+      orderBy: { currentPeriodEnd: 'desc' },
+      include: {
+        squadSeats: {
+          where: { revokedAt: null },
+          orderBy: { grantedAt: 'asc' },
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatarUrl: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const receivedSeat = await this.prisma.squadSeat.findFirst({
+      where: {
+        userId,
+        revokedAt: null,
+        subscription: {
+          status: 'ACTIVE',
+          currentPeriodEnd: { gt: now },
+        },
+      },
+      include: {
+        subscription: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatarUrl: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: { grantedAt: 'desc' },
+    });
+
+    if (!sub) {
+      return {
+        isOwner: false,
+        subscriptionId: receivedSeat?.subscriptionId ?? null,
+        totalSeats: receivedSeat?.subscription.seats ?? 0,
+        usedSeats: 0,
+        remainingSeats: 0,
+        seats: [],
+        receivedSeat: receivedSeat
+          ? {
+              id: receivedSeat.id,
+              grantedAt: receivedSeat.grantedAt,
+              activeUntil: receivedSeat.subscription.currentPeriodEnd,
+              owner: receivedSeat.subscription.user,
+            }
+          : null,
+      };
+    }
+
+    const activeSeats = sub.squadSeats;
+    const totalSeats = sub.seats || PLAN_SEATS.SQUAD;
+    // Chủ gói chiếm 1 ghế, các thành viên được mời chiếm phần còn lại.
+    const usedSeats = Math.min(totalSeats, 1 + activeSeats.length);
+    const remainingSeats = Math.max(0, totalSeats - usedSeats);
+
+    return {
+      isOwner: true,
+      subscriptionId: sub.id,
+      totalSeats,
+      usedSeats,
+      remainingSeats,
+      activeUntil: sub.currentPeriodEnd,
+      seats: activeSeats.map((s) => ({
+        id: s.id,
+        userId: s.userId,
+        grantedAt: s.grantedAt,
+        user: s.user,
+      })),
+      receivedSeat: null,
+    };
+  }
+
+  /// Cấp 1 ghế Squad Pass cho một thành viên theo email hoặc userId.
+  async grantSquadSeat(
+    ownerId: string,
+    target: { email?: string; userId?: string },
+  ) {
+    const email = target.email?.trim().toLowerCase();
+    const targetUserId = target.userId?.trim();
+    if (!email && !targetUserId) {
+      throw new BadRequestException({
+        code: 'MISSING_TARGET_USER',
+        message: 'Vui lòng nhập email hoặc chọn thành viên cần cấp ghế.',
+      });
+    }
+
+    const member = await this.prisma.user.findFirst({
+      where: {
+        ...(targetUserId ? { id: targetUserId } : { email }),
+        deletedAt: null,
+        isLocked: false,
+      },
+      select: { id: true, name: true, email: true, avatarUrl: true },
+    });
+
+    if (!member) {
+      throw new NotFoundException({
+        code: 'USER_NOT_FOUND',
+        message: 'Không tìm thấy người dùng hợp lệ.',
+      });
+    }
+
+    if (member.id === ownerId) {
+      throw new BadRequestException({
+        code: 'CANNOT_GRANT_SELF',
+        message: 'Chủ gói Squad Pass đã có sẵn quyền sử dụng.',
+      });
+    }
+
+    const now = new Date();
+    const runTx = async (tx: Prisma.TransactionClient) => {
+      const sub = await tx.subscription.findFirst({
+        where: {
+          userId: ownerId,
+          plan: 'SQUAD',
+          status: 'ACTIVE',
+          currentPeriodEnd: { gt: now },
+        },
+        orderBy: { currentPeriodEnd: 'desc' },
+      });
+
+      if (!sub) {
+        throw new ForbiddenException({
+          code: 'SQUAD_SUBSCRIPTION_REQUIRED',
+          message: 'Bạn cần gói Squad Pass đang hoạt động để cấp ghế.',
+        });
+      }
+
+      if (typeof tx.$queryRaw === 'function') {
+        await tx.$queryRaw`SELECT id FROM subscriptions WHERE id = ${sub.id}::uuid FOR UPDATE`;
+      }
+
+      const existingActive = await tx.squadSeat.findFirst({
+        where: {
+          subscriptionId: sub.id,
+          userId: member.id,
+          revokedAt: null,
+        },
+        include: {
+          user: {
+            select: { id: true, name: true, email: true, avatarUrl: true },
+          },
+        },
+      });
+      if (existingActive) {
+        return existingActive;
+      }
+
+      const maxGuestSeats = Math.max(0, (sub.seats || PLAN_SEATS.SQUAD) - 1);
+      const activeCount = await tx.squadSeat.count({
+        where: { subscriptionId: sub.id, revokedAt: null },
+      });
+
+      if (activeCount >= maxGuestSeats) {
+        throw new BadRequestException({
+          code: 'SQUAD_SEATS_FULL',
+          message: 'Đã hết ghế trống trong gói Squad Pass.',
+          limit: sub.seats || PLAN_SEATS.SQUAD,
+        });
+      }
+
+      return tx.squadSeat.upsert({
+        where: {
+          subscriptionId_userId: {
+            subscriptionId: sub.id,
+            userId: member.id,
+          },
+        },
+        update: {
+          revokedAt: null,
+          grantedAt: now,
+        },
+        create: {
+          subscriptionId: sub.id,
+          userId: member.id,
+          grantedAt: now,
+        },
+        include: {
+          user: {
+            select: { id: true, name: true, email: true, avatarUrl: true },
+          },
+        },
+      });
+    };
+
+    const seat =
+      typeof this.prisma.$transaction === 'function'
+        ? await this.prisma.$transaction(runTx)
+        : await runTx(this.prisma);
+
+    return {
+      id: seat.id,
+      subscriptionId: seat.subscriptionId,
+      userId: seat.userId,
+      grantedAt: seat.grantedAt,
+      user: seat.user,
+    };
+  }
+
+  /// Thu hồi (chủ gói) hoặc rời (thành viên) một ghế Squad Pass.
+  async revokeSquadSeat(actorId: string, seatId: string) {
+    const seat = await this.prisma.squadSeat.findUnique({
+      where: { id: seatId },
+      include: { subscription: { select: { userId: true } } },
+    });
+
+    if (!seat || seat.revokedAt !== null) {
+      throw new NotFoundException({
+        code: 'SEAT_NOT_FOUND',
+        message: 'Không tìm thấy ghế Squad Pass.',
+      });
+    }
+
+    if (seat.subscription.userId !== actorId && seat.userId !== actorId) {
+      throw new ForbiddenException({
+        code: 'NOT_SEAT_OWNER',
+        message: 'Bạn không có quyền thu hồi ghế này.',
+      });
+    }
+
+    const updated = await this.prisma.squadSeat.update({
+      where: { id: seatId },
+      data: { revokedAt: new Date() },
+    });
+
+    return {
+      id: updated.id,
+      revoked: true,
+      revokedAt: updated.revokedAt,
+    };
   }
 }

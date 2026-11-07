@@ -87,11 +87,26 @@ export class PromoService {
     // Cột đếm phải tăng bằng một lệnh riêng và sẽ lệch khỏi sự thật ngay lần
     // đầu có một giao dịch hỏng giữa chừng. Đếm từ bảng thì luôn đúng, và ở
     // quy mô khuyến mãi thì rẻ.
-    if (promo.maxRedemptions !== null) {
-      const used = await this.prisma.promoRedemption.count({
-        where: { codeId: promo.id },
+    const countPendingOrders = async (where: {
+      promoCode: string;
+      userId?: string;
+    }): Promise<number> => {
+      if (typeof (this.prisma as any).paymentOrder?.count !== 'function') {
+        return 0;
+      }
+      return this.prisma.paymentOrder.count({
+        where: { ...where, status: 'PENDING' },
       });
-      if (used >= promo.maxRedemptions) {
+    };
+
+    if (promo.maxRedemptions !== null) {
+      const [used, pending] = await Promise.all([
+        this.prisma.promoRedemption.count({
+          where: { codeId: promo.id },
+        }),
+        countPendingOrders({ promoCode: promo.code }),
+      ]);
+      if (used + pending >= promo.maxRedemptions) {
         throw new BadRequestException({
           code: 'PROMO_EXHAUSTED',
           message: 'errors.promo.exhausted',
@@ -100,10 +115,13 @@ export class PromoService {
     }
 
     if (opts.userId) {
-      const mine = await this.prisma.promoRedemption.count({
-        where: { codeId: promo.id, userId: opts.userId },
-      });
-      if (mine >= promo.perUserLimit) {
+      const [mine, myPending] = await Promise.all([
+        this.prisma.promoRedemption.count({
+          where: { codeId: promo.id, userId: opts.userId },
+        }),
+        countPendingOrders({ promoCode: promo.code, userId: opts.userId }),
+      ]);
+      if (mine + myPending >= promo.perUserLimit) {
         throw new BadRequestException({
           code: 'PROMO_ALREADY_USED',
           message: 'errors.promo.alreadyUsed',

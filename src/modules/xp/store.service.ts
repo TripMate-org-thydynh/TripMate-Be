@@ -68,35 +68,28 @@ export class StoreService {
     const item = findSticker(stickerId);
     if (!item) throw new NotFoundException('errors.store.stickerNotFound');
 
-    const already = await this.prisma.userSticker.findUnique({
-      where: { userId_stickerId: { userId, stickerId } },
-    });
-    // Sở hữu là nhị phân: mua rồi thì dùng bao nhiêu lần cũng được, nên mua lại
-    // chỉ tổ mất XP.
-    if (already) throw new BadRequestException('errors.store.alreadyOwned');
+    return this.prisma.$transaction(async (tx) => {
+      if (typeof tx.$queryRaw === 'function') {
+        await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
+      }
 
-    // Trừ trước rồi mới ghi sở hữu: nếu ghi sở hữu hỏng thì transaction bên
-    // dưới cuốn ngược cả hai.
-    const { balance } = await this.xp.spend(
-      userId,
-      item.costXp,
-      'STICKER_PURCHASE',
-      stickerId,
-    );
-
-    try {
-      await this.prisma.userSticker.create({ data: { userId, stickerId } });
-    } catch (e) {
-      // Hoàn XP nếu không ghi được quyền sở hữu — người dùng không được mất XP
-      // vì lỗi của mình.
-      await this.xp.award(userId, 'ADMIN_ADJUST', {
-        refId: `refund-${stickerId}-${Date.now()}`,
-        amount: item.costXp,
+      const already = await tx.userSticker.findUnique({
+        where: { userId_stickerId: { userId, stickerId } },
       });
-      throw e;
-    }
+      if (already) throw new BadRequestException('errors.store.alreadyOwned');
 
-    return { stickerId, spent: item.costXp, balance };
+      const { balance } = await this.xp.spend(
+        userId,
+        item.costXp,
+        'STICKER_PURCHASE',
+        stickerId,
+        { tx },
+      );
+
+      await tx.userSticker.create({ data: { userId, stickerId } });
+
+      return { stickerId, spent: item.costXp, balance };
+    });
   }
 
   /** Chợ theme kèm cờ đã mở khoá. */
@@ -139,29 +132,33 @@ export class StoreService {
     const item = findTheme(themeId);
     if (!item) throw new NotFoundException('errors.store.themeNotFound');
 
-    const already = await this.prisma.userTheme.findUnique({
-      where: { userId_themeId: { userId, themeId } },
-    });
-    if (already) throw new BadRequestException('errors.store.alreadyOwned');
+    return this.prisma.$transaction(async (tx) => {
+      if (typeof tx.$queryRaw === 'function') {
+        await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
+      }
 
-    const { balance } = await this.xp.spend(
-      userId,
-      item.priceXp,
-      'THEME_PURCHASE',
-      themeId,
-    );
-
-    try {
-      await this.prisma.userTheme.create({ data: { userId, themeId } });
-    } catch (e) {
-      await this.xp.award(userId, 'ADMIN_ADJUST', {
-        refId: `refund-${themeId}-${Date.now()}`,
-        amount: item.priceXp,
+      const already = await tx.userTheme.findUnique({
+        where: { userId_themeId: { userId, themeId } },
       });
-      throw e;
-    }
+      if (already) throw new BadRequestException('errors.store.alreadyOwned');
 
-    return { themeId, accentKey: item.accentKey, spent: item.priceXp, balance };
+      const { balance } = await this.xp.spend(
+        userId,
+        item.priceXp,
+        'THEME_PURCHASE',
+        themeId,
+        { tx },
+      );
+
+      await tx.userTheme.create({ data: { userId, themeId } });
+
+      return {
+        themeId,
+        accentKey: item.accentKey,
+        spent: item.priceXp,
+        balance,
+      };
+    });
   }
 
   /** Người này có sở hữu sticker đó không — chat gọi để chặn gửi sticker chưa mua. */

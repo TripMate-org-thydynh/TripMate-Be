@@ -32,11 +32,12 @@ export class TodosController {
     @Query('limit') limit?: string,
   ) {
     if (page || limit) {
-      return this.todosService.getListPaginated(
-        tripId,
-        page ? parseInt(page, 10) : 1,
-        limit ? parseInt(limit, 10) : 50,
+      const safePage = Math.max(1, parseInt(page ?? '1', 10) || 1);
+      const safeLimit = Math.min(
+        Math.max(1, parseInt(limit ?? '50', 10) || 50),
+        200,
       );
+      return this.todosService.getListPaginated(tripId, safePage, safeLimit);
     }
     return this.todosService.getList(tripId);
   }

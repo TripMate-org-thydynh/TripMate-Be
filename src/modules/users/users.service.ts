@@ -83,24 +83,77 @@ export class UsersService {
     });
     if (!user) throw new NotFoundException('User not found');
 
-    // Google Play yêu cầu xoá dữ liệu cá nhân, không chỉ khoá đăng nhập. Giữ
-    // lại hàng User (ẩn danh) vì khoản chi, ảnh, tin nhắn trong chuyến đi
-    // chung là dữ liệu của cả nhóm — xoá cứng sẽ làm lệch sổ nợ của người
-    // khác. Đơn thanh toán giữ lại theo nghĩa vụ kế toán.
-    //
-    // supabaseId cũng phải đổi: tài khoản mật khẩu sinh supabaseId từ
-    // username, nên đăng ký lại đúng username đó sẽ đụng unique nếu giữ cũ.
-    await this.prisma.$transaction([
-      this.prisma.deviceToken.deleteMany({ where: { userId } }),
-      this.prisma.userPresence.deleteMany({ where: { userId } }),
-      this.prisma.notification.deleteMany({ where: { userId } }),
-      this.prisma.linkedBank.deleteMany({ where: { userId } }),
-      this.prisma.paymentCard.deleteMany({ where: { userId } }),
-      this.prisma.bucketItem.deleteMany({ where: { userId } }),
-      this.prisma.user.update({
+    const now = new Date();
+    const runCleanup = async (tx: any) => {
+      await tx.deviceToken?.deleteMany?.({ where: { userId } });
+      await tx.userPresence?.deleteMany?.({ where: { userId } });
+      await tx.notification?.deleteMany?.({ where: { userId } });
+      await tx.linkedBank?.deleteMany?.({ where: { userId } });
+      await tx.paymentCard?.deleteMany?.({ where: { userId } });
+      await tx.bucketItem?.deleteMany?.({ where: { userId } });
+      await tx.vacationDay?.deleteMany?.({ where: { userId } });
+      await tx.customSticker?.deleteMany?.({ where: { userId } });
+      await tx.userSticker?.deleteMany?.({ where: { userId } });
+      await tx.userTheme?.deleteMany?.({ where: { userId } });
+
+      // Cancel active subscriptions and revoke SquadSeats
+      await tx.subscription?.updateMany?.({
+        where: { userId, status: { in: ['ACTIVE', 'TRIAL'] } },
+        data: {
+          status: 'CANCELED',
+          cancelAtPeriodEnd: true,
+          canceledAt: now,
+        },
+      });
+      await tx.squadSeat?.updateMany?.({
+        where: {
+          OR: [{ userId }, { grantedBy: userId }],
+          revokedAt: null,
+        },
+        data: { revokedAt: now },
+      });
+
+      // Handle TripMember rows: promote earliest remaining member if CREATOR, or soft-delete solo trips
+      if (typeof tx.tripMember?.findMany === 'function') {
+        const memberships = await tx.tripMember.findMany({
+          where: { userId },
+          select: { tripId: true, role: true },
+        });
+        for (const m of memberships) {
+          if (m.role === 'CREATOR') {
+            const nextMember = await tx.tripMember?.findFirst?.({
+              where: { tripId: m.tripId, userId: { not: userId } },
+              orderBy: { joinedAt: 'asc' },
+            });
+            if (nextMember) {
+              await tx.tripMember.update({
+                where: {
+                  tripId_userId: {
+                    tripId: m.tripId,
+                    userId: nextMember.userId,
+                  },
+                },
+                data: { role: 'CREATOR' },
+              });
+              await tx.trip?.update?.({
+                where: { id: m.tripId },
+                data: { createdBy: nextMember.userId },
+              });
+            } else {
+              await tx.trip?.update?.({
+                where: { id: m.tripId },
+                data: { deletedAt: now },
+              });
+            }
+          }
+        }
+        await tx.tripMember?.deleteMany?.({ where: { userId } });
+      }
+
+      await tx.user.update({
         where: { id: userId },
         data: {
-          deletedAt: new Date(),
+          deletedAt: now,
           supabaseId: randomUUID(),
           email: `deleted_${userId}@deleted.tripmate.local`,
           username: null,
@@ -110,8 +163,18 @@ export class UsersService {
           bio: null,
           vibeTags: [],
         },
-      }),
-    ]);
+      });
+    };
+
+    if (typeof (this.prisma as any).$transaction === 'function') {
+      await this.prisma.$transaction(async (tx: any) => {
+        if (Array.isArray(tx)) return;
+        await runCleanup(tx);
+      });
+    } else {
+      await runCleanup(this.prisma);
+    }
+
     return { success: true, message: 'Tài khoản đã được xoá.' };
   }
 
@@ -191,15 +254,6 @@ export class UsersService {
       orderBy: { startDate: 'asc' },
     });
 
-    // Trước đây: nếu user chưa có chuyến nào thì BE tự dựng một chuyến demo
-    // (kèm vài tài khoản user giả, lịch trình giả, chi tiêu + chia tiền giả)
-    // và GHI THẲNG vào database thật. Hậu quả:
-    //   - Người dùng mới mở app thấy một chuyến lạ với những người lạ.
-    //   - Empty state thật của app không bao giờ hiển thị được.
-    //   - DB production bị rác: user @tripmate.local, trip/expense giả.
-    // Đã bỏ. Danh sách rỗng là trạng thái hợp lệ và app đã có empty state tử tế
-    // cho nó (my_trips_screen_test.dart phủ đúng trường hợp này).
-
     return trips;
   }
 
@@ -216,9 +270,13 @@ export class UsersService {
       i18n ? i18n.t(`common.badges.${key}`) : fallback;
 
     const [tripCount, checkinCount, expensePaidCount] = await Promise.all([
-      this.prisma.tripMember.count({ where: { userId } }),
+      this.prisma.tripMember.count({
+        where: { userId, trip: { deletedAt: null } },
+      }),
       this.prisma.dayCheckin.count({ where: { userId, status: 'GOING' } }),
-      this.prisma.expense.count({ where: { paidById: userId } }),
+      this.prisma.expense.count({
+        where: { paidById: userId, deletedAt: null },
+      }),
     ]);
 
     const badges = [
@@ -295,7 +353,7 @@ export class UsersService {
     if (!user) throw new NotFoundException('User not found');
 
     const totalTrips = await this.prisma.tripMember.count({
-      where: { userId },
+      where: { userId, trip: { deletedAt: null } },
     });
 
     // Quãng đường và số địa điểm tính THẬT từ toạ độ điểm lịch trình.
@@ -306,7 +364,7 @@ export class UsersService {
     // ở đây thay vì để hai chỉ số chết trên giao diện.
     const tripIds = (
       await this.prisma.tripMember.findMany({
-        where: { userId },
+        where: { userId, trip: { deletedAt: null } },
         select: { tripId: true },
       })
     ).map((m) => m.tripId);
@@ -367,7 +425,7 @@ export class UsersService {
   /// chi nào thì `hasData: false` để client ẩn khối đi.
   async getExpenseSummary(userId: string) {
     const memberships = await this.prisma.tripMember.findMany({
-      where: { userId },
+      where: { userId, trip: { deletedAt: null } },
       select: { tripId: true },
     });
     const tripIds = memberships.map((m) => m.tripId);
@@ -383,7 +441,7 @@ export class UsersService {
     if (tripIds.length === 0) return empty;
 
     const splits = await this.prisma.expenseSplit.findMany({
-      where: { expense: { tripId: { in: tripIds } } },
+      where: { expense: { tripId: { in: tripIds }, deletedAt: null } },
       include: {
         user: { select: { id: true, name: true } },
         expense: { select: { amount: true } },

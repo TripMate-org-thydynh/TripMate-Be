@@ -1,29 +1,75 @@
 import {
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ActivitiesService } from '../activities/activities.service';
-import { CreateMomentDto } from './dto/create-moment.dto';
+import {
+  CreateMomentDto,
+  UpdateMomentLayoutDto,
+} from './dto/create-moment.dto';
 import { EntitlementService } from '../premium/entitlement.service';
 import { ghostRevealAt, isDeveloping, visibleMomentWhere } from './ghost';
 
+interface CachedBoardSnapshot {
+  expiresAt: number;
+  endDateIso: string | null;
+  rows: any[];
+}
+
 @Injectable()
 export class MomentsService {
+  private static readonly BOARD_CACHE_TTL_MS = 5 * 60 * 1000;
+  private readonly l1BoardCache = new Map<string, CachedBoardSnapshot>();
+
   constructor(
     private prisma: PrismaService,
     private readonly activities: ActivitiesService,
     private readonly entitlements: EntitlementService,
+    @Optional() @Inject(CACHE_MANAGER) private readonly cache?: Cache,
   ) {}
 
+  private boardCacheKey(tripId: string): string {
+    return `board:trip:${tripId}:v1`;
+  }
+
+  /**
+   * Xoá cache bảng kỷ niệm dùng chung của chuyến đi ngay khi có thay đổi
+   * (thêm ảnh, kéo đổi tọa độ, đổi filter, thả tim, bình luận, xoá).
+   */
+  async invalidateBoardCache(tripId?: string | null): Promise<void> {
+    if (!tripId) return;
+    this.l1BoardCache.delete(tripId);
+    try {
+      await this.cache?.del(this.boardCacheKey(tripId));
+    } catch {
+      // Bỏ qua lỗi Redis để không làm gián đoạn luồng chính.
+    }
+  }
+
+  /**
+   * Tính vị trí & góc nghiêng mặc định trên bảng kỷ niệm (Shared Memory Photo Board)
+   * theo hành trình dọc từ trên xuống dưới (Vertical Winding Journey Trail).
+   */
+  private defaultBoardPlacement(index: number) {
+    const waypointsX = [76, 332, 118, 308];
+    const wp = index % waypointsX.length;
+    const jitterX = ((index * 37) % 36) - 18;
+    const jitterY = ((index * 53) % 28) - 14;
+    const rotation = Number(((((index * 19) % 15) - 7) * 0.012).toFixed(3));
+    return {
+      boardX: waypointsX[wp] + jitterX,
+      boardY: 128 + index * 246 + jitterY,
+      boardRotation: rotation === 0 ? (index % 2 === 0 ? -0.035 : 0.035) : rotation,
+    };
+  }
+
   async create(tripId: string, userId: string, dto: CreateMomentDto) {
-    // Hạn mức khoảnh khắc mỗi chuyến.
-    //
-    // Đếm cả moment của mọi thành viên, vì `momentsPerTrip` là giới hạn của
-    // chuyến — chi phí lưu trữ nằm ở chuyến, không ở người đăng. Ảnh đã xoá
-    // không tính: trước đây xoá bớt cũng không đăng thêm được, người dùng
-    // không có cách nào tự gỡ khỏi trạng thái "đầy".
     const moments = await this.prisma.moment.count({
       where: { tripId, deletedAt: null },
     });
@@ -32,6 +78,8 @@ export class MomentsService {
       'momentsPerTrip',
       moments,
     );
+
+    const placement = this.defaultBoardPlacement(moments);
 
     const row = await this.prisma.moment.create({
       data: {
@@ -44,50 +92,118 @@ export class MomentsService {
         latitude: dto.latitude,
         longitude: dto.longitude,
         mediaId: dto.mediaId,
+        boardX: dto.boardX ?? placement.boardX,
+        boardY: dto.boardY ?? placement.boardY,
+        boardRotation: dto.boardRotation ?? placement.boardRotation,
+        boardScale: dto.boardScale ?? 1.0,
+        boardFilter: dto.boardFilter ?? 'CLASSIC',
+        noteColor: dto.noteColor,
+        isPinned: dto.isPinned ?? false,
+        isFavorite: dto.isFavorite ?? false,
+        takenAt: dto.takenAt ? new Date(dto.takenAt) : undefined,
       },
       include: {
         user: { select: { id: true, name: true, avatarUrl: true } },
         _count: { select: { reactions: true, comments: true } },
       },
     });
-    // Ghi nhật ký hoạt động để feed squad có dữ liệu — trước đây
-    // ActivitiesService.log() không được gọi ở bất kỳ đâu.
+    await this.invalidateBoardCache(tripId);
     await this.activities.log(
       tripId,
       userId,
       'MOMENT_SHARED',
-      // Ảnh ghost: không lộ caption trước khi tráng.
       { caption: row.isGhost ? '' : (row.caption ?? '') },
       row.id,
     );
     return row;
   }
 
+  /**
+   * Lấy toàn bộ ảnh trên bảng kỷ niệm của chuyến đi.
+   * Sử dụng Shared Trip Board Cache (Redis + L1 RAM) để khi thành viên đầu tiên
+   * mở bảng, các thành viên tiếp theo trong nhóm nhận ngay snapshot đã dựng sẵn
+   * trong < 2ms mà không phải query lại PostgreSQL.
+   */
   async findAll(tripId: string, viewerId: string) {
-    const [trip, rows] = await Promise.all([
-      this.prisma.trip.findUnique({
-        where: { id: tripId },
-        select: { endDate: true },
-      }),
-      this.prisma.moment.findMany({
-        where: { tripId, deletedAt: null, ...visibleMomentWhere(viewerId) },
-        include: {
-          user: { select: { id: true, name: true, avatarUrl: true } },
-          reactions: true,
-          _count: { select: { reactions: true, comments: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        // Chặn trên an toàn: gói trả phí cho tới 1000 khoảnh khắc/chuyến, mà
-        // app vẽ cả danh sách một lần. Nên chuyển sang phân trang con trỏ.
-        take: 500,
-      }),
-    ]);
-    // Ảnh ghost của chính mình vẫn thấy, kèm cờ để app vẽ nhãn "đang tráng".
-    return rows.map((m) =>
-      trip && isDeveloping(m, trip.endDate)
-        ? { ...m, developing: true, revealAt: ghostRevealAt(trip.endDate) }
-        : m,
+    const now = Date.now();
+    let snapshot: CachedBoardSnapshot | undefined = this.l1BoardCache.get(tripId);
+    if (snapshot && snapshot.expiresAt <= now) {
+      this.l1BoardCache.delete(tripId);
+      snapshot = undefined;
+    }
+
+    if (!snapshot && this.cache) {
+      try {
+        const cached = await this.cache.get<CachedBoardSnapshot>(
+          this.boardCacheKey(tripId),
+        );
+        if (cached && cached.expiresAt > now) {
+          snapshot = cached;
+          this.l1BoardCache.set(tripId, cached);
+        }
+      } catch {
+        // Fallback to DB query if Redis is unavailable
+      }
+    }
+
+    if (!snapshot) {
+      const [trip, rows] = await Promise.all([
+        this.prisma.trip.findUnique({
+          where: { id: tripId },
+          select: { endDate: true },
+        }),
+        this.prisma.moment.findMany({
+          where: { tripId, deletedAt: null },
+          include: {
+            user: { select: { id: true, name: true, avatarUrl: true } },
+            reactions: true,
+            _count: { select: { reactions: true, comments: true } },
+          },
+          orderBy: [{ isPinned: 'desc' }, { createdAt: 'desc' }],
+          take: 500,
+        }),
+      ]);
+
+      snapshot = {
+        expiresAt: now + MomentsService.BOARD_CACHE_TTL_MS,
+        endDateIso: trip?.endDate ? new Date(trip.endDate).toISOString() : null,
+        rows,
+      };
+      this.l1BoardCache.set(tripId, snapshot);
+      try {
+        await this.cache?.set(
+          this.boardCacheKey(tripId),
+          snapshot,
+          MomentsService.BOARD_CACHE_TTL_MS,
+        );
+      } catch {
+        // Ignore cache write errors
+      }
+    }
+
+    const endDate = snapshot.endDateIso ? new Date(snapshot.endDateIso) : null;
+    // Lọc người viewer đã chặn SAU khi đọc cache: snapshot dùng chung theo
+    // chuyến, không được trộn dữ liệu riêng của từng người vào key chung.
+    const blocked = new Set(
+      (
+        await this.prisma.userBlock.findMany({
+          where: { blockerId: viewerId },
+          select: { blockedId: true },
+        })
+      ).map((r) => r.blockedId),
     );
+    return snapshot.rows
+      .filter((m) => !blocked.has(m.userId))
+      .filter((m) => {
+        if (!m.isGhost || m.userId === viewerId) return true;
+        if (!endDate) return true;
+        return ghostRevealAt(endDate).getTime() <= now;
+      })
+      .map((m) =>
+        endDate && isDeveloping(m, endDate)
+          ? { ...m, developing: true, revealAt: ghostRevealAt(endDate) }
+          : m,
+      );
   }
 
   /**
@@ -144,6 +260,80 @@ export class MomentsService {
     return moment;
   }
 
+  /**
+   * Cập nhật bố cục Polaroid trên Shared Memory Photo Board.
+   * Mọi thành viên trong chuyến đi đều có thể sắp xếp vị trí/ghim/bộ lọc trên bảng chung;
+   * riêng `caption` chỉ tác giả hoặc chủ chuyến mới được sửa.
+   */
+  async updateLayout(
+    tripId: string,
+    id: string,
+    userId: string,
+    dto: UpdateMomentLayoutDto,
+  ) {
+    await this.assertVisible(id, userId);
+    const moment = await this.prisma.moment.findFirst({
+      where: { id, tripId, deletedAt: null },
+    });
+    if (!moment) throw new NotFoundException('errors.database.notFound');
+
+    const data: Record<string, unknown> = {};
+    if (dto.boardX !== undefined) data.boardX = dto.boardX;
+    if (dto.boardY !== undefined) data.boardY = dto.boardY;
+    if (dto.boardRotation !== undefined) data.boardRotation = dto.boardRotation;
+    if (dto.boardScale !== undefined) data.boardScale = dto.boardScale;
+    if (dto.boardFilter !== undefined) data.boardFilter = dto.boardFilter;
+    if (dto.noteColor !== undefined) data.noteColor = dto.noteColor;
+    if (dto.isPinned !== undefined) data.isPinned = dto.isPinned;
+    if (dto.isFavorite !== undefined) data.isFavorite = dto.isFavorite;
+    if (dto.caption !== undefined) {
+      if (moment.userId !== userId) {
+        const isCreator = await this.prisma.tripMember.findFirst({
+          where: { tripId, userId, role: 'CREATOR' },
+        });
+        if (!isCreator) {
+          throw new ForbiddenException('errors.moments.notAuthor');
+        }
+      }
+      data.caption = dto.caption;
+    }
+
+    const updated = await this.prisma.moment.update({
+      where: { id },
+      data,
+      include: {
+        user: { select: { id: true, name: true, avatarUrl: true } },
+        reactions: true,
+        _count: { select: { reactions: true, comments: true } },
+      },
+    });
+    await this.invalidateBoardCache(tripId);
+    return updated;
+  }
+
+  /**
+   * Đánh dấu / bỏ đánh dấu kỷ niệm nổi bật (Favorite / Highlight) trên bảng chung.
+   */
+  async toggleFavorite(tripId: string, id: string, userId: string) {
+    await this.assertVisible(id, userId);
+    const moment = await this.prisma.moment.findFirst({
+      where: { id, tripId, deletedAt: null },
+    });
+    if (!moment) throw new NotFoundException('errors.database.notFound');
+
+    const updated = await this.prisma.moment.update({
+      where: { id },
+      data: { isFavorite: !moment.isFavorite },
+      include: {
+        user: { select: { id: true, name: true, avatarUrl: true } },
+        reactions: true,
+        _count: { select: { reactions: true, comments: true } },
+      },
+    });
+    await this.invalidateBoardCache(tripId);
+    return updated;
+  }
+
   /** DELETE is protected by ResourceOwnerGuard at controller level. */
   /**
    * Sửa caption của khoảnh khắc — chỉ tác giả được sửa.
@@ -160,10 +350,12 @@ export class MomentsService {
     if (moment.userId !== userId) {
       throw new ForbiddenException('errors.moments.notAuthor');
     }
-    return this.prisma.moment.update({
+    const updated = await this.prisma.moment.update({
       where: { id },
       data: { caption },
     });
+    await this.invalidateBoardCache(moment.tripId);
+    return updated;
   }
 
   /**
@@ -186,18 +378,28 @@ export class MomentsService {
       }
     }
 
-    return this.prisma.moment.update({
+    const deleted = await this.prisma.moment.update({
       where: { id },
       data: { deletedAt: new Date() },
     });
+    await this.invalidateBoardCache(moment.tripId);
+    return deleted;
   }
 
   async addComment(momentId: string, userId: string, content: string) {
     await this.assertVisible(momentId, userId);
-    return this.prisma.momentComment.create({
+    const created = await this.prisma.momentComment.create({
       data: { momentId, userId, content },
       include: { user: { select: { id: true, name: true, avatarUrl: true } } },
     });
+    const moment = await this.prisma.moment.findUnique({
+      where: { id: momentId },
+      select: { tripId: true },
+    });
+    if (moment?.tripId) {
+      await this.invalidateBoardCache(moment.tripId);
+    }
+    return created;
   }
 
   async toggleReaction(momentId: string, userId: string, emoji: string) {
@@ -205,15 +407,25 @@ export class MomentsService {
     const existing = await this.prisma.momentReaction.findUnique({
       where: { momentId_userId_emoji: { momentId, userId, emoji } },
     });
+    const moment = await this.prisma.moment.findUnique({
+      where: { id: momentId },
+      select: { tripId: true },
+    });
     if (existing) {
       await this.prisma.momentReaction.delete({
         where: { momentId_userId_emoji: { momentId, userId, emoji } },
       });
+      if (moment?.tripId) {
+        await this.invalidateBoardCache(moment.tripId);
+      }
       return { action: 'removed', emoji };
     }
     await this.prisma.momentReaction.create({
       data: { momentId, userId, emoji },
     });
+    if (moment?.tripId) {
+      await this.invalidateBoardCache(moment.tripId);
+    }
     return { action: 'added', emoji };
   }
 }

@@ -42,8 +42,11 @@ describe('BriefingService', () => {
         ]),
       },
       notification: {
-        findFirst: jest.fn().mockResolvedValue(null),
-        create: jest.fn().mockResolvedValue({}),
+        // Dò trùng gộp cả chuyến (findMany) + ghi hàng loạt (createMany).
+        findMany: jest.fn().mockResolvedValue([]),
+        createMany: jest
+          .fn()
+          .mockImplementation(({ data }) => Promise.resolve({ count: data.length })),
       },
     };
     weather = {
@@ -82,13 +85,16 @@ describe('BriefingService', () => {
 
   it('gửi cho mọi thành viên chuyến đang diễn ra', async () => {
     expect(await svc.sendAll('2026-09-22')).toBe(2);
-    expect(prisma.notification.create).toHaveBeenCalledTimes(2);
+    expect(prisma.notification.createMany).toHaveBeenCalledTimes(1);
+    expect(prisma.notification.createMany.mock.calls[0][0].data).toHaveLength(2);
   });
 
   it('không gửi trùng khi cron chạy lại trong ngày', async () => {
-    prisma.notification.findFirst.mockResolvedValue({ id: 'x' });
+    prisma.notification.findMany.mockImplementation(({ where }) =>
+      Promise.resolve(where.userId.in.map((userId: string) => ({ userId }))),
+    );
     expect(await svc.sendAll('2026-09-22')).toBe(0);
-    expect(prisma.notification.create).not.toHaveBeenCalled();
+    expect(prisma.notification.createMany).not.toHaveBeenCalled();
     // Cron chạy lại không được làm điện thoại rung thêm lần nữa.
     expect(push.sendToUsers).not.toHaveBeenCalled();
   });

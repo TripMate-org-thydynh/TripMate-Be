@@ -28,8 +28,8 @@ export class AdminService {
     ] = await Promise.all([
       this.prisma.user.count({ where: { deletedAt: null } }),
       this.prisma.trip.count({ where: { deletedAt: null } }),
-      this.prisma.expense.count(),
-      this.prisma.moment.count(),
+      this.prisma.expense.count({ where: { deletedAt: null } }),
+      this.prisma.moment.count({ where: { deletedAt: null } }),
       this.prisma.reservation.count(),
       this.prisma.userPresence.count({
         where: {
@@ -50,6 +50,7 @@ export class AdminService {
       }),
       this.prisma.expense.groupBy({
         by: ['category'],
+        where: { deletedAt: null },
         _sum: { amount: true },
         _count: { id: true },
       }),
@@ -177,7 +178,7 @@ export class AdminService {
         .groupBy({ by: ['userId'] })
         .then((res) => res.length),
       this.prisma.expense
-        .groupBy({ by: ['paidById'] })
+        .groupBy({ by: ['paidById'], where: { deletedAt: null } })
         .then((res) => res.length),
       this.prisma.subscription
         .groupBy({ by: ['userId'], where: { status: 'ACTIVE' } })
@@ -514,6 +515,14 @@ export class AdminService {
     };
   }
 
+  private stripPasswordHash<T extends Record<string, any>>(
+    user: T,
+  ): Omit<T, 'passwordHash'> {
+    if (!user || typeof user !== 'object') return user;
+    const { passwordHash: _passwordHash, ...safeUser } = user;
+    return safeUser;
+  }
+
   // --- USER MANAGEMENT ---
   async getUsers(search?: string, role?: UserRole, page = 1, limit = 10) {
     const skip = (page - 1) * limit;
@@ -549,7 +558,7 @@ export class AdminService {
       page,
       limit,
       totalPages: Math.ceil(total / limit),
-      items,
+      items: items.map((u) => this.stripPasswordHash(u)),
     };
   }
 
@@ -569,7 +578,7 @@ export class AdminService {
       },
     });
     if (!user) throw new NotFoundException('User not found');
-    return user;
+    return this.stripPasswordHash(user);
   }
 
   async updateUser(
@@ -579,10 +588,16 @@ export class AdminService {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found');
 
-    return this.prisma.user.update({
+    const safeData: { role?: UserRole; isLocked?: boolean; bio?: string } = {};
+    if (data.role !== undefined) safeData.role = data.role;
+    if (data.isLocked !== undefined) safeData.isLocked = data.isLocked;
+    if (data.bio !== undefined) safeData.bio = data.bio;
+
+    const updated = await this.prisma.user.update({
       where: { id },
-      data,
+      data: safeData,
     });
+    return this.stripPasswordHash(updated);
   }
 
   async deleteUser(id: string) {
@@ -590,10 +605,11 @@ export class AdminService {
     if (!user) throw new NotFoundException('User not found');
 
     // Soft delete
-    return this.prisma.user.update({
+    const deleted = await this.prisma.user.update({
       where: { id },
       data: { deletedAt: new Date() },
     });
+    return this.stripPasswordHash(deleted);
   }
 
   // --- TRIP CRUD ---
@@ -652,9 +668,32 @@ export class AdminService {
     const trip = await this.prisma.trip.findUnique({ where: { id } });
     if (!trip) throw new NotFoundException('Trip not found');
 
+    const safeData: Record<string, unknown> = {};
+    for (const key of [
+      'name',
+      'description',
+      'destination',
+      'startDate',
+      'endDate',
+      'coverImage',
+      'currency',
+      'budget',
+      'vibe',
+      'theme',
+      'isPublic',
+    ] as const) {
+      if (data && data[key] !== undefined) {
+        safeData[key] =
+          (key === 'startDate' || key === 'endDate') &&
+          typeof data[key] === 'string'
+            ? new Date(data[key])
+            : data[key];
+      }
+    }
+
     return this.prisma.trip.update({
       where: { id },
-      data,
+      data: safeData,
     });
   }
 
@@ -695,7 +734,28 @@ export class AdminService {
   async updateReservation(id: string, data: any) {
     const res = await this.prisma.reservation.findUnique({ where: { id } });
     if (!res) throw new NotFoundException('Reservation not found');
-    return this.prisma.reservation.update({ where: { id }, data });
+    const safeData: Record<string, unknown> = {};
+    for (const key of [
+      'type',
+      'title',
+      'location',
+      'confirmationNumber',
+      'startTime',
+      'endTime',
+      'notes',
+      'price',
+      'currency',
+      'attachmentUrl',
+    ] as const) {
+      if (data && data[key] !== undefined) {
+        safeData[key] =
+          (key === 'startTime' || key === 'endTime') &&
+          typeof data[key] === 'string'
+            ? new Date(data[key])
+            : data[key];
+      }
+    }
+    return this.prisma.reservation.update({ where: { id }, data: safeData });
   }
 
   async deleteReservation(id: string) {
@@ -732,7 +792,25 @@ export class AdminService {
       where: { id },
     });
     if (!journal) throw new NotFoundException('Journal not found');
-    return this.prisma.journalEntry.update({ where: { id }, data });
+    const safeData: Record<string, unknown> = {};
+    for (const key of [
+      'dayNumber',
+      'date',
+      'title',
+      'content',
+      'mood',
+      'weatherNote',
+      'highlights',
+      'coverUrl',
+    ] as const) {
+      if (data && data[key] !== undefined) {
+        safeData[key] =
+          key === 'date' && typeof data[key] === 'string'
+            ? new Date(data[key])
+            : data[key];
+      }
+    }
+    return this.prisma.journalEntry.update({ where: { id }, data: safeData });
   }
 
   async deleteJournal(id: string) {
@@ -769,7 +847,21 @@ export class AdminService {
   async updatePackingItem(id: string, data: any) {
     const packing = await this.prisma.packingItem.findUnique({ where: { id } });
     if (!packing) throw new NotFoundException('Packing item not found');
-    return this.prisma.packingItem.update({ where: { id }, data });
+    const safeData: Record<string, unknown> = {};
+    for (const key of [
+      'name',
+      'category',
+      'quantity',
+      'isPacked',
+      'isShared',
+      'assignedTo',
+      'packedBy',
+    ] as const) {
+      if (data && data[key] !== undefined) {
+        safeData[key] = data[key];
+      }
+    }
+    return this.prisma.packingItem.update({ where: { id }, data: safeData });
   }
 
   async deletePackingItem(id: string) {

@@ -13,6 +13,7 @@ import { CreateDocumentDto } from './dto/create-document.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { ResourceOwnerGuard } from '../../common/guards/resource-owner.guard';
+import { InTrip } from '../../common/guards/trip-resource.guard';
 import { OwnedResource } from '../../common/decorators/resource-owner.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { User } from '@prisma/client';
@@ -42,6 +43,7 @@ export class DocumentsController {
     return this.documentsService.create(tripId, user.id, dto);
   }
 
+  @InTrip('tripDocument', 'documentId')
   @UseGuards(ResourceOwnerGuard)
   @OwnedResource('tripDocument', 'documentId')
   @Delete(':documentId')

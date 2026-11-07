@@ -28,6 +28,7 @@ const TRIP_PATH: Record<string, string | null> = {
   moment: null,
   journalEntry: null,
   gameSession: null,
+  tripGame: null,
   packingItem: null,
   todoItem: null,
   reservation: null,
@@ -35,6 +36,7 @@ const TRIP_PATH: Record<string, string | null> = {
   chatMessage: null,
   tripInvite: null,
   tripNote: null,
+  tripDocument: null,
   expense: null,
   pollOption: 'poll',
 };
@@ -76,7 +78,11 @@ export class TripResourceGuard implements CanActivate {
       );
     }
     const via = TRIP_PATH[meta.model];
-    const delegate = (this.prisma as any)[meta.model];
+    const delegateKey =
+      meta.model === 'tripGame' && !(this.prisma as any).tripGame
+        ? 'gameSession'
+        : meta.model;
+    const delegate = (this.prisma as any)[delegateKey];
     if (!delegate?.findUnique) {
       throw new InternalServerErrorException(
         `Prisma delegate cho model ${meta.model} không hợp lệ`,

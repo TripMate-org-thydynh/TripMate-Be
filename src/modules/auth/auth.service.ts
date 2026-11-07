@@ -1,5 +1,6 @@
 import {
   ServiceUnavailableException,
+  InternalServerErrorException,
   BadRequestException,
   ConflictException,
   Injectable,
@@ -17,10 +18,14 @@ import { LoginDto } from './dto/login.dto';
 import { TwilioService } from './twilio.service';
 import { MailService } from './mail.service';
 import { GoogleLoginDto } from './dto/google-login.dto';
+import { AppleLoginDto } from './dto/apple-login.dto';
 import { RegisterPasswordDto } from './dto/register-password.dto';
 import { LoginPasswordDto } from './dto/login-password.dto';
 import * as crypto from 'node:crypto';
 import { OAuth2Client } from 'google-auth-library';
+
+/** Khoá công khai JWKS của Apple (https://appleid.apple.com/auth/keys). */
+type AppleJwk = crypto.JsonWebKey & { kid?: string };
 
 @Injectable()
 export class AuthService {
@@ -129,15 +134,21 @@ export class AuthService {
         theme: true,
         travelScore: true,
         chaosScore: true,
+        isLocked: true,
+        deletedAt: true,
       },
     });
 
-    if (!user) {
+    if (!user || user.deletedAt) {
       throw new UnauthorizedException('User not found. Please register first.');
     }
+    if (user.isLocked) {
+      throw new UnauthorizedException('errors.auth.user_locked');
+    }
 
+    const { deletedAt: _deletedAt, ...safeUser } = user;
     const token = this.generateToken(user.id, user.email);
-    return { user, token };
+    return { user: safeUser, token };
   }
 
   /**
@@ -245,13 +256,20 @@ export class AuthService {
     }
 
     if (cleanedPhone.includes('@')) {
-      // Gửi OTP qua email thật bằng SendGrid (fallback log nếu chưa cấu hình).
+      // Gửi OTP qua email thật bằng SendGrid (fallback log nếu chưa cấu hình ở dev).
       const subject = '[TripMate] Mã OTP đăng nhập của bạn';
       const body = `Ma OTP dang nhap TripMate cua ban la: ${code}. Ma nay co hieu luc trong 5 phut.`;
+      let sent = false;
       try {
-        await this.mailService.sendEmail(cleanedPhone, subject, body);
+        sent = await this.mailService.sendEmail(cleanedPhone, subject, body);
       } catch (err) {
         this.logger.error(`SendGrid gửi email thất bại: ${err.message}`);
+      }
+      if (!sent) {
+        await this.cacheManager.del(cacheKey);
+        throw new InternalServerErrorException(
+          'Không gửi được email OTP lúc này, vui lòng thử lại sau.',
+        );
       }
     } else {
       // Send via Twilio SMS
@@ -274,8 +292,32 @@ export class AuthService {
     return { success: true, message: 'OTP code sent successfully' };
   }
 
-  async verifyOtp(phoneNumber: string, code: string) {
-    const cleanedPhone = phoneNumber.trim();
+  /**
+   * Quên mật khẩu: xác minh OTP đã gửi tới email rồi đặt mật khẩu mới.
+   * App đã gọi `/auth/reset-password` từ lâu nhưng BE chưa từng có route này
+   * → nút "Quên mật khẩu" luôn hỏng.
+   */
+  async resetPassword(identifier: string, code: string, newPassword: string) {
+    const email = identifier.trim();
+    await this.consumeOtp(email, code);
+    const user = await this.prisma.user.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' }, deletedAt: null },
+      select: { id: true, username: true },
+    });
+    if (!user) {
+      throw new BadRequestException('Email này chưa có tài khoản TripMate');
+    }
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash },
+    });
+    return { success: true, username: user.username };
+  }
+
+  /** Kiểm mã OTP (so sánh hằng thời gian, tối đa 5 lần sai) rồi huỷ mã. */
+  private async consumeOtp(identifier: string, code: string) {
+    const cleanedPhone = identifier;
     const cacheKey = `phone_otp:${cleanedPhone}`;
     const attemptsKey = `phone_otp_attempts:${cleanedPhone}`;
     const OTP_TTL = 300000;
@@ -314,6 +356,11 @@ export class AuthService {
     // OTP verified successfully - evict cache keys
     await this.cacheManager.del(cacheKey);
     await this.cacheManager.del(attemptsKey);
+  }
+
+  async verifyOtp(phoneNumber: string, code: string) {
+    const cleanedPhone = phoneNumber.trim();
+    await this.consumeOtp(cleanedPhone, code);
 
     // Formulate a client-friendly mock supabaseId
     const isEmail = cleanedPhone.includes('@');
@@ -341,12 +388,18 @@ export class AuthService {
         theme: true,
         travelScore: true,
         chaosScore: true,
+        isLocked: true,
+        deletedAt: true,
       },
     });
 
     if (user) {
+      if (user.isLocked || user.deletedAt) {
+        throw new UnauthorizedException('errors.auth.user_locked');
+      }
+      const { deletedAt: _deletedAt, ...safeUser } = user;
       const token = this.generateToken(user.id, user.email);
-      return { exists: true, token, user };
+      return { exists: true, token, user: safeUser };
     } else {
       const newEmail = isEmail
         ? cleanedPhone
@@ -420,7 +473,9 @@ export class AuthService {
             );
           }
         } else {
-          throw new UnauthorizedException(`Google login failed: ${errMsg}`);
+          // Chi tiết (sai audience, hết hạn…) chỉ ghi log, không trả về client.
+          this.logger.warn(`Google login failed: ${errMsg}`);
+          throw new UnauthorizedException('Đăng nhập Google không hợp lệ');
         }
       }
     }
@@ -449,11 +504,20 @@ export class AuthService {
         theme: true,
         travelScore: true,
         chaosScore: true,
+        isLocked: true,
+        deletedAt: true,
       },
     });
 
     if (user) {
-      const { supabaseId: _supabaseId, ...safeUser } = user;
+      if (user.isLocked || user.deletedAt) {
+        throw new UnauthorizedException('errors.auth.user_locked');
+      }
+      const {
+        supabaseId: _supabaseId,
+        deletedAt: _deletedAt,
+        ...safeUser
+      } = user;
       const token = this.generateToken(user.id, user.email);
       return { exists: true, token, user: safeUser };
     } else {
@@ -469,6 +533,122 @@ export class AuthService {
         ),
       };
     }
+  }
+
+  /**
+   * Đăng nhập bằng Sign in with Apple (Guideline 4.8).
+   */
+  async appleLogin(dto: AppleLoginDto) {
+    const isDevelopment =
+      process.env.NODE_ENV !== 'production' &&
+      process.env.ALLOW_DEV_AUTH_BYPASS === 'true';
+
+    let appleSub = '';
+    let email = dto.email?.trim().toLowerCase();
+    const name = dto.name?.trim();
+
+    if (dto.identityToken === 'mock-apple-token' && isDevelopment) {
+      appleSub = email || 'mock-apple-sub';
+    } else {
+      const payload = await this.verifyAppleIdentityToken(dto.identityToken);
+      if (
+        !payload ||
+        payload.iss !== 'https://appleid.apple.com' ||
+        typeof payload.sub !== 'string' ||
+        !payload.sub
+      ) {
+        throw new UnauthorizedException('Invalid Apple identity token');
+      }
+      if (
+        typeof payload.exp === 'number' &&
+        payload.exp * 1000 < Date.now() &&
+        !isDevelopment
+      ) {
+        throw new UnauthorizedException('Apple identity token has expired');
+      }
+      // Luôn kiểm aud: token Apple hợp lệ nhưng cấp cho APP KHÁC không được
+      // dùng để đăng nhập TripMate.
+      const expectedAud =
+        process.env.APPLE_CLIENT_ID ||
+        process.env.APPLE_BUNDLE_ID ||
+        'com.tripmate.tripmate';
+      if (payload.aud !== expectedAud) {
+        throw new UnauthorizedException('Apple identity token audience mismatch');
+      }
+      appleSub = payload.sub;
+      if (typeof payload.email === 'string' && payload.email.trim()) {
+        email = payload.email.trim().toLowerCase();
+      }
+    }
+
+    if (!email) {
+      email = `apple_${appleSub.replace(/[^a-zA-Z0-9_-]/g, '')}@privaterelay.appleid.com`;
+    }
+    const clientSupabaseId = `sb-apple-${appleSub}`;
+    const validSupabaseId = this.ensureValidUuid(clientSupabaseId);
+
+    const existing = await this.prisma.user.findFirst({
+      where: {
+        OR: [
+          { supabaseId: validSupabaseId },
+          { email: { equals: email, mode: 'insensitive' } },
+        ],
+        deletedAt: null,
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        username: true,
+        avatarUrl: true,
+        bio: true,
+        vibeTags: true,
+        theme: true,
+        travelScore: true,
+        chaosScore: true,
+        isLocked: true,
+        deletedAt: true,
+      },
+    });
+
+    if (existing) {
+      if (existing.isLocked || existing.deletedAt) {
+        throw new UnauthorizedException('errors.auth.user_locked');
+      }
+      const { deletedAt: _deletedAt, ...safeUser } = existing;
+      const token = this.generateToken(existing.id, existing.email);
+      return { exists: true, token, user: safeUser };
+    }
+
+    // Apple chỉ gửi name/email ở lần đăng nhập đầu tiên — tạo tài khoản ngay nếu có thể
+    const displayName = name || email.split('@')[0] || 'Apple User';
+    const created = await this.prisma.user.create({
+      data: {
+        email,
+        name: displayName,
+        supabaseId: validSupabaseId,
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        username: true,
+        avatarUrl: true,
+        bio: true,
+        vibeTags: true,
+        theme: true,
+        travelScore: true,
+        chaosScore: true,
+      },
+    });
+
+    const token = this.generateToken(created.id, created.email);
+    return {
+      exists: true,
+      token,
+      user: created,
+      registrationToken: this.issueRegistrationTicket(email, clientSupabaseId),
+    };
   }
 
   private async verifySupabaseToken(accessToken: string): Promise<string> {
@@ -539,6 +719,57 @@ export class AuthService {
         'Phiên đăng ký đã hết hạn, vui lòng xác minh lại email hoặc số điện thoại.',
       );
     }
+  }
+
+  /** Khoá công khai của Apple, cache 6 giờ (Apple xoay khoá thưa). */
+  private appleKeys: { at: number; keys: AppleJwk[] } | null = null;
+
+  private async fetchAppleKeys(force = false): Promise<AppleJwk[]> {
+    const fresh =
+      this.appleKeys && Date.now() - this.appleKeys.at < 6 * 3600 * 1000;
+    if (fresh && !force) return this.appleKeys!.keys;
+    const res = await fetch('https://appleid.apple.com/auth/keys');
+    if (!res.ok) {
+      throw new UnauthorizedException('Không lấy được khoá xác thực Apple');
+    }
+    const body = (await res.json()) as { keys?: AppleJwk[] };
+    this.appleKeys = { at: Date.now(), keys: body.keys ?? [] };
+    return this.appleKeys.keys;
+  }
+
+  /**
+   * Kiểm CHỮ KÝ identity token của Apple (RS256, khoá JWKS của Apple) rồi mới
+   * tin payload. Trước đây chỉ decode payload: ai cũng tự ký được token giả
+   * mang email của người khác và đăng nhập thẳng vào tài khoản đó.
+   */
+  private async verifyAppleIdentityToken(token: string): Promise<any> {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    let header: { alg?: string; kid?: string };
+    try {
+      header = JSON.parse(
+        Buffer.from(parts[0], 'base64url').toString('utf8'),
+      ) as { alg?: string; kid?: string };
+    } catch {
+      return null;
+    }
+    if (header?.alg !== 'RS256' || typeof header.kid !== 'string') return null;
+
+    let jwk = (await this.fetchAppleKeys()).find((k) => k.kid === header.kid);
+    if (!jwk) {
+      // Apple vừa xoay khoá → tải lại một lần.
+      jwk = (await this.fetchAppleKeys(true)).find((k) => k.kid === header.kid);
+    }
+    if (!jwk) return null;
+
+    const key = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+    const ok = crypto.verify(
+      'RSA-SHA256',
+      Buffer.from(`${parts[0]}.${parts[1]}`),
+      key,
+      Buffer.from(parts[2], 'base64url'),
+    );
+    return ok ? this.decodeJwtPayload(token) : null;
   }
 
   private decodeJwtPayload(token: string): any {

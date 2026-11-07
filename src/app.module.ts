@@ -91,7 +91,8 @@ import { AppService } from './app.service';
           const client = createClient({
             url: redisUrl,
             socket: {
-              reconnectStrategy: () => false,
+              reconnectStrategy: (retries: number) =>
+                retries > 10 ? false : Math.min(retries * 200, 3000),
               connectTimeout: 2000,
             },
           });

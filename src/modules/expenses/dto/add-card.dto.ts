@@ -1,12 +1,40 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, Length, Matches } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Matches,
+} from 'class-validator';
 
 export class AddCardDto {
-  @ApiProperty({ example: '4242424242424242' })
+  @ApiPropertyOptional({ example: '4242', description: '4 số cuối của thẻ' })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  @Length(12, 19)
-  cardNumber: string;
+  @Matches(/^\d{4}$/, {
+    message: 'lastFour must be exactly 4 digits',
+  })
+  lastFour?: string;
+
+  @ApiPropertyOptional({
+    example: '4242',
+    description: 'Chỉ nhận 4 số cuối hoặc chuỗi đã che (****4242)',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^(?:\*{4,15}\s*)?\d{4}$/, {
+    message: 'Only last 4 digits or masked card number are accepted',
+  })
+  cardNumber?: string;
+
+  @ApiPropertyOptional({
+    example: 'VISA',
+    enum: ['VISA', 'MASTERCARD', 'JCB', 'AMEX'],
+  })
+  @IsOptional()
+  @IsString()
+  @IsIn(['VISA', 'MASTERCARD', 'JCB', 'AMEX'])
+  type?: string;
 
   @ApiProperty({ example: '12/28' })
   @IsString()
@@ -20,10 +48,5 @@ export class AddCardDto {
   @IsString()
   @IsNotEmpty()
   cardHolder: string;
-
-  @ApiProperty({ example: '123' })
-  @IsString()
-  @IsNotEmpty()
-  @Length(3, 4)
-  cvv: string;
 }
+

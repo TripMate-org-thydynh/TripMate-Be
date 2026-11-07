@@ -312,7 +312,9 @@ export class ExpensesService {
       balances[m.userId] = new Decimal(0);
     });
 
+    let totalSpent = new Decimal(0);
     for (const expense of expenses) {
+      totalSpent = totalSpent.add(expense.amount);
       // payer gets credit
       // Người trả đã rời chuyến: bỏ qua, đừng tạo khoá lạ trong bảng số dư.
       if (expense.paidById in balances) {
@@ -323,8 +325,25 @@ export class ExpensesService {
       // each splitter owes their share
       for (const split of expense.splits) {
         // Người đã rời chuyến vẫn còn dòng split cũ: bỏ qua thay vì sập.
-        if (!(split.userId in balances)) continue;
-        balances[split.userId] = balances[split.userId].sub(split.shareAmount);
+        if (split.userId in balances) {
+          balances[split.userId] = balances[split.userId].sub(
+            split.shareAmount,
+          );
+        }
+        // Nếu người chia đã thanh toán lại cho người trả (isPaid === true),
+        // ghi nhận khoản hoàn trả để triệt tiêu số nợ ròng.
+        if (split.isPaid && split.userId !== expense.paidById) {
+          if (split.userId in balances) {
+            balances[split.userId] = balances[split.userId].add(
+              split.shareAmount,
+            );
+          }
+          if (expense.paidById in balances) {
+            balances[expense.paidById] = balances[expense.paidById].sub(
+              split.shareAmount,
+            );
+          }
+        }
       }
     }
 
@@ -354,6 +373,7 @@ export class ExpensesService {
     }
 
     const result = {
+      totalSpent: totalSpent.toNumber(),
       balances: Object.entries(balances).map(([userId, balance]) => {
         const member = members.find((m) => m.userId === userId);
         return { user: member?.user, balance: balance.toNumber() };
@@ -377,37 +397,96 @@ export class ExpensesService {
     return plainResult;
   }
 
-  async markSplitPaid(expenseId: string, userId: string, requesterId: string) {
-    const expense = await this.prisma.expense.findUnique({
-      where: { id: expenseId },
-    });
-    if (!expense) throw new NotFoundException('Expense not found');
+  async markSplitPaid(
+    expenseId: string,
+    userId: string,
+    requesterId: string,
+    tripId?: string,
+  ) {
+    const run = async (tx: any) => {
+      const expense = await tx.expense.findUnique({
+        where: { id: expenseId },
+        include: { trip: { select: { createdBy: true } } },
+      });
+      if (!expense || expense.deletedAt) {
+        throw new NotFoundException('Expense not found');
+      }
+      if (tripId && expense.tripId !== tripId) {
+        throw new NotFoundException('Expense not found');
+      }
 
-    // Only the person who paid for the expense can mark split bills as paid
-    if (expense.paidById !== requesterId) {
-      throw new ForbiddenException(
-        'Only the expense payer can mark split bills as paid',
-      );
+      let isCreator = expense.trip?.createdBy === requesterId;
+      if (
+        !isCreator &&
+        expense.paidById !== requesterId &&
+        userId !== requesterId &&
+        typeof tx.tripMember?.findUnique === 'function'
+      ) {
+        const member = await tx.tripMember.findUnique({
+          where: {
+            tripId_userId: { tripId: expense.tripId, userId: requesterId },
+          },
+        });
+        isCreator = member?.role === 'CREATOR';
+      }
+
+      if (
+        expense.paidById !== requesterId &&
+        userId !== requesterId &&
+        !isCreator
+      ) {
+        throw new ForbiddenException(
+          'Only the expense payer, split user, or trip creator can mark split bills as paid',
+        );
+      }
+
+      if (typeof tx.$queryRaw === 'function') {
+        await tx.$queryRaw`SELECT is_paid FROM expense_splits WHERE expense_id = ${expenseId}::uuid AND user_id = ${userId}::uuid FOR UPDATE`;
+      }
+
+      const split = await tx.expenseSplit.findUnique({
+        where: { expenseId_userId: { expenseId, userId } },
+      });
+      if (!split) throw new NotFoundException('Split not found');
+
+      // Nếu khoản chi này đã được đánh dấu thanh toán rồi (isPaid === true), trả về luôn mà không cập nhật lại (idempotent).
+      if (split.isPaid) {
+        return { split, tripId: expense.tripId, alreadyPaid: true };
+      }
+
+      const updatedSplit = await tx.expenseSplit.update({
+        where: { expenseId_userId: { expenseId, userId } },
+        data: { isPaid: true, paidAt: new Date() },
+      });
+
+      if (
+        typeof tx.paymentTransaction?.create === 'function' &&
+        userId !== expense.paidById
+      ) {
+        await tx.paymentTransaction.create({
+          data: {
+            expenseId,
+            senderId: userId,
+            receiverId: expense.paidById,
+            amount: split.shareAmount,
+            provider: 'CASH',
+            status: 'SUCCESS',
+          },
+        });
+      }
+
+      return { split: updatedSplit, tripId: expense.tripId, alreadyPaid: false };
+    };
+
+    const res =
+      typeof this.prisma.$transaction === 'function'
+        ? await this.prisma.$transaction(run)
+        : await run(this.prisma);
+
+    if (!res.alreadyPaid) {
+      await this.evictCache(res.tripId);
     }
-
-    const split = await this.prisma.expenseSplit.findUnique({
-      where: { expenseId_userId: { expenseId, userId } },
-    });
-    if (!split) throw new NotFoundException('Split not found');
-
-    // Nếu khoản chi này đã được đánh dấu thanh toán rồi (isPaid === true), trả về luôn mà không cập nhật lại (idempotent).
-    // Mốc thời gian paidAt đầu tiên là dữ liệu lịch sử phản ánh đúng thời điểm thanh toán thực tế, không được ghi đè.
-    if (split.isPaid) {
-      return split;
-    }
-
-    const updatedSplit = await this.prisma.expenseSplit.update({
-      where: { expenseId_userId: { expenseId, userId } },
-      data: { isPaid: true, paidAt: new Date() },
-    });
-
-    await this.evictCache(expense.tripId);
-    return updatedSplit;
+    return res.split;
   }
 
   async delete(expenseId: string, userId: string, tripId: string) {
@@ -467,41 +546,10 @@ export class ExpensesService {
   }
 
   async getLinkedBanks(userId: string) {
-    const banks = await this.prisma.linkedBank.findMany({
+    return this.prisma.linkedBank.findMany({
       where: { userId },
       orderBy: { createdAt: 'asc' },
     });
-
-    // Seed default mock banks if user has none, to maintain initial premium features
-    if (banks.length === 0) {
-      const defaultBanks = [
-        {
-          bankName: 'Vietcombank',
-          accountNumber: '******8901',
-          accountHolder: 'NGUYEN VAN A',
-          isVerified: true,
-          logoUrl: 'assets/images/banks/vcb.png',
-        },
-        {
-          bankName: 'Techcombank',
-          accountNumber: '******3456',
-          accountHolder: 'NGUYEN VAN A',
-          isVerified: true,
-          logoUrl: 'assets/images/banks/tcb.png',
-        },
-      ];
-
-      const createdBanks = [];
-      for (const bank of defaultBanks) {
-        const cb = await this.prisma.linkedBank.create({
-          data: { userId, ...bank },
-        });
-        createdBanks.push(cb);
-      }
-      return createdBanks;
-    }
-
-    return banks;
   }
 
   async linkBank(userId: string, data: any) {
@@ -537,41 +585,37 @@ export class ExpensesService {
   }
 
   async getPaymentMethods(userId: string) {
-    const cards = await this.prisma.paymentCard.findMany({
+    return this.prisma.paymentCard.findMany({
       where: { userId },
       orderBy: { createdAt: 'asc' },
     });
-
-    // Seed default mock card if none exist
-    if (cards.length === 0) {
-      const defaultCard = await this.prisma.paymentCard.create({
-        data: {
-          userId,
-          type: 'VISA',
-          lastFour: '4242',
-          expiry: '12/28',
-          cardHolder: 'NGUYEN VAN A',
-          colorIndex: 0,
-        },
-      });
-      return [defaultCard];
-    }
-
-    return cards;
   }
 
   async addPaymentMethod(
     userId: string,
-    data: { cardNumber?: string; expiry?: string; cardHolder?: string },
+    data: {
+      lastFour?: string;
+      cardNumber?: string;
+      type?: string;
+      expiry?: string;
+      cardHolder?: string;
+    },
   ) {
-    if (!data.cardNumber || !data.expiry || !data.cardHolder) {
+    const rawCard = (data.lastFour ?? data.cardNumber ?? '').trim();
+    if (!rawCard || !data.expiry || !data.cardHolder) {
       throw new BadRequestException('Missing payment method parameters');
     }
 
-    const lastFour =
-      data.cardNumber.length > 4 ? data.cardNumber.slice(-4) : data.cardNumber;
+    const digitsOnly = rawCard.replace(/\D/g, '');
+    if (digitsOnly.length !== 4) {
+      throw new BadRequestException(
+        'Only the last 4 digits of the card are accepted',
+      );
+    }
+    const lastFour = digitsOnly;
 
-    const type = data.cardNumber.startsWith('4') ? 'VISA' : 'MASTERCARD';
+    const type =
+      data.type ?? (lastFour.startsWith('4') ? 'VISA' : 'MASTERCARD');
 
     const newCard = await this.prisma.paymentCard.create({
       data: {

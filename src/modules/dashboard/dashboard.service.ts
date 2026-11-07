@@ -29,7 +29,11 @@ export class DashboardService {
           },
         },
         _count: {
-          select: { moments: true, expenses: true, chatMessages: true },
+          select: {
+            moments: { where: { deletedAt: null } },
+            expenses: { where: { deletedAt: null } },
+            chatMessages: { where: { deletedAt: null } },
+          },
         },
       },
     });
@@ -40,14 +44,14 @@ export class DashboardService {
 
     if (activeTrip) {
       const expenses = await this.prisma.expense.aggregate({
-        where: { tripId: activeTrip.id },
+        where: { tripId: activeTrip.id, deletedAt: null },
         _sum: { amount: true },
       });
       totalExpenses = Number(expenses._sum.amount ?? 0);
 
       const paid = await this.prisma.expenseSplit.aggregate({
         where: {
-          expense: { tripId: activeTrip.id },
+          expense: { tripId: activeTrip.id, deletedAt: null },
           isPaid: true,
         },
         _sum: { shareAmount: true },

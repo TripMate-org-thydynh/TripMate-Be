@@ -20,6 +20,7 @@ export class ActivitiesController {
   @ApiOperation({ summary: 'Nhật ký hoạt động của chuyến đi' })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   findByTrip(@Param('tripId') tripId: string, @Query('limit') limit?: number) {
-    return this.activitiesService.findByTrip(tripId, limit ? +limit : 50);
+    const safeLimit = Math.min(Math.max(1, Number(limit) || 50), 200);
+    return this.activitiesService.findByTrip(tripId, safeLimit);
   }
 }

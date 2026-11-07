@@ -8,8 +8,10 @@ import { LoginDto } from './dto/login.dto';
 import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { GoogleLoginDto } from './dto/google-login.dto';
+import { AppleLoginDto } from './dto/apple-login.dto';
 import { RegisterPasswordDto } from './dto/register-password.dto';
 import { LoginPasswordDto } from './dto/login-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 @ApiTags('Auth')
@@ -49,6 +51,17 @@ export class AuthController {
     return this.authService.verifyOtp(dto.phoneNumber, dto.code);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Post('reset-password')
+  @ApiOperation({ summary: 'Quên mật khẩu: xác minh OTP email rồi đặt mật khẩu mới' })
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(
+      dto.identifier,
+      dto.code,
+      dto.newPassword,
+    );
+  }
+
   // Theo IP (chưa có token). 20/phút để cả nhóm chung Wi-Fi đăng ký cùng lúc được.
   @Throttle({ default: { limit: 20, ttl: 60000 } })
   @Post('register-password')
@@ -73,6 +86,15 @@ export class AuthController {
   })
   googleLogin(@Body() dto: GoogleLoginDto) {
     return this.authService.googleLogin(dto);
+  }
+
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @Post('apple')
+  @ApiOperation({
+    summary: 'Đăng nhập Apple (Sign in with Apple) - nhận JWT',
+  })
+  appleLogin(@Body() dto: AppleLoginDto) {
+    return this.authService.appleLogin(dto);
   }
 
   @Get('me')

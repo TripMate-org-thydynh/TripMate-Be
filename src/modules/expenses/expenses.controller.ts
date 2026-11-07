@@ -63,11 +63,17 @@ export class ExpensesController {
   @Patch(':expenseId/splits/:userId/pay')
   @ApiOperation({ summary: 'Đánh dấu đã hoàn tiền' })
   markPaid(
+    @Param('tripId') tripId: string,
     @Param('expenseId') expenseId: string,
     @Param('userId') userId: string,
     @CurrentUser() requester: User,
   ) {
-    return this.expensesService.markSplitPaid(expenseId, userId, requester.id);
+    return this.expensesService.markSplitPaid(
+      expenseId,
+      userId,
+      requester.id,
+      tripId,
+    );
   }
 
   @UseGuards(ResourceOwnerGuard)

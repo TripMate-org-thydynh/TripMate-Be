@@ -12,7 +12,10 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { MomentsService } from './moments.service';
-import { CreateMomentDto } from './dto/create-moment.dto';
+import {
+  CreateMomentDto,
+  UpdateMomentLayoutDto,
+} from './dto/create-moment.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { ResourceOwnerGuard } from '../../common/guards/resource-owner.guard';
@@ -67,6 +70,32 @@ export class MomentsController {
   @ApiOperation({ summary: 'Xem chi tiết khoảnh khắc + comments + reactions' })
   findOne(@Param('id') id: string, @CurrentUser() user: User) {
     return this.momentsService.findOne(id, user.id);
+  }
+
+  @InTrip('moment', 'id')
+  @Patch(':id/layout')
+  @ApiOperation({
+    summary:
+      'Cập nhật vị trí/góc nghiêng/ghim/bộ lọc Polaroid trên Shared Memory Photo Board',
+  })
+  updateLayout(
+    @Param('tripId') tripId: string,
+    @Param('id') id: string,
+    @CurrentUser() user: User,
+    @Body() dto: UpdateMomentLayoutDto,
+  ) {
+    return this.momentsService.updateLayout(tripId, id, user.id, dto);
+  }
+
+  @InTrip('moment', 'id')
+  @Post(':id/favorite')
+  @ApiOperation({ summary: 'Đánh dấu / bỏ đánh dấu kỷ niệm yêu thích (toggle)' })
+  toggleFavorite(
+    @Param('tripId') tripId: string,
+    @Param('id') id: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.momentsService.toggleFavorite(tripId, id, user.id);
   }
 
   @UseGuards(ResourceOwnerGuard)

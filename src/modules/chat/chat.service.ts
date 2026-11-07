@@ -57,6 +57,20 @@ export class ChatService {
       }
     }
 
+    if (data.replyToId) {
+      const replyTarget = await this.prisma.chatMessage.findUnique({
+        where: { id: data.replyToId },
+        select: { id: true, tripId: true, deletedAt: true },
+      });
+      if (
+        !replyTarget ||
+        replyTarget.deletedAt !== null ||
+        replyTarget.tripId !== tripId
+      ) {
+        throw new BadRequestException('errors.chat.invalidReplyTarget');
+      }
+    }
+
     return this.prisma.chatMessage.create({
       data: {
         tripId,
@@ -86,9 +100,29 @@ export class ChatService {
     });
   }
 
-  async getMessages(tripId: string, cursor?: string, limit = 30) {
+  /** Id người mà [viewerId] đã chặn — tin nhắn của họ bị ẩn với viewer. */
+  private async blockedSenderIds(viewerId?: string): Promise<string[]> {
+    if (!viewerId) return [];
+    const rows = await this.prisma.userBlock.findMany({
+      where: { blockerId: viewerId },
+      select: { blockedId: true },
+    });
+    return rows.map((r) => r.blockedId);
+  }
+
+  async getMessages(
+    tripId: string,
+    cursor?: string,
+    limit = 30,
+    viewerId?: string,
+  ) {
+    const blocked = await this.blockedSenderIds(viewerId);
     return this.prisma.chatMessage.findMany({
-      where: { tripId, deletedAt: null },
+      where: {
+        tripId,
+        deletedAt: null,
+        ...(blocked.length ? { senderId: { notIn: blocked } } : {}),
+      },
       take: limit,
       ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
       include: {
@@ -136,11 +170,13 @@ export class ChatService {
     });
   }
 
-  async searchMessages(tripId: string, query: string) {
+  async searchMessages(tripId: string, query: string, viewerId?: string) {
+    const blocked = await this.blockedSenderIds(viewerId);
     return this.prisma.chatMessage.findMany({
       where: {
         tripId,
         deletedAt: null,
+        ...(blocked.length ? { senderId: { notIn: blocked } } : {}),
         content: {
           contains: query,
           mode: 'insensitive',

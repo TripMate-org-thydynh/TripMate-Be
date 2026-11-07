@@ -12,6 +12,8 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { UsersService } from './users.service';
+import { BlocksService } from './blocks.service';
+import { BlockUserDto } from './dto/block-user.dto';
 import { StoreService } from '../xp/store.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -26,6 +28,7 @@ export class UsersController {
   constructor(
     private readonly usersService: UsersService,
     private readonly store: StoreService,
+    private readonly blocks: BlocksService,
   ) {}
 
   @Get('me')
@@ -168,6 +171,24 @@ export class UsersController {
   @ApiOperation({ summary: 'Dữ liệu Travel Atlas: địa điểm, streak, marker' })
   getTravelAtlas(@CurrentUser() user: User) {
     return this.usersService.getTravelAtlas(user.id);
+  }
+
+  @Get('me/blocks')
+  @ApiOperation({ summary: 'Danh sách người mình đã chặn' })
+  listBlocks(@CurrentUser() user: User) {
+    return this.blocks.list(user.id);
+  }
+
+  @Post('me/blocks')
+  @ApiOperation({ summary: 'Chặn một người dùng (ẩn chat + khoảnh khắc của họ)' })
+  block(@CurrentUser() user: User, @Body() dto: BlockUserDto) {
+    return this.blocks.block(user.id, dto.blockedId);
+  }
+
+  @Delete('me/blocks/:blockedId')
+  @ApiOperation({ summary: 'Bỏ chặn' })
+  unblock(@CurrentUser() user: User, @Param('blockedId') blockedId: string) {
+    return this.blocks.unblock(user.id, blockedId);
   }
 
   @Get(':id')

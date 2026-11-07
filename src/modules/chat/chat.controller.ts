@@ -41,8 +41,12 @@ export class ChatController {
   @Get('search')
   @ApiOperation({ summary: 'Tìm kiếm tin nhắn trong squad chat' })
   @ApiQuery({ name: 'q', required: true, type: String })
-  search(@Param('tripId') tripId: string, @Query('q') query: string) {
-    return this.chatService.searchMessages(tripId, query);
+  search(
+    @Param('tripId') tripId: string,
+    @Query('q') query: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.chatService.searchMessages(tripId, query, user.id);
   }
 
   @Get()
@@ -53,8 +57,14 @@ export class ChatController {
     @Param('tripId') tripId: string,
     @Query('cursor') cursor?: string,
     @Query('limit') limit?: number,
+    @CurrentUser() user?: User,
   ) {
-    return this.chatService.getMessages(tripId, cursor, limit ? +limit : 30);
+    return this.chatService.getMessages(
+      tripId,
+      cursor,
+      limit ? +limit : 30,
+      user?.id,
+    );
   }
 
   @InTrip('chatMessage', 'messageId')

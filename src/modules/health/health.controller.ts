@@ -1,4 +1,9 @@
-import { Controller, Get, Inject } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Inject,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
@@ -42,14 +47,22 @@ export class HealthController {
     const overallStatus =
       dbStatus === 'UP' && redisStatus === 'UP' ? 'OK' : 'DEGRADED';
 
-    return {
+    const payload = {
       status: overallStatus,
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
+      // Render tự đặt RENDER_GIT_COMMIT: biết chắc bản nào đang chạy sau deploy.
+      commit: process.env.RENDER_GIT_COMMIT?.slice(0, 7) ?? null,
       checks: {
         database: dbStatus,
         redis: redisStatus,
       },
     };
+
+    if (dbStatus === 'DOWN') {
+      throw new ServiceUnavailableException(payload);
+    }
+
+    return payload;
   }
 }

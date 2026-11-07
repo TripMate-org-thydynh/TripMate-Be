@@ -44,6 +44,7 @@ export class OverviewQueryDto {
   @Type(() => Number)
   @IsInt({ message: 'rangeMinutes phải là số nguyên' })
   @Min(1, { message: 'rangeMinutes tối thiểu là 1 phút' })
+  @Max(43200, { message: 'rangeMinutes tối đa là 43200 phút (30 ngày)' })
   rangeMinutes?: number = 60;
 }
 
@@ -57,6 +58,7 @@ export class TimeseriesQueryDto {
   @Type(() => Number)
   @IsInt({ message: 'rangeMinutes phải là số nguyên' })
   @Min(1, { message: 'rangeMinutes tối thiểu là 1 phút' })
+  @Max(43200, { message: 'rangeMinutes tối đa là 43200 phút (30 ngày)' })
   rangeMinutes?: number = 60;
 
   @ApiPropertyOptional({
@@ -68,6 +70,7 @@ export class TimeseriesQueryDto {
   @Type(() => Number)
   @IsInt({ message: 'stepMinutes phải là số nguyên' })
   @Min(1, { message: 'stepMinutes tối thiểu là 1 phút' })
+  @Max(1440, { message: 'stepMinutes tối đa là 1440 phút' })
   stepMinutes?: number = 1;
 }
 
@@ -81,6 +84,7 @@ export class RoutesQueryDto {
   @Type(() => Number)
   @IsInt({ message: 'rangeMinutes phải là số nguyên' })
   @Min(1, { message: 'rangeMinutes tối thiểu là 1 phút' })
+  @Max(43200, { message: 'rangeMinutes tối đa là 43200 phút (30 ngày)' })
   rangeMinutes?: number = 60;
 
   @ApiPropertyOptional({

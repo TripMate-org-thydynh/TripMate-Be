@@ -32,16 +32,6 @@ export class TripsService {
   ) {}
 
   async create(userId: string, dto: CreateTripDto) {
-    // Hạn mức chuyến đang hoạt động.
-    //
-    // Đếm chuyến CHƯA XOÁ mà người này là thành viên — kể cả chuyến người khác
-    // tạo, vì chi phí phục vụ nằm ở chỗ tham gia chứ không ở chỗ tạo. Đếm theo
-    // "đã tạo" thì lách được bằng cách nhờ bạn tạo hộ.
-    const activeTrips = await this.prisma.tripMember.count({
-      where: { userId, trip: { deletedAt: null } },
-    });
-    await this.entitlements.assertWithin(userId, 'activeTrips', activeTrips);
-
     let inviteCode: string;
     let attempts = 0;
     do {
@@ -50,32 +40,52 @@ export class TripsService {
         throw new Error('Could not generate unique invite code');
     } while (await this.prisma.trip.findUnique({ where: { inviteCode } }));
 
-    const trip = await this.prisma.trip.create({
-      data: {
-        name: dto.name,
-        description: dto.description,
-        destination: dto.destination,
-        startDate: new Date(dto.startDate),
-        endDate: new Date(dto.endDate),
-        coverImage: dto.coverImage,
-        currency: dto.currency ?? 'VND',
-        budget: dto.budget,
-        vibe: dto.vibe,
-        theme: dto.theme,
-        isPublic: dto.isPublic ?? false,
-        inviteCode,
-        createdBy: userId,
-        members: { create: { userId, role: 'CREATOR' } },
-      },
-      include: {
-        members: {
-          include: {
-            user: { select: { id: true, name: true, avatarUrl: true } },
-          },
+    const runCreate = async (tx: any) => {
+      if (typeof tx.$queryRaw === 'function') {
+        await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
+      }
+      // Hạn mức chuyến đang hoạt động.
+      //
+      // Đếm chuyến CHƯA XOÁ mà người này là thành viên — kể cả chuyến người khác
+      // tạo, vì chi phí phục vụ nằm ở chỗ tham gia chứ không ở chỗ tạo. Đếm theo
+      // "đã tạo" thì lách được bằng cách nhờ bạn tạo hộ.
+      const activeTrips = await tx.tripMember.count({
+        where: { userId, trip: { deletedAt: null } },
+      });
+      await this.entitlements.assertWithin(userId, 'activeTrips', activeTrips);
+
+      return tx.trip.create({
+        data: {
+          name: dto.name,
+          description: dto.description,
+          destination: dto.destination,
+          startDate: new Date(dto.startDate),
+          endDate: new Date(dto.endDate),
+          coverImage: dto.coverImage,
+          currency: dto.currency ?? 'VND',
+          budget: dto.budget,
+          vibe: dto.vibe,
+          theme: dto.theme,
+          isPublic: dto.isPublic ?? false,
+          inviteCode,
+          createdBy: userId,
+          members: { create: { userId, role: 'CREATOR' } },
         },
-        _count: { select: { members: true } },
-      },
-    });
+        include: {
+          members: {
+            include: {
+              user: { select: { id: true, name: true, avatarUrl: true } },
+            },
+          },
+          _count: { select: { members: true } },
+        },
+      });
+    };
+
+    const trip =
+      typeof (this.prisma as any).$transaction === 'function'
+        ? await this.prisma.$transaction(runCreate)
+        : await runCreate(this.prisma);
 
     await this.referrals.settleReferralReward(userId);
 
@@ -297,7 +307,7 @@ export class TripsService {
       this.prisma.itineraryItem.count({ where: { tripId } }),
       this.prisma.moment.count({ where: { tripId, deletedAt: null } }),
       this.prisma.expense.aggregate({
-        where: { tripId },
+        where: { tripId, deletedAt: null },
         _sum: { amount: true },
         _count: { _all: true },
       }),
@@ -318,7 +328,7 @@ export class TripsService {
       }),
       this.prisma.expense.groupBy({
         by: ['paidById'],
-        where: { tripId, paidById: { in: userIds } },
+        where: { tripId, deletedAt: null, paidById: { in: userIds } },
         _count: { _all: true },
       }),
       this.prisma.activity.groupBy({

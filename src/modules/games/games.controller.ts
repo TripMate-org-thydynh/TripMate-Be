@@ -85,21 +85,25 @@ export class GamesController {
   @InTrip('gameSession', 'id')
   @Get(':id')
   @ApiOperation({ summary: 'Xem trạng thái game' })
-  findOne(@Param('id') id: string) {
-    return this.gamesService.findOne(id);
+  findOne(@Param('tripId') tripId: string, @Param('id') id: string) {
+    return this.gamesService.findOne(id, tripId);
   }
 
   @InTrip('gameSession', 'id')
   @Patch(':id/state')
   @ApiOperation({ summary: 'Cập nhật trạng thái game realtime' })
-  updateState(@Param('id') id: string, @Body() dto: UpdateGameStateDto) {
-    return this.gamesService.updateState(id, dto.stateJson);
+  updateState(
+    @Param('tripId') tripId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateGameStateDto,
+  ) {
+    return this.gamesService.updateState(id, dto.stateJson, tripId);
   }
 
   @InTrip('gameSession', 'id')
   @Patch(':id/end')
   @ApiOperation({ summary: 'Kết thúc game session' })
-  end(@Param('id') id: string) {
-    return this.gamesService.endSession(id);
+  end(@Param('tripId') tripId: string, @Param('id') id: string) {
+    return this.gamesService.endSession(id, tripId);
   }
 }

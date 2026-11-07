@@ -182,14 +182,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('typing')
-  handleTyping(
+  async handleTyping(
     @ConnectedSocket() client: Socket,
     @MessageBody() body: { tripId: string; isTyping: boolean },
   ) {
+    await client.data.ready;
     const userId = client.data.userId as string | undefined;
     if (!userId || typeof body?.tripId !== 'string') return;
-    // Chỉ socket đã join (đã qua kiểm thành viên) mới phát được vào phòng.
+    // Chỉ socket đã join và còn là thành viên mới phát được vào phòng.
     if (!this.joinedTrips(client).has(body.tripId)) return;
+    if (!(await this.stillMember(client, body.tripId, userId))) return;
     client.to(`trip:${body.tripId}`).emit('typing', {
       userId,
       isTyping: body.isTyping === true,

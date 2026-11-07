@@ -74,27 +74,33 @@ export class PollsService {
       throw new BadRequestException('Bình chọn này đã đóng');
     }
 
-    const existing = await this.prisma.pollVote.findUnique({
-      where: { optionId_userId: { optionId, userId } },
-    });
-    if (existing) {
-      await this.prisma.pollVote.delete({
+    const runVote = async (tx: any) => {
+      if (typeof tx.$queryRaw === 'function') {
+        await tx.$queryRaw`SELECT id FROM polls WHERE id = ${option.pollId}::uuid FOR UPDATE`;
+      }
+
+      const existing = await tx.pollVote.findUnique({
         where: { optionId_userId: { optionId, userId } },
       });
-      return { action: 'unvoted' };
-    }
+      if (existing) {
+        await tx.pollVote.delete({
+          where: { optionId_userId: { optionId, userId } },
+        });
+        return { action: 'unvoted' };
+      }
 
-    // Bình chọn một lựa chọn: bỏ phiếu mới thay cho phiếu cũ, không cộng dồn.
-    await this.prisma.$transaction([
-      ...(option.poll.isMultiple
-        ? []
-        : [
-            this.prisma.pollVote.deleteMany({
-              where: { userId, option: { pollId: option.pollId } },
-            }),
-          ]),
-      this.prisma.pollVote.create({ data: { optionId, userId } }),
-    ]);
-    return { action: 'voted' };
+      // Bình chọn một lựa chọn: bỏ phiếu mới thay cho phiếu cũ, không cộng dồn.
+      if (!option.poll.isMultiple) {
+        await tx.pollVote.deleteMany({
+          where: { userId, option: { pollId: option.pollId } },
+        });
+      }
+      await tx.pollVote.create({ data: { optionId, userId } });
+      return { action: 'voted' };
+    };
+
+    return typeof (this.prisma as any).$transaction === 'function'
+      ? this.prisma.$transaction(runVote)
+      : runVote(this.prisma);
   }
 }

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { GameType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { XpService } from '../xp/xp.service';
@@ -59,18 +59,28 @@ export class GamesService {
     });
   }
 
-  async findOne(id: string) {
-    return this.prisma.gameSession.findUnique({ where: { id } });
+  async findOne(id: string, tripId?: string) {
+    const session = await this.prisma.gameSession.findUnique({ where: { id } });
+    if (tripId && (!session || session.tripId !== tripId)) {
+      throw new NotFoundException('errors.database.notFound');
+    }
+    return session;
   }
 
-  async updateState(id: string, stateJson: object) {
+  async updateState(id: string, stateJson: object, tripId?: string) {
+    if (tripId) {
+      await this.findOne(id, tripId);
+    }
     return this.prisma.gameSession.update({
       where: { id },
       data: { stateJson },
     });
   }
 
-  async endSession(id: string) {
+  async endSession(id: string, tripId?: string) {
+    if (tripId) {
+      await this.findOne(id, tripId);
+    }
     return this.prisma.gameSession.update({
       where: { id },
       data: { isActive: false },
@@ -219,7 +229,7 @@ export class GamesService {
       }),
       this.prisma.expense.groupBy({
         by: ['paidById'],
-        where: { tripId, paidById: { in: userIds } },
+        where: { tripId, deletedAt: null, paidById: { in: userIds } },
         _count: { _all: true },
       }),
       this.prisma.activity.groupBy({
@@ -269,7 +279,7 @@ export class GamesService {
     const [itineraries, expenses, moments, games, members, polls] =
       await Promise.all([
         this.prisma.itineraryItem.count({ where: { tripId } }),
-        this.prisma.expense.count({ where: { tripId } }),
+        this.prisma.expense.count({ where: { tripId, deletedAt: null } }),
         this.prisma.moment.count({ where: { tripId, deletedAt: null } }),
         this.prisma.gameSession.count({ where: { tripId } }),
         this.prisma.tripMember.count({ where: { tripId } }),
@@ -317,7 +327,7 @@ export class GamesService {
         where: { tripId, deletedAt: null, createdAt: { gte: since } },
       }),
       this.prisma.expense.count({
-        where: { tripId, createdAt: { gte: since } },
+        where: { tripId, deletedAt: null, createdAt: { gte: since } },
       }),
       this.prisma.itineraryItem.count({
         where: { tripId, createdAt: { gte: since } },
@@ -358,7 +368,7 @@ export class GamesService {
         where: { tripId, deletedAt: null, createdAt: { gte: startOfDay } },
       }),
       this.prisma.expense.count({
-        where: { tripId, createdAt: { gte: startOfDay } },
+        where: { tripId, deletedAt: null, createdAt: { gte: startOfDay } },
       }),
       this.prisma.itineraryItem.count({
         where: { tripId, createdAt: { gte: startOfDay } },

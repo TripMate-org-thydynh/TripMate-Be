@@ -85,8 +85,24 @@ model User {
   adminAuditLogs     AdminAuditLog[]
   reportsFiled       ContentReport[]
   customStickers     CustomSticker[]
+  blocksMade         UserBlock[]               @relation("BlocksMade")
+  blockedBy          UserBlock[]               @relation("BlockedBy")
 
   @@map("users")
+}
+
+/// Người dùng chặn người dùng khác: ẩn tin nhắn chat và khoảnh khắc của người bị
+/// chặn khỏi phía người chặn (yêu cầu UGC của Google Play / App Store).
+model UserBlock {
+  blockerId String   @map("blocker_id") @db.Uuid
+  blockedId String   @map("blocked_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  blocker   User     @relation("BlocksMade", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked   User     @relation("BlockedBy", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@id([blockerId, blockedId])
+  @@index([blockedId])
+  @@map("user_blocks")
 }
 
 model UserPresence {
@@ -262,6 +278,7 @@ model Expense {
   @@index([tripId])
   @@index([tripId, createdAt])
   @@index([tripId, deletedAt, createdAt])
+  @@index([paidById, deletedAt])
   @@map("expenses")
 }
 
@@ -666,24 +683,33 @@ model Media {
 }
 
 model Moment {
-  id        String           @id @default(uuid()) @db.Uuid
-  tripId    String           @map("trip_id") @db.Uuid
-  userId    String           @map("user_id") @db.Uuid
-  mediaId   String?          @unique @map("media_id") @db.Uuid
-  mediaUrl  String           @map("media_url")
-  type      MomentType       @default(PHOTO)
-  isGhost   Boolean          @default(false) @map("is_ghost")
-  caption   String?
-  latitude  Decimal?         @db.Decimal(10, 8)
-  longitude Decimal?         @db.Decimal(11, 8)
-  createdAt DateTime         @default(now()) @map("created_at")
-  updatedAt DateTime         @updatedAt @map("updated_at")
-  deletedAt DateTime?        @map("deleted_at")
-  comments  MomentComment[]
-  reactions MomentReaction[]
-  media     Media?           @relation(fields: [mediaId], references: [id])
-  trip      Trip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id            String           @id @default(uuid()) @db.Uuid
+  tripId        String           @map("trip_id") @db.Uuid
+  userId        String           @map("user_id") @db.Uuid
+  mediaId       String?          @unique @map("media_id") @db.Uuid
+  mediaUrl      String           @map("media_url")
+  type          MomentType       @default(PHOTO)
+  isGhost       Boolean          @default(false) @map("is_ghost")
+  caption       String?
+  latitude      Decimal?         @db.Decimal(10, 8)
+  longitude     Decimal?         @db.Decimal(11, 8)
+  boardX        Float?           @map("board_x")
+  boardY        Float?           @map("board_y")
+  boardRotation Float?           @map("board_rotation")
+  boardScale    Float?           @default(1.0) @map("board_scale")
+  boardFilter   String?          @default("CLASSIC") @map("board_filter")
+  noteColor     String?          @map("note_color")
+  isPinned      Boolean          @default(false) @map("is_pinned")
+  isFavorite    Boolean          @default(false) @map("is_favorite")
+  takenAt       DateTime?        @map("taken_at")
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+  deletedAt     DateTime?        @map("deleted_at")
+  comments      MomentComment[]
+  reactions     MomentReaction[]
+  media         Media?           @relation(fields: [mediaId], references: [id])
+  trip          Trip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([tripId])
   @@index([tripId, createdAt])
@@ -875,6 +901,7 @@ model Activity {
   @@index([tripId])
   @@index([tripId, createdAt])
   @@index([userId])
+  @@index([userId, createdAt])
   @@map("activities")
 }
 
@@ -1215,6 +1242,7 @@ enum PaymentProvider {
   VNPAY
   ZALOPAY
   GOOGLE_PLAY
+  APPLE_APP_STORE
   SEPAY
   BANK_TRANSFER
   CASH

@@ -43,34 +43,45 @@ export class WishlistService {
   }
 
   async toggleVote(itemId: string, userId: string) {
-    const item = await this.prisma.wishlistItem.findUnique({
-      where: { id: itemId },
-    });
-    if (!item) throw new NotFoundException('Item not found');
+    const runToggle = async (tx: any) => {
+      if (typeof tx.$queryRaw === 'function') {
+        await tx.$queryRaw`SELECT id FROM wishlist_items WHERE id = ${itemId}::uuid FOR UPDATE`;
+      }
+      const item = await tx.wishlistItem.findUnique({
+        where: { id: itemId },
+      });
+      if (!item) throw new NotFoundException('Item not found');
 
-    const existingVote = await this.prisma.wishlistVote.findUnique({
-      where: { itemId_userId: { itemId, userId } },
-    });
-
-    if (existingVote) {
-      // Unvote
-      await this.prisma.wishlistVote.delete({
+      const existingVote = await tx.wishlistVote.findUnique({
         where: { itemId_userId: { itemId, userId } },
       });
-      await this.prisma.wishlistItem.update({
+
+      let voted: boolean;
+      if (existingVote) {
+        await tx.wishlistVote.delete({
+          where: { itemId_userId: { itemId, userId } },
+        });
+        voted = false;
+      } else {
+        await tx.wishlistVote.create({ data: { itemId, userId } });
+        voted = true;
+      }
+
+      const count =
+        typeof tx.wishlistVote?.count === 'function'
+          ? await tx.wishlistVote.count({ where: { itemId } })
+          : Math.max(0, Number(item.voteCount ?? 0) + (voted ? 1 : -1));
+
+      await tx.wishlistItem.update({
         where: { id: itemId },
-        data: { voteCount: { decrement: 1 } },
+        data: { voteCount: count },
       });
-      return { voted: false };
-    } else {
-      // Vote
-      await this.prisma.wishlistVote.create({ data: { itemId, userId } });
-      await this.prisma.wishlistItem.update({
-        where: { id: itemId },
-        data: { voteCount: { increment: 1 } },
-      });
-      return { voted: true };
-    }
+      return { voted, voteCount: count };
+    };
+
+    return typeof (this.prisma as any).$transaction === 'function'
+      ? this.prisma.$transaction(runToggle)
+      : runToggle(this.prisma);
   }
 
   /** DELETE is protected by ResourceOwnerGuard at controller level. */

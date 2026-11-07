@@ -174,14 +174,17 @@ export class BriefingService {
     for (const t of trips) {
       try {
         const brief = await this.buildForTrip(t.id, date);
-        const fresh: string[] = [];
-        for (const m of t.members) {
-          if (await this.alreadySent(m.userId, t.id, date)) continue;
-          await this.prisma.notification.create({
-            data: {
-              userId: m.userId,
+        // 2 câu truy vấn cho cả chuyến (dò trùng + ghi hàng loạt) thay vì
+        // 2 câu cho MỖI thành viên như trước.
+        const memberIds = t.members.map((m) => m.userId);
+        const done = await this.alreadySentTo(memberIds, t.id, date);
+        const fresh = memberIds.filter((id) => !done.has(id));
+        if (fresh.length) {
+          const { count } = await this.prisma.notification.createMany({
+            data: fresh.map((userId) => ({
+              userId,
               tripId: t.id,
-              type: 'TRIP_UPDATE',
+              type: 'TRIP_UPDATE' as const,
               title: `Ngày ${brief.day} · ${brief.tripName}`,
               body: brief.summary,
               data: {
@@ -190,10 +193,9 @@ export class BriefingService {
                 date,
                 day: brief.day,
               },
-            },
+            })),
           });
-          sent++;
-          fresh.push(m.userId);
+          sent += count;
         }
         // Chỉ đẩy cho người vừa có bản tin mới: chạy lại cron không làm
         // điện thoại rung thêm lần nữa.
@@ -224,16 +226,22 @@ export class BriefingService {
     return { created: sent, pushEnabled, pushDelivered };
   }
 
-  private async alreadySent(userId: string, tripId: string, date: string) {
-    const hit = await this.prisma.notification.findFirst({
+  /** Những thành viên đã có bản tin ngày [date] của chuyến (chạy lại cron không gửi trùng). */
+  private async alreadySentTo(
+    userIds: string[],
+    tripId: string,
+    date: string,
+  ): Promise<Set<string>> {
+    if (userIds.length === 0) return new Set();
+    const hits = await this.prisma.notification.findMany({
       where: {
-        userId,
+        userId: { in: userIds },
         tripId,
         data: { path: ['kind'], equals: 'MORNING_BRIEF' },
         AND: { data: { path: ['date'], equals: date } },
       },
-      select: { id: true },
+      select: { userId: true },
     });
-    return !!hit;
+    return new Set(hits.map((h) => h.userId));
   }
 }

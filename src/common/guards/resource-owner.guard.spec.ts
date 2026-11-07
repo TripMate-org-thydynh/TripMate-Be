@@ -50,6 +50,9 @@ describe('ResourceOwnerGuard', () => {
       tripDocument: {
         findUnique: jest.fn(),
       },
+      customSticker: {
+        findUnique: jest.fn(),
+      },
       trip: {
         findUnique: jest.fn(),
       },
@@ -157,6 +160,7 @@ describe('ResourceOwnerGuard', () => {
     { model: 'todoItem', ownerField: 'addedBy' },
     { model: 'wishlistItem', ownerField: 'addedBy' },
     { model: 'tripDocument', ownerField: 'uploadedBy' },
+    { model: 'customSticker', ownerField: 'userId' },
   ])(
     'should enforce ownership for model $model (owner field: $ownerField)',
     async ({ model, ownerField }) => {

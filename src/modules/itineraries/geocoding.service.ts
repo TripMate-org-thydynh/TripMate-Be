@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { LruMap } from '../../common/utils/lru-map';
 
 export interface GeoPoint {
   latitude: number;
@@ -15,7 +16,8 @@ export interface GeoPoint {
 @Injectable()
 export class GeocodingService {
   private readonly logger = new Logger(GeocodingService.name);
-  private readonly cache = new Map<string, GeoPoint | null>();
+  // Có trần: tên địa điểm gần như vô hạn, Map thường làm server chạy lâu phình RAM.
+  private readonly cache = new LruMap<string, GeoPoint | null>(5000);
   private queue: Promise<unknown> = Promise.resolve();
   private lastCall = 0;
 

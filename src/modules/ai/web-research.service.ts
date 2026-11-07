@@ -28,7 +28,7 @@ const MAX_TEXT = 2500;
 const FETCH_TIMEOUT_MS = 4000;
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const MAX_REDIRECTS = 3;
-const GROUNDING_MODEL = 'gemini-3.8-flash';
+const GROUNDING_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 const GROUNDING_TIMEOUT_MS = 8000;
 // Trang không phải bài viết (mạng xã hội, video, tài liệu) — lọc theo LOẠI trang.
 const NOT_ARTICLE_HOST =

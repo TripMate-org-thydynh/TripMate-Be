@@ -145,25 +145,27 @@ export class XpService {
       // của giao dịch trước.
       await client.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
 
-      const todayCount = await client.xpLedger.count({
-        where: {
-          userId,
-          reason,
-          delta: { gt: 0 },
-          createdAt: { gte: startOfDay },
-        },
-      });
-      if (todayCount >= rule.dailyCap) {
-        const user = await client.user.findUnique({
-          where: { id: userId },
-          select: { xpBalance: true },
+      if (rule.dailyCap > 0) {
+        const todayCount = await client.xpLedger.count({
+          where: {
+            userId,
+            reason,
+            delta: { gt: 0 },
+            createdAt: { gte: startOfDay },
+          },
         });
-        return {
-          awarded: false,
-          amount: 0,
-          skipped: 'daily_cap',
-          balance: user?.xpBalance ?? 0,
-        };
+        if (todayCount >= rule.dailyCap) {
+          const user = await client.user.findUnique({
+            where: { id: userId },
+            select: { xpBalance: true },
+          });
+          return {
+            awarded: false,
+            amount: 0,
+            skipped: 'daily_cap',
+            balance: user?.xpBalance ?? 0,
+          };
+        }
       }
 
       const user = await client.user.update({

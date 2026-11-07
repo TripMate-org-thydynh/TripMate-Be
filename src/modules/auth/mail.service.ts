@@ -15,6 +15,12 @@ export class MailService {
     const fromName = process.env.EMAIL_FROM_NAME ?? 'TripMate';
 
     if (!apiKey || !from) {
+      if (process.env.NODE_ENV === 'production') {
+        this.logger.error(
+          'SendGrid chưa cấu hình (SENDGRID_API_KEY/EMAIL_FROM) trên môi trường production.',
+        );
+        return false;
+      }
       this.logger.warn(
         'SendGrid chưa cấu hình (SENDGRID_API_KEY/EMAIL_FROM). Email sẽ được mock.',
       );

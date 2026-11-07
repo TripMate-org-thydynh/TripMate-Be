@@ -65,7 +65,14 @@ async function bootstrap() {
   app.enableCors({
     origin: isProd ? allowedOrigins : '*',
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Idempotency-Key',
+      'X-Request-Id',
+      'X-Client-Channel',
+      'Accept-Language',
+    ],
   });
 
   // Global Validation Pipe
@@ -126,7 +133,7 @@ async function bootstrap() {
   }
 
   const port = process.env.PORT ?? 3000;
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
   console.log(`🚀 TripMate API running on: http://localhost:${port}/api/v1`);
   console.log(`📖 Swagger docs: http://localhost:${port}/docs`);
 }

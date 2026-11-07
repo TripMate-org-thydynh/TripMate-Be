@@ -405,5 +405,111 @@ describe('ExpensesService', () => {
       expect(result.settlements[0].to.id).toEqual('user-1');
       expect(result.settlements[0].amount).toEqual(150);
     });
+
+    it('should credit split.userId and debit expense.paidById when a split is marked isPaid (CONC-01, BUG-02, BUG-14)', async () => {
+      const tripId = 'trip-1';
+      mockPrismaService.tripMember.findMany.mockResolvedValue([
+        { userId: 'user-1', user: { id: 'user-1', name: 'User 1' } },
+        { userId: 'user-2', user: { id: 'user-2', name: 'User 2' } },
+      ]);
+
+      mockPrismaService.expense.findMany.mockResolvedValue([
+        {
+          id: 'exp-1',
+          amount: new Decimal(200),
+          paidById: 'user-1',
+          splits: [
+            { userId: 'user-1', shareAmount: new Decimal(100), isPaid: false },
+            { userId: 'user-2', shareAmount: new Decimal(100), isPaid: true },
+          ],
+        },
+      ]);
+
+      const result = await service.getBalances(tripId);
+      type BalanceRow = { user?: { id?: string }; balance: number };
+      expect(
+        result.balances.find((b: BalanceRow) => b.user?.id === 'user-1')
+          ?.balance,
+      ).toEqual(0);
+      expect(
+        result.balances.find((b: BalanceRow) => b.user?.id === 'user-2')
+          ?.balance,
+      ).toEqual(0);
+      expect(result.settlements).toHaveLength(0);
+    });
+  });
+
+  describe('markSplitPaid', () => {
+    it('runs inside $transaction with FOR UPDATE, verifies tripId and caller authorization, and is idempotent', async () => {
+      const txMock: any = {
+        $queryRaw: jest.fn().mockResolvedValue([]),
+        expense: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'exp-1',
+            tripId: 'trip-1',
+            paidById: 'user-1',
+            deletedAt: null,
+          }),
+        },
+        tripMember: {
+          findFirst: jest.fn().mockResolvedValue(null),
+        },
+        expenseSplit: {
+          findUnique: jest.fn().mockResolvedValue({
+            expenseId: 'exp-1',
+            userId: 'user-2',
+            isPaid: false,
+          }),
+          update: jest.fn().mockResolvedValue({
+            expenseId: 'exp-1',
+            userId: 'user-2',
+            isPaid: true,
+          }),
+        },
+      };
+      (mockPrismaService as any).$transaction = jest.fn((cb: any) =>
+        cb(txMock),
+      );
+
+      const res = await service.markSplitPaid(
+        'exp-1',
+        'user-2',
+        'user-1',
+        'trip-1',
+      );
+      expect(res.isPaid).toBe(true);
+      expect(txMock.$queryRaw).toHaveBeenCalled();
+      expect(txMock.expenseSplit.update).toHaveBeenCalledTimes(1);
+
+      // Idempotent when already paid
+      txMock.expenseSplit.findUnique.mockResolvedValueOnce({
+        expenseId: 'exp-1',
+        userId: 'user-2',
+        isPaid: true,
+      });
+      txMock.expenseSplit.update.mockClear();
+      const idempotentRes = await service.markSplitPaid(
+        'exp-1',
+        'user-2',
+        'user-1',
+        'trip-1',
+      );
+      expect(idempotentRes.isPaid).toBe(true);
+      expect(txMock.expenseSplit.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getPaymentMethods & getLinkedBanks', () => {
+    it('returns empty banks and cards without seeding fake data (SEC-01)', async () => {
+      mockPrismaService.linkedBank.findMany.mockResolvedValue([]);
+      mockPrismaService.paymentCard.findMany.mockResolvedValue([]);
+
+      const banks = await service.getLinkedBanks('user-1');
+      const cards = await service.getPaymentMethods('user-1');
+      expect(banks).toEqual([]);
+      expect(cards).toEqual([]);
+      expect(mockPrismaService.linkedBank.create).not.toHaveBeenCalled();
+      expect(mockPrismaService.paymentCard.create).not.toHaveBeenCalled();
+    });
   });
 });

@@ -27,7 +27,10 @@ const OWNER_FIELD_MAP: Record<string, string> = {
   moment: 'userId',
   wishlistItem: 'addedBy',
   tripDocument: 'uploadedBy',
+  customSticker: 'userId',
 };
+
+const USER_SCOPED_MODELS = new Set<string>(['customSticker']);
 
 /**
  * Guard that verifies the current user owns the target resource **or** is the
@@ -79,7 +82,10 @@ export class ResourceOwnerGuard implements CanActivate {
 
     const resource = await delegate.findUnique({
       where: { id: resourceId },
-      select: { [ownerField]: true, tripId: true },
+      select: {
+        [ownerField]: true,
+        ...(USER_SCOPED_MODELS.has(meta.model) ? {} : { tripId: true }),
+      },
     });
 
     if (!resource) {
@@ -90,7 +96,11 @@ export class ResourceOwnerGuard implements CanActivate {
     // người gọi là thành viên của `:tripId`; thiếu bước này thì thành viên
     // chuyến A sửa/xoá được tài nguyên của chuyến B bằng cách gọi qua URL A.
     const urlTripId: string | undefined = request.params.tripId;
-    if (urlTripId && resource.tripId && resource.tripId !== urlTripId) {
+    if (
+      urlTripId &&
+      resource.tripId !== undefined &&
+      resource.tripId !== urlTripId
+    ) {
       throw new NotFoundException('errors.database.notFound');
     }
 

@@ -108,19 +108,20 @@ export class NotificationsService {
       select: { userId: true },
     });
 
-    const notifications = await Promise.all(
-      members.map((m) =>
-        this.create({
-          userId: m.userId,
-          tripId: params.tripId,
-          type: params.type,
-          title: params.title,
-          body: params.body,
-          data: params.data,
-        }),
-      ),
-    );
+    if (members.length === 0) return { notifiedCount: 0 };
+    // Một câu INSERT cho cả nhóm thay vì N câu song song (nhóm 12 người =
+    // 12 kết nối pool cùng lúc chỉ để ghi thông báo).
+    const { count } = await this.prisma.notification.createMany({
+      data: members.map((m) => ({
+        userId: m.userId,
+        tripId: params.tripId,
+        type: params.type,
+        title: params.title,
+        body: params.body,
+        data: params.data,
+      })),
+    });
 
-    return { notifiedCount: notifications.length };
+    return { notifiedCount: count };
   }
 }
