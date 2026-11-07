@@ -1854,6 +1854,87 @@ export class PremiumService {
   }
 
   /// Xác thực giao dịch Apple App Store (StoreKit 2 / App Store Server API).
+  /**
+   * Gửi biên lai cho Apple `verifyReceipt` (tự chuyển Sandbox khi 21007), kiểm
+   * bundle id, rồi chọn giao dịch trong biên lai. Trả transaction id + product
+   * id do APPLE xác nhận — nguồn duy nhất đáng tin để cấp quyền.
+   */
+  private async verifyAppleReceipt(
+    receiptData: string,
+    sharedSecret: string,
+    wantedTransactionId?: string,
+  ): Promise<{ transactionId: string; productId: string }> {
+    type AppleTx = {
+      transaction_id?: string;
+      product_id?: string;
+      purchase_date_ms?: string;
+      expires_date_ms?: string;
+      cancellation_date_ms?: string;
+    };
+    type AppleVerify = {
+      status?: number;
+      receipt?: { bundle_id?: string; in_app?: AppleTx[] };
+      latest_receipt_info?: AppleTx[];
+    };
+    const invalid = () =>
+      new BadRequestException({
+        code: 'RECEIPT_INVALID',
+        message: 'errors.premium.receiptInvalid',
+      });
+    const call = async (url: string) => {
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(15000),
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          'receipt-data': receiptData,
+          password: sharedSecret,
+          'exclude-old-transactions': true,
+        }),
+      });
+      return (await res.json()) as AppleVerify;
+    };
+
+    let data = await call(
+      process.env.APPLE_VERIFY_RECEIPT_URL ||
+        'https://buy.itunes.apple.com/verifyReceipt',
+    );
+    // 21007 = biên lai Sandbox gửi vào Production; Apple yêu cầu gọi lại Sandbox.
+    if (data?.status === 21007) {
+      data = await call('https://sandbox.itunes.apple.com/verifyReceipt');
+    }
+    if (data?.status !== 0) throw invalid();
+
+    const expectedBundle =
+      process.env.APPLE_BUNDLE_ID || 'com.tripmate.tripmate';
+    if (data.receipt?.bundle_id !== expectedBundle) throw invalid();
+
+    const txs = [
+      ...(data.latest_receipt_info ?? []),
+      ...(data.receipt?.in_app ?? []),
+    ].filter(
+      (t): t is AppleTx & { transaction_id: string; product_id: string } =>
+        !!t.transaction_id && !!t.product_id && !t.cancellation_date_ms,
+    );
+    const tx = wantedTransactionId
+      ? txs.find((t) => t.transaction_id === wantedTransactionId)
+      : txs
+          .filter((t) => this.resolveStoreProduct(t.product_id))
+          .sort(
+            (a, b) =>
+              Number(b.purchase_date_ms ?? 0) - Number(a.purchase_date_ms ?? 0),
+          )[0];
+    if (!tx) throw invalid();
+    // Gói thuê bao đã hết hạn không được đổi lấy một kỳ mới.
+    if (tx.expires_date_ms && Number(tx.expires_date_ms) < Date.now()) {
+      throw new BadRequestException({
+        code: 'RECEIPT_EXPIRED',
+        message: 'errors.premium.receiptInvalid',
+      });
+    }
+    return { transactionId: tx.transaction_id, productId: tx.product_id };
+  }
+
   async verifyApplePurchase(
     userId: string,
     body: {
@@ -1862,7 +1943,41 @@ export class PremiumService {
       productId?: string;
     },
   ) {
-    const externalId = (body.transactionId || body.receiptData || '').trim();
+    const isMock =
+      process.env.NODE_ENV !== 'production' &&
+      process.env.MOCK_APPLE_APP_STORE === 'true';
+    const sharedSecret = process.env.APPLE_APP_STORE_SHARED_SECRET;
+
+    // Danh tính giao dịch + gói LẤY TỪ APPLE, không lấy từ body. Trước đây
+    // không gửi receiptData là bỏ qua hẳn bước kiểm Apple, còn transactionId /
+    // productId do client tự khai → ai đăng nhập cũng tự cấp Premium vô hạn.
+    let externalId: string;
+    let resolvedProductId: string | undefined;
+    if (isMock) {
+      externalId = (body.transactionId || body.receiptData || '').trim();
+      resolvedProductId = body.productId;
+    } else {
+      if (!sharedSecret) {
+        throw new ServiceUnavailableException({
+          code: 'VERIFY_NOT_CONFIGURED',
+          message: 'errors.premium.verifyNotConfigured',
+        });
+      }
+      const receiptData = body.receiptData?.trim();
+      if (!receiptData) {
+        throw new BadRequestException({
+          code: 'MISSING_TOKEN',
+          message: 'errors.premium.missingPurchaseToken',
+        });
+      }
+      const tx = await this.verifyAppleReceipt(
+        receiptData,
+        sharedSecret,
+        body.transactionId?.trim() || undefined,
+      );
+      externalId = tx.transactionId;
+      resolvedProductId = tx.productId;
+    }
     if (!externalId) {
       throw new BadRequestException({
         code: 'MISSING_TOKEN',
@@ -1908,91 +2023,12 @@ export class PremiumService {
       };
     }
 
-    let resolvedProductId = body.productId;
-
-    // Nếu receiptData là JWS của StoreKit 2 (3 phần base64url), giải mã payload để đối chiếu.
-    if (body.receiptData && body.receiptData.split('.').length === 3) {
-      try {
-        const [, payloadB64] = body.receiptData.split('.');
-        const decoded = JSON.parse(
-          Buffer.from(payloadB64, 'base64url').toString('utf8'),
-        );
-        if (decoded?.productId && typeof decoded.productId === 'string') {
-          resolvedProductId = decoded.productId;
-        }
-        if (
-          decoded?.appAccountToken &&
-          typeof decoded.appAccountToken === 'string' &&
-          decoded.appAccountToken.toLowerCase() !== userId.toLowerCase()
-        ) {
-          throw new BadRequestException({
-            code: 'RECEIPT_ACCOUNT_MISMATCH',
-            message: 'errors.premium.receiptAccountMismatch',
-          });
-        }
-      } catch (err) {
-        if (err instanceof BadRequestException) throw err;
-      }
-    }
-
     const product = this.resolveStoreProduct(resolvedProductId);
     if (!product) {
       throw new BadRequestException({
         code: 'UNKNOWN_PRODUCT',
         message: 'errors.premium.unknownProduct',
       });
-    }
-
-    const isMock =
-      process.env.NODE_ENV !== 'production' &&
-      process.env.MOCK_APPLE_APP_STORE === 'true';
-    const sharedSecret = process.env.APPLE_APP_STORE_SHARED_SECRET;
-
-    if (!isMock && !sharedSecret) {
-      throw new ServiceUnavailableException({
-        code: 'VERIFY_NOT_CONFIGURED',
-        message: 'errors.premium.verifyNotConfigured',
-      });
-    }
-
-    if (!isMock && sharedSecret && body.receiptData) {
-      const verifyUrl =
-        process.env.APPLE_VERIFY_RECEIPT_URL ||
-        'https://buy.itunes.apple.com/verifyReceipt';
-      const res = await fetch(verifyUrl, {
-        signal: AbortSignal.timeout(15000),
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          'receipt-data': body.receiptData,
-          password: sharedSecret,
-          'exclude-old-transactions': true,
-        }),
-      });
-      let data = (await res.json()) as { status?: number };
-      // Status 21007 = biên lai Sandbox gửi nhầm vào Production; Apple yêu cầu gọi lại Sandbox.
-      if (data?.status === 21007) {
-        const sandboxRes = await fetch(
-          'https://sandbox.itunes.apple.com/verifyReceipt',
-          {
-            signal: AbortSignal.timeout(15000),
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              'receipt-data': body.receiptData,
-              password: sharedSecret,
-              'exclude-old-transactions': true,
-            }),
-          },
-        );
-        data = (await sandboxRes.json()) as { status?: number };
-      }
-      if (data?.status !== 0) {
-        throw new BadRequestException({
-          code: 'RECEIPT_INVALID',
-          message: 'errors.premium.receiptInvalid',
-        });
-      }
     }
 
     const amount = priceOf(product.plan, product.months);

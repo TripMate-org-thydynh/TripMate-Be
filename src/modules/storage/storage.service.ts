@@ -168,6 +168,14 @@ export class StorageService {
     ) {
       throw new BadRequestException('errors.storage.invalidUrl');
     }
+    // Chỉ ghi file nằm trong kho Cloudinary của CHÍNH dự án: trước đây nhận
+    // mọi URL https, nên bảng media có thể chứa link ngoài bất kỳ.
+    if (
+      this.cloudName &&
+      !url.startsWith(`https://res.cloudinary.com/${this.cloudName}/`)
+    ) {
+      throw new BadRequestException('errors.storage.invalidUrl');
+    }
     const size =
       typeof sizeBytes === 'number' && Number.isFinite(sizeBytes) && sizeBytes >= 0
         ? Math.floor(sizeBytes)

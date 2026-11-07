@@ -81,6 +81,16 @@ export class MomentsService {
 
     const placement = this.defaultBoardPlacement(moments);
 
+    // mediaId phải là file của CHÍNH người tạo — không thì gắn được file của
+    // người khác vào khoảnh khắc của mình bằng cách đoán id.
+    if (dto.mediaId) {
+      const owned = await this.prisma.media.findFirst({
+        where: { id: dto.mediaId, userId },
+        select: { id: true },
+      });
+      if (!owned) throw new ForbiddenException('errors.storage.mediaNotOwned');
+    }
+
     const row = await this.prisma.moment.create({
       data: {
         tripId,
