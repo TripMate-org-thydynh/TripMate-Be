@@ -238,6 +238,9 @@ export class AiService {
    * người không có trong chuyến. Nay báo 503 để client nói rõ AI đang bận.
    */
   private async callGeminiJSON<T extends object>(prompt: string): Promise<T> {
+    // Claude trước (Sonnet → Haiku → Opus); mọi model Claude lỗi mới về Gemini.
+    const claude = await this.callClaudeJSON<T>(prompt);
+    if (claude) return claude;
     if (this.genAI) {
       try {
         const model = this.genAI.getGenerativeModel({
@@ -246,17 +249,12 @@ export class AiService {
             responseMimeType: 'application/json',
           },
         });
-
         const response = await model.generateContent(prompt);
         return JSON.parse(response.response.text()) as T;
       } catch (error) {
-        this.logger.error('Lỗi gọi Gemini API, chuyển sang Claude:', error);
+        this.logger.error('Lỗi gọi Gemini API (fallback cuối):', error);
       }
     }
-    // Fallback: Claude Sonnet → Haiku → Opus. Gemini hết quota/lỗi thì vẫn
-    // trả lời được thay vì 503 im lặng.
-    const out = await this.callClaudeJSON<T>(prompt);
-    if (out) return out;
     this.aiUnavailable();
   }
 
@@ -295,7 +293,7 @@ export class AiService {
               'Chỉ trả về đúng MỘT giá trị JSON hợp lệ, không markdown, không giải thích.',
             messages: [{ role: 'user', content: prompt }],
           }),
-          signal: AbortSignal.timeout(60_000),
+          signal: AbortSignal.timeout(30_000),
         });
         if (!res.ok) {
           this.logger.warn(`Claude ${model} lỗi HTTP ${res.status}`);
