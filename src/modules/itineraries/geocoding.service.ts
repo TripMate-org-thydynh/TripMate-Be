@@ -21,14 +21,26 @@ export class GeocodingService {
   private queue: Promise<unknown> = Promise.resolve();
   private lastCall = 0;
 
-  /** Thử lần lượt: "tên, địa chỉ" → "địa chỉ" → "tên". */
+  /**
+   * Thử lần lượt, ưu tiên có kèm điểm đến của chuyến (nếu có) để
+   * "Hồ Xuân Hương" của chuyến Đà Lạt không bị ghim nhầm sang Đà Nẵng:
+   * "tên, địa chỉ, điểm đến" → "tên, điểm đến" → "tên, địa chỉ" → "địa chỉ" → "tên".
+   */
   async locate(
     placeName: string,
     placeAddress?: string | null,
+    destination?: string | null,
   ): Promise<GeoPoint | null> {
     const name = placeName?.trim() ?? '';
     const addr = placeAddress?.trim() ?? '';
+    const dest = destination?.trim() ?? '';
+    const withDest = (q: string) =>
+      dest && q && !q.toLowerCase().includes(dest.toLowerCase())
+        ? `${q}, ${dest}`
+        : '';
     const candidates = [
+      withDest(name && addr ? `${name}, ${addr}` : ''),
+      withDest(name),
       name && addr ? `${name}, ${addr}` : '',
       addr,
       name,
