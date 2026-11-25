@@ -123,9 +123,14 @@ export class ItinerariesService {
       orderBy: [{ day: 'asc' }, { startTime: 'asc' }],
       take: limit,
     });
+    const dest = await this.tripDestination(tripId);
     let found = 0;
     for (const item of missing) {
-      const p = await this.geocoding.locate(item.placeName, item.placeAddress);
+      const p = await this.geocoding.locate(
+        item.placeName,
+        item.placeAddress,
+        dest,
+      );
       if (!p) continue;
       await this.prisma.itineraryItem.update({
         where: { id: item.id },
@@ -141,13 +146,25 @@ export class ItinerariesService {
     return { attempted: missing.length, found, items };
   }
 
+  private async tripDestination(tripId: string): Promise<string | null> {
+    const trip = await this.prisma.trip.findUnique({
+      where: { id: tripId },
+      select: { destination: true },
+    });
+    return trip?.destination ?? null;
+  }
+
   private async geocodeInBackground(id: string, tripId: string, force = false) {
     try {
       const item = await this.prisma.itineraryItem.findUnique({
         where: { id },
       });
       if (!item || (!force && item.latitude != null)) return;
-      const p = await this.geocoding.locate(item.placeName, item.placeAddress);
+      const p = await this.geocoding.locate(
+        item.placeName,
+        item.placeAddress,
+        await this.tripDestination(tripId),
+      );
       await this.prisma.itineraryItem.update({
         where: { id },
         data: p
