@@ -238,24 +238,85 @@ export class AiService {
    * người không có trong chuyến. Nay báo 503 để client nói rõ AI đang bận.
    */
   private async callGeminiJSON<T extends object>(prompt: string): Promise<T> {
-    if (!this.genAI) {
-      this.logger.warn('Chưa cấu hình GEMINI_API_KEY — từ chối yêu cầu AI.');
-      this.aiUnavailable();
-    }
-    try {
-      const model = this.genAI.getGenerativeModel({
-        model: GEMINI_MODEL,
-        generationConfig: {
-          responseMimeType: 'application/json',
-        },
-      });
+    if (this.genAI) {
+      try {
+        const model = this.genAI.getGenerativeModel({
+          model: GEMINI_MODEL,
+          generationConfig: {
+            responseMimeType: 'application/json',
+          },
+        });
 
-      const response = await model.generateContent(prompt);
-      return JSON.parse(response.response.text()) as T;
-    } catch (error) {
-      this.logger.error('Lỗi gọi Gemini API:', error);
-      this.aiUnavailable();
+        const response = await model.generateContent(prompt);
+        return JSON.parse(response.response.text()) as T;
+      } catch (error) {
+        this.logger.error('Lỗi gọi Gemini API, chuyển sang Claude:', error);
+      }
     }
+    // Fallback: Claude Sonnet → Haiku → Opus. Gemini hết quota/lỗi thì vẫn
+    // trả lời được thay vì 503 im lặng.
+    const out = await this.callClaudeJSON<T>(prompt);
+    if (out) return out;
+    this.aiUnavailable();
+  }
+
+  /**
+   * Thử lần lượt các model Claude (ANTHROPIC_MODELS ghi đè thứ tự, phân tách
+   * bằng dấu phẩy). Trả null khi thiếu key hoặc mọi model đều hỏng.
+   */
+  private async callClaudeJSON<T extends object>(
+    prompt: string,
+  ): Promise<T | null> {
+    const key = process.env.ANTHROPIC_API_KEY;
+    if (!key) {
+      this.logger.warn('Chưa cấu hình ANTHROPIC_API_KEY — bỏ qua fallback Claude.');
+      return null;
+    }
+    const models = (
+      process.env.ANTHROPIC_MODELS ||
+      'claude-sonnet-5-5,claude-haiku-5-5,claude-opus-5-5'
+    )
+      .split(',')
+      .map((m) => m.trim())
+      .filter(Boolean);
+    for (const model of models) {
+      try {
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'x-api-key': key,
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 4096,
+            system:
+              'Chỉ trả về đúng MỘT giá trị JSON hợp lệ, không markdown, không giải thích.',
+            messages: [{ role: 'user', content: prompt }],
+          }),
+          signal: AbortSignal.timeout(60_000),
+        });
+        if (!res.ok) {
+          this.logger.warn(`Claude ${model} lỗi HTTP ${res.status}`);
+          continue;
+        }
+        const data = (await res.json()) as {
+          content?: { type: string; text?: string }[];
+        };
+        const text = (data.content ?? [])
+          .filter((c) => c.type === 'text')
+          .map((c) => c.text ?? '')
+          .join('')
+          .trim()
+          .replace(/^```(?:json)?\s*/i, '')
+          .replace(/\s*```$/, '');
+        return JSON.parse(text) as T;
+      } catch (e) {
+        this.logger.warn(`Claude ${model} thất bại: ${toMessage(e)}`);
+      }
+    }
+    return null;
   }
 
   /**
