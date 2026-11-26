@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UserRole, Plan } from '@prisma/client';
+import { APP_POLICY_PREFIX } from '../health/app-policy.service';
 
 @Injectable()
 export class AdminService {
@@ -873,11 +874,13 @@ export class AdminService {
   // --- CONFIG MANAGEMENT ---
   async getConfigs() {
     return this.prisma.systemConfig.findMany({
+      where: { NOT: { key: { startsWith: APP_POLICY_PREFIX } } },
       orderBy: { key: 'asc' },
     });
   }
 
   async updateConfig(key: string, value: string, description?: string) {
+    if (key.startsWith(APP_POLICY_PREFIX)) throw new BadRequestException('Use the release policy page.');
     return this.prisma.systemConfig.upsert({
       where: { key },
       create: { key, value, description },
@@ -886,6 +889,7 @@ export class AdminService {
   }
 
   async deleteConfig(key: string) {
+    if (key.startsWith(APP_POLICY_PREFIX)) throw new BadRequestException('Use the release policy page.');
     return this.prisma.systemConfig.delete({
       where: { key },
     });

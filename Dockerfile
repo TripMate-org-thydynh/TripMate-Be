@@ -32,9 +32,10 @@ RUN npm ci --only=production
 # Copy compiled source files and the generated Prisma Client from Stage 1
 COPY --from=builder /usr/src/app/dist ./dist
 COPY --from=builder /usr/src/app/node_modules/.prisma ./node_modules/.prisma
+COPY scripts/deploy-operations-schema.cjs ./scripts/deploy-operations-schema.cjs
 
 ENV NODE_ENV=production
 EXPOSE 3000
 
 # Start NestJS backend production server
-CMD ["node", "dist/main"]
+CMD ["sh", "-c", "node scripts/deploy-operations-schema.cjs && exec node dist/main"]

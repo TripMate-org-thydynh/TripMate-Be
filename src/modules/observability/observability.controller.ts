@@ -5,6 +5,7 @@ import {
   Patch,
   Delete,
   Body,
+  BadRequestException,
   Param,
   Query,
   UseGuards,
@@ -29,6 +30,8 @@ import {
   IsOptional,
   IsInt,
   IsBoolean,
+  Matches,
+  MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -112,6 +115,23 @@ export class RoutesQueryDto {
   sortBy?: 'requests' | 'errors' | 'latency' = 'requests';
 }
 
+class DashboardQueryDto extends TimeseriesQueryDto {
+  @IsOptional()
+  @IsIn(['requests', 'errors', 'latency'])
+  sortBy?: 'requests' | 'errors' | 'latency';
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(240)
+  route?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Z]{1,16}$/)
+  method?: string;
+}
+
 export class CreateSloTargetDto {
   @ApiProperty({
     description: 'Khoá định danh máy đọc (duy nhất, vd: api-availability)',
@@ -159,8 +179,7 @@ export class CreateSloTargetDto {
   windowDays?: number = 30;
 
   @ApiPropertyOptional({
-    description:
-      'Ngưỡng mili-giây coi là nhanh (bắt buộc khi sliType=LATENCY)',
+    description: 'Ngưỡng mili-giây coi là nhanh (bắt buộc khi sliType=LATENCY)',
     example: 500,
   })
   @IsOptional()
@@ -169,7 +188,8 @@ export class CreateSloTargetDto {
   latencyThresholdMs?: number;
 
   @ApiPropertyOptional({
-    description: 'Tiền tố route lọc áp dụng (null hoặc bỏ trống = toàn hệ thống)',
+    description:
+      'Tiền tố route lọc áp dụng (null hoặc bỏ trống = toàn hệ thống)',
     example: '/trips',
   })
   @IsOptional()
@@ -258,9 +278,22 @@ export class UpdateSloTargetDto {
 @ApiBearerAuth('JWT')
 @Controller('admin/observability')
 export class ObservabilityController {
-  constructor(
-    private readonly observabilityService: ObservabilityService,
-  ) {}
+  constructor(private readonly observabilityService: ObservabilityService) {}
+
+  @Get('dashboard')
+  getDashboard(@Query() query: DashboardQueryDto) {
+    if (!!query.route !== !!query.method) {
+      throw new BadRequestException('Specify a route and method together.');
+    }
+    return this.observabilityService.getDashboard(
+      query.rangeMinutes,
+      query.stepMinutes,
+      query.sortBy,
+      query.route && query.method
+        ? { route: query.route, method: query.method }
+        : undefined,
+    );
+  }
 
   @Get('overview')
   @ApiOperation({ summary: 'Lấy thẻ tổng quan hiệu năng hệ thống (admin)' })
@@ -307,10 +340,7 @@ export class ObservabilityController {
 
   @Patch('slo/targets/:id')
   @ApiOperation({ summary: 'Cập nhật mục tiêu SLO (admin)' })
-  updateSloTarget(
-    @Param('id') id: string,
-    @Body() dto: UpdateSloTargetDto,
-  ) {
+  updateSloTarget(@Param('id') id: string, @Body() dto: UpdateSloTargetDto) {
     return this.observabilityService.updateSloTarget(id, dto);
   }
 

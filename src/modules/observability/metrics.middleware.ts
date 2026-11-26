@@ -1,7 +1,9 @@
 import { Logger } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import type { Request, Response, NextFunction } from 'express';
 import { MetricsBufferService } from './metrics-buffer.service';
 import { extractRoutePattern, isExcludedPath } from './route-label';
+import { RequestFailuresService } from './request-failures.service';
 
 /**
  * Factory tạo Express middleware ghi nhận thời gian phản hồi (latency) và mã trạng thái HTTP.
@@ -16,7 +18,10 @@ import { extractRoutePattern, isExcludedPath } from './route-label';
  * 4. Đo lường độc lập, try/catch bọc kín, tuyệt đối không làm ảnh hưởng hay làm sập request của người dùng.
  * 5. Lắng nghe sự kiện `finish` trên response, KHÔNG dùng `close` để tránh nhiễu do client huỷ kết nối giữa chừng.
  */
-export function makeMetricsMiddleware(buffer: MetricsBufferService) {
+export function makeMetricsMiddleware(
+  buffer: MetricsBufferService,
+  failures: RequestFailuresService,
+) {
   const logger = new Logger('MetricsMiddleware');
 
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -28,6 +33,8 @@ export function makeMetricsMiddleware(buffer: MetricsBufferService) {
       }
 
       const startTime = performance.now();
+      const id = randomUUID();
+      res.setHeader('X-Request-Id', id);
       let recorded = false;
 
       res.on('finish', () => {
@@ -52,6 +59,16 @@ export function makeMetricsMiddleware(buffer: MetricsBufferService) {
             statusCode,
             durationMs,
           });
+          if (statusCode >= 500 && statusCode < 600) {
+            failures.record({
+              id,
+              route,
+              method,
+              statusCode,
+              durationMs: Math.round(durationMs),
+              occurredAt: new Date(),
+            });
+          }
         } catch (err) {
           // Nuốt lỗi hoàn toàn, đo lường không được làm hỏng request
           logger.warn(

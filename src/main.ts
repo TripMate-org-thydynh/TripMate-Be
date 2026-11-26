@@ -12,6 +12,7 @@ import type { NextFunction, Request, Response } from 'express';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { MetricsBufferService } from './modules/observability/metrics-buffer.service';
 import { makeMetricsMiddleware } from './modules/observability/metrics.middleware';
+import { RequestFailuresService } from './modules/observability/request-failures.service';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -47,7 +48,7 @@ async function bootstrap() {
   // Metrics middleware đo lường latency và HTTP status code
   // Đặt sớm trước helmet, CORS, pipes, filters để bắt được cả request bị chặn (401/403/429) và 404
   const metricsBuffer = app.get(MetricsBufferService);
-  app.use(makeMetricsMiddleware(metricsBuffer));
+  app.use(makeMetricsMiddleware(metricsBuffer, app.get(RequestFailuresService)));
 
   // Security headers. Tắt CSP ở dev để Swagger UI hoạt động.
   app.use(
@@ -65,6 +66,7 @@ async function bootstrap() {
   app.enableCors({
     origin: isProd ? allowedOrigins : '*',
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    exposedHeaders: ['X-Request-Id'],
     allowedHeaders: [
       'Content-Type',
       'Authorization',

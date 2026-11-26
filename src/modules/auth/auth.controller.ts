@@ -102,6 +102,7 @@ export class AuthController {
   @ApiBearerAuth('JWT')
   @ApiOperation({ summary: 'Lấy thông tin user hiện tại từ JWT' })
   me(@CurrentUser() user: User) {
-    return user;
+    const { passwordHash: _passwordHash, ...profile } = user;
+    return profile;
   }
 }
