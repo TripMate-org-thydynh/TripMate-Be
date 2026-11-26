@@ -154,7 +154,7 @@ export class MetricsBufferService {
     const unwritten = new Map<string, MetricAgg>(currentBuffer);
 
     try {
-      const requestMetricDelegate = (this.prisma as any).requestMetric;
+      const requestMetricDelegate = this.prisma.requestMetric;
       if (
         !requestMetricDelegate ||
         typeof requestMetricDelegate.upsert !== 'function'
@@ -167,45 +167,57 @@ export class MetricsBufferService {
       }
 
       for (const [key, item] of currentBuffer.entries()) {
-        await requestMetricDelegate.upsert({
-          where: {
-            bucketStart_route_method_statusClass: {
+        await this.prisma.$transaction([
+          requestMetricDelegate.upsert({
+            where: {
+              bucketStart_route_method_statusClass: {
+                bucketStart: item.bucketStart,
+                route: item.route,
+                method: item.method,
+                statusClass: item.statusClass,
+              },
+            },
+            create: {
               bucketStart: item.bucketStart,
               route: item.route,
               method: item.method,
               statusClass: item.statusClass,
+              count: item.count,
+              sumLatencyMs: item.sumLatencyMs,
+              maxLatencyMs: item.maxLatencyMs,
+              le50: item.le50,
+              le100: item.le100,
+              le250: item.le250,
+              le500: item.le500,
+              le1000: item.le1000,
+              le2500: item.le2500,
+              le5000: item.le5000,
+              leInf: item.leInf,
             },
-          },
-          create: {
-            bucketStart: item.bucketStart,
-            route: item.route,
-            method: item.method,
-            statusClass: item.statusClass,
-            count: item.count,
-            sumLatencyMs: item.sumLatencyMs,
-            maxLatencyMs: item.maxLatencyMs,
-            le50: item.le50,
-            le100: item.le100,
-            le250: item.le250,
-            le500: item.le500,
-            le1000: item.le1000,
-            le2500: item.le2500,
-            le5000: item.le5000,
-            leInf: item.leInf,
-          },
-          update: {
-            count: { increment: item.count },
-            sumLatencyMs: { increment: item.sumLatencyMs },
-            le50: { increment: item.le50 },
-            le100: { increment: item.le100 },
-            le250: { increment: item.le250 },
-            le500: { increment: item.le500 },
-            le1000: { increment: item.le1000 },
-            le2500: { increment: item.le2500 },
-            le5000: { increment: item.le5000 },
-            leInf: { increment: item.leInf },
-          },
-        });
+            update: {
+              count: { increment: item.count },
+              sumLatencyMs: { increment: item.sumLatencyMs },
+              le50: { increment: item.le50 },
+              le100: { increment: item.le100 },
+              le250: { increment: item.le250 },
+              le500: { increment: item.le500 },
+              le1000: { increment: item.le1000 },
+              le2500: { increment: item.le2500 },
+              le5000: { increment: item.le5000 },
+              leInf: { increment: item.leInf },
+            },
+          }),
+          this.prisma.requestMetric.updateMany({
+            where: {
+              bucketStart: item.bucketStart,
+              route: item.route,
+              method: item.method,
+              statusClass: item.statusClass,
+              maxLatencyMs: { lt: item.maxLatencyMs },
+            },
+            data: { maxLatencyMs: item.maxLatencyMs },
+          }),
+        ]);
 
         // Xoá mục đã ghi xong khỏi danh sách chờ thử lại
         unwritten.delete(key);

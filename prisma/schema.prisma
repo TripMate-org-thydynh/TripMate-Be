@@ -1439,6 +1439,19 @@ model RequestMetric {
   @@map("request_metrics")
 }
 
+model RequestFailure {
+  id         String   @id @db.Uuid
+  occurredAt DateTime @default(now()) @map("occurred_at")
+  route      String
+  method     String
+  statusCode Int      @map("status_code")
+  durationMs Int      @map("duration_ms")
+
+  @@index([occurredAt])
+  @@index([route, method, occurredAt])
+  @@map("request_failures")
+}
+
 /// Mục tiêu chất lượng dịch vụ (SLO) do admin cấu hình.
 model SloTarget {
   id                 String   @id @default(uuid()) @db.Uuid

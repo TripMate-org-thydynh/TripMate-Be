@@ -5,6 +5,19 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import type { RequestMetric } from '@prisma/client';
+import { RequestFailuresService } from './request-failures.service';
+
+type RouteFilter = { route: string; method: string };
+type RouteSort = 'requests' | 'errors' | 'latency';
+
+function metricWindowStart(rangeMinutes: number, asOf: Date) {
+  const minuteMs = 60_000;
+  return new Date(
+    Math.floor(asOf.getTime() / minuteMs) * minuteMs -
+      (Math.max(1, rangeMinutes) - 1) * minuteMs,
+  );
+}
 
 /**
  * Định nghĩa các bucket histogram thời gian phản hồi.
@@ -60,6 +73,7 @@ export interface TimeseriesPoint {
   errors4xx: number;
   errorRatePercent: number;
   p95Ms: number;
+  p99Ms: number;
   avgLatencyMs: number;
 }
 
@@ -127,14 +141,46 @@ export interface UpdateSloTargetParams {
 export class ObservabilityService {
   private readonly logger = new Logger(ObservabilityService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly failures: RequestFailuresService,
+  ) {}
 
-  /**
-   * Truy cập delegate RequestMetric từ Prisma.
-   * Dùng cú pháp (this.prisma as any) để an toàn trước khi `npx prisma generate` được chạy lại.
-   */
-  private get requestMetricRepo() {
-    return (this.prisma as any).requestMetric;
+  async getDashboard(
+    rangeMinutes = 60,
+    stepMinutes = 1,
+    sortBy: RouteSort = 'requests',
+    filter?: RouteFilter,
+  ) {
+    const asOf = new Date();
+    const [records, failures, slo] = await Promise.all([
+      this.readMetricWindow(rangeMinutes, asOf),
+      this.failures.recent(metricWindowStart(rangeMinutes, asOf), asOf, filter),
+      this.getSloOverview(),
+    ]);
+    const scoped = filter
+      ? records.filter(
+          (record) =>
+            record.route === filter.route && record.method === filter.method,
+        )
+      : records;
+    const step = Math.max(stepMinutes, Math.ceil(rangeMinutes / 720));
+    return {
+      overview: this.summarizeOverview(scoped, rangeMinutes),
+      timeseries: this.summarizeTimeseries(scoped, rangeMinutes, step, asOf),
+      routes: this.summarizeRoutes(records, 20, sortBy),
+      failures,
+      slo,
+      asOf: asOf.toISOString(),
+    };
+  }
+
+  private readMetricWindow(rangeMinutes: number, asOf: Date) {
+    return this.ensureRequestMetricRepo().findMany({
+      where: {
+        bucketStart: { gte: metricWindowStart(rangeMinutes, asOf), lte: asOf },
+      },
+    });
   }
 
   /**
@@ -145,7 +191,7 @@ export class ObservabilityService {
   }
 
   private ensureRequestMetricRepo() {
-    const repo = this.requestMetricRepo;
+    const repo = this.prisma.requestMetric;
     if (!repo) {
       this.logger.error(
         'Prisma delegate RequestMetric chưa sẵn sàng. Cần chạy `npx prisma generate`.',
@@ -210,8 +256,7 @@ export class ObservabilityService {
     const b5000 = Math.max(0, buckets?.le5000 || 0);
     const bInf = Math.max(0, buckets?.leInf || 0);
 
-    const total =
-      b50 + b100 + b250 + b500 + b1000 + b2500 + b5000 + bInf;
+    const total = b50 + b100 + b250 + b500 + b1000 + b2500 + b5000 + bInf;
 
     if (total <= 0 || percentile <= 0) {
       return 0;
@@ -366,19 +411,17 @@ export class ObservabilityService {
    * Thẻ tổng quan hiệu năng hệ thống trong khoảng thời gian xác định.
    */
   async getOverview(rangeMinutes = 60): Promise<OverviewResult> {
-    const repo = this.ensureRequestMetricRepo();
-    const minutes = Math.max(1, rangeMinutes);
-    const now = new Date();
-    const startTime = new Date(now.getTime() - minutes * 60 * 1000);
+    return this.summarizeOverview(
+      await this.readMetricWindow(rangeMinutes, new Date()),
+      rangeMinutes,
+    );
+  }
 
-    const records = await repo.findMany({
-      where: {
-        bucketStart: {
-          gte: startTime,
-          lte: now,
-        },
-      },
-    });
+  private summarizeOverview(
+    records: RequestMetric[],
+    rangeMinutes: number,
+  ): OverviewResult {
+    const minutes = Math.max(1, rangeMinutes);
 
     let totalRequests = 0;
     let errors5xx = 0;
@@ -470,17 +513,28 @@ export class ObservabilityService {
     rangeMinutes = 60,
     stepMinutes = 1,
   ): Promise<TimeseriesPoint[]> {
-    const repo = this.ensureRequestMetricRepo();
+    const asOf = new Date();
+    return this.summarizeTimeseries(
+      await this.readMetricWindow(rangeMinutes, asOf),
+      rangeMinutes,
+      stepMinutes,
+      asOf,
+    );
+  }
+
+  private summarizeTimeseries(
+    records: RequestMetric[],
+    rangeMinutes: number,
+    stepMinutes: number,
+    asOf: Date,
+  ): TimeseriesPoint[] {
     const validRange = Math.max(1, rangeMinutes);
     const validStep = Math.max(1, stepMinutes);
 
     const stepMs = validStep * 60 * 1000;
-    // Căn chỉnh mốc kết thúc theo bội số nguyên của step
-    const alignedEndMs = Math.floor(Date.now() / stepMs) * stepMs;
-    const numSteps = Math.max(1, Math.floor(validRange / validStep));
-    const startMs = alignedEndMs - (numSteps - 1) * stepMs;
-    const startTime = new Date(startMs);
-    const endTime = new Date(alignedEndMs + stepMs);
+    const numSteps = Math.ceil(validRange / validStep);
+    const startTime = metricWindowStart(validRange, asOf);
+    const startMs = startTime.getTime();
 
     // BƯỚC QUAN TRỌNG: Khởi tạo trước ĐẦY ĐỦ mọi mốc thời gian trong khoảng.
     // Nếu mốc nào không có dữ liệu, các chỉ số sẽ mang giá trị 0.
@@ -515,15 +569,6 @@ export class ObservabilityService {
       });
     }
 
-    const records = await repo.findMany({
-      where: {
-        bucketStart: {
-          gte: startTime,
-          lt: endTime,
-        },
-      },
-    });
-
     for (const r of records) {
       const rTimeMs = new Date(r.bucketStart).getTime();
       const slotIndex = Math.floor((rTimeMs - startMs) / stepMs);
@@ -553,6 +598,8 @@ export class ObservabilityService {
         requests > 0 ? Math.round((errors5xx / requests) * 10000) / 100 : 0;
       const p95Ms =
         requests > 0 ? this.percentileFromHistogram(slot.histogram, 95) : 0;
+      const p99Ms =
+        requests > 0 ? this.percentileFromHistogram(slot.histogram, 99) : 0;
       // XỬ LÝ BIGINT: Ép Number(slot.sumLatencyMs) trước khi tính trung bình và trả về
       const avgLatencyMs =
         requests > 0
@@ -566,6 +613,7 @@ export class ObservabilityService {
         errors4xx,
         errorRatePercent,
         p95Ms,
+        p99Ms,
         avgLatencyMs,
       };
     });
@@ -578,20 +626,20 @@ export class ObservabilityService {
   async getRoutes(
     rangeMinutes = 60,
     limit = 20,
-    sortBy: 'requests' | 'errors' | 'latency' = 'requests',
+    sortBy: RouteSort = 'requests',
   ): Promise<RouteMetricResult[]> {
-    const repo = this.ensureRequestMetricRepo();
-    const minutes = Math.max(1, rangeMinutes);
-    const startTime = new Date(Date.now() - minutes * 60 * 1000);
+    return this.summarizeRoutes(
+      await this.readMetricWindow(rangeMinutes, new Date()),
+      limit,
+      sortBy,
+    );
+  }
 
-    const records = await repo.findMany({
-      where: {
-        bucketStart: {
-          gte: startTime,
-        },
-      },
-    });
-
+  private summarizeRoutes(
+    records: RequestMetric[],
+    limit: number,
+    sortBy: RouteSort,
+  ): RouteMetricResult[] {
     const groupMap = new Map<
       string,
       {
@@ -713,9 +761,7 @@ export class ObservabilityService {
 
     for (const target of activeTargets) {
       const windowDays = target.windowDays || 30;
-      const startTime = new Date(
-        Date.now() - windowDays * 24 * 60 * 60 * 1000,
-      );
+      const startTime = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
       // XỬ LÝ DECIMAL: Ép Decimal từ Prisma sang Number
       const objective = Number(target.objective);
 
@@ -830,8 +876,7 @@ export class ObservabilityService {
       // errorBudgetRemainingPercent = (1 - consumed / total) * 100, kẹp trong [0, 100]
       let errorBudgetRemainingPercent = 100;
       if (errorBudgetTotal > 0) {
-        const rawRemaining =
-          (1 - errorBudgetConsumed / errorBudgetTotal) * 100;
+        const rawRemaining = (1 - errorBudgetConsumed / errorBudgetTotal) * 100;
         errorBudgetRemainingPercent = Math.max(
           0,
           Math.min(100, Math.round(rawRemaining * 100) / 100),
