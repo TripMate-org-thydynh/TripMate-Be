@@ -1564,10 +1564,11 @@ Trả về JSON đúng dạng:
         'Chỉ ghi những gì NHÌN THẤY trên ảnh. Không suy đoán, không bịa món.',
         'Không đọc được trường nào thì để null (hoặc mảng rỗng với items).',
         'Tiền tệ mặc định VND. Giá là số, không kèm dấu chấm/phẩy phân cách.',
+        'price là tổng tiền của dòng (đã nhân số lượng). Ghi riêng thuế, phụ phí và giảm giá nếu có in trên bill.',
         'Schema:',
         '{"merchant":string|null,"date":string|null,"currency":string,',
         '"items":[{"name":string,"quantity":number,"price":number,"selected":boolean}],',
-        '"subtotal":number|null,"tax":number|null,"total":number|null,',
+        '"subtotal":number|null,"tax":number|null,"fee":number|null,"discount":number|null,"total":number|null,',
         '"suggestedCategory":"FOOD"|"ACCOMMODATION"|"TRANSPORT"|"ACTIVITIES"|"SHOPPING"|"OTHER",',
         '"confidenceScore":number}',
       ].join('\n');

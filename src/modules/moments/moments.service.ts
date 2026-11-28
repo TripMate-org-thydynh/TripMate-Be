@@ -14,7 +14,7 @@ import {
   UpdateMomentLayoutDto,
 } from './dto/create-moment.dto';
 import { EntitlementService } from '../premium/entitlement.service';
-import { ghostRevealAt, isDeveloping, visibleMomentWhere } from './ghost';
+import { ghostRevealAt, isDeveloping, revealedMomentWhere, visibleMomentWhere } from './ghost';
 
 interface CachedBoardSnapshot {
   expiresAt: number;
@@ -216,6 +216,36 @@ export class MomentsService {
       );
   }
 
+  async gallery(tripId: string, viewerId: string, cursor?: string) {
+    const pageSize = 24;
+    const [blocked, previous] = await Promise.all([
+      this.prisma.userBlock.findMany({ where: { blockerId: viewerId }, select: { blockedId: true } }),
+      cursor ? this.prisma.moment.findFirst({ where: { id: cursor, tripId }, select: { id: true, createdAt: true } }) : null,
+    ]);
+    if (cursor && !previous) throw new NotFoundException('errors.moments.notFound');
+    const rows = await this.prisma.moment.findMany({
+      where: {
+        tripId, deletedAt: null, type: 'PHOTO', mediaUrl: { not: '' },
+        userId: { notIn: blocked.map(row => row.blockedId) },
+        AND: [
+          revealedMomentWhere(),
+          ...(previous ? [{ OR: [
+            { createdAt: { lt: previous.createdAt } },
+            { createdAt: previous.createdAt, id: { lt: previous.id } },
+          ] }] : []),
+        ],
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: pageSize + 1,
+      select: {
+        id: true, type: true, mediaUrl: true, caption: true, createdAt: true, takenAt: true, isPinned: true,
+        user: { select: { id: true, name: true } },
+      },
+    });
+    const items = rows.slice(0, pageSize);
+    return { items, nextCursor: rows.length > pageSize ? items.at(-1)?.id ?? null : null };
+  }
+
   /**
    * Số ảnh ghost đang tráng trong chuyến. Thành viên khác chỉ biết con số,
    * không thấy ảnh — đủ để tò mò mà không lộ nội dung.
@@ -342,6 +372,17 @@ export class MomentsService {
     });
     await this.invalidateBoardCache(tripId);
     return updated;
+  }
+
+  async setFavorite(tripId: string, id: string, userId: string, isFavorite: boolean) {
+    await this.assertVisible(id, userId);
+    const result = await this.prisma.moment.updateMany({
+      where: { id, tripId, deletedAt: null },
+      data: { isFavorite },
+    });
+    if (!result.count) throw new NotFoundException('errors.database.notFound');
+    await this.invalidateBoardCache(tripId);
+    return { isFavorite };
   }
 
   /** DELETE is protected by ResourceOwnerGuard at controller level. */

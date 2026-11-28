@@ -149,6 +149,8 @@ export class AdminService {
       dauActivities,
       wauActivities,
       mauActivities,
+      betaMetricRows,
+      activationRows,
     ] = await Promise.all([
       this.prisma.user.findMany({
         where: { createdAt: { gte: thirtyDaysAgo } },
@@ -194,7 +196,34 @@ export class AdminService {
       this.prisma.activity
         .groupBy({ by: ['userId'], where: { createdAt: { gte: thirtyDaysAgo } } })
         .then((res) => res.length),
+      this.prisma.requestMetric.groupBy({
+        by: ['route'], _sum: { count: true },
+        where: { bucketStart: { gte: thirtyDaysAgo }, method: 'POST', statusClass: 2,
+          OR: [{ route: { startsWith: '/api/v1/beta-events/' } }, { route: { startsWith: '/beta-events/' } }] },
+      }),
+      this.prisma.$queryRaw<{ eligible: number; activated: number }[]>`
+        SELECT count(*)::int AS eligible, count(*) FILTER (
+          WHERE EXISTS (SELECT 1 FROM trip_members m
+            WHERE m.trip_id = t.id AND m.user_id <> t.created_by
+              AND m.joined_at <= t.created_at + interval '7 days')
+          AND (
+            EXISTS (SELECT 1 FROM activities a WHERE a.trip_id = t.id
+              AND a.type IN ('ITINERARY_ADDED', 'MOMENT_SHARED') AND a.user_id <> t.created_by
+              AND a.created_at <= t.created_at + interval '7 days')
+            OR EXISTS (SELECT 1 FROM receipt_drafts r JOIN receipt_lines l ON l.draft_id = r.id
+              WHERE r.trip_id = t.id AND l.assigned_by <> t.created_by
+                AND r.finalized_at <= t.created_at + interval '7 days')
+          )
+        )::int AS activated
+        FROM trips t WHERE t.deleted_at IS NULL
+          AND t.created_at >= ${thirtyDaysAgo} AND t.created_at <= ${sevenDaysAgo}
+      `,
     ]);
+    const betaSignals: Record<string, number> = {};
+    for (const row of betaMetricRows) {
+      const event = row.route.split('/').at(-1)!;
+      betaSignals[event] = (betaSignals[event] ?? 0) + (row._sum.count ?? 0);
+    }
 
     // Group by YYYY-MM-DD
     const dateMap: Record<
@@ -274,6 +303,10 @@ export class AdminService {
       totalTripsLast30Days: trips.length,
       topDestinations,
       funnel,
+      beta: {
+        signals: betaSignals,
+        activation: activationRows[0] ?? { eligible: 0, activated: 0 },
+      },
       engagement: {
         dau,
         wau,

@@ -511,7 +511,7 @@ export class ExpensesService {
     return updatedExpense;
   }
 
-  private async evictCache(tripId: string) {
+  async evictCache(tripId: string) {
     try {
       await this.cacheManager.del(`trip:${tripId}:expenses`);
       await this.cacheManager.del(`trip:${tripId}:balances`);

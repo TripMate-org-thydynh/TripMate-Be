@@ -9,6 +9,7 @@ datasource db {
 }
 
 model User {
+  campaignDeliveries CampaignDelivery[]
   id                 String                    @id @default(uuid()) @db.Uuid
   supabaseId         String                    @unique @map("supabase_id") @db.Uuid
   email              String                    @unique
@@ -118,6 +119,7 @@ model UserPresence {
 }
 
 model Trip {
+  receiptDrafts   ReceiptDraft[]
   id                 String              @id @default(uuid()) @db.Uuid
   name               String
   description        String?
@@ -259,6 +261,7 @@ model ItineraryItem {
 }
 
 model Expense {
+  receiptDraft ReceiptDraft?
   id          String               @id @default(uuid()) @db.Uuid
   tripId      String               @map("trip_id") @db.Uuid
   paidById    String               @map("paid_by") @db.Uuid
@@ -280,6 +283,42 @@ model Expense {
   @@index([tripId, deletedAt, createdAt])
   @@index([paidById, deletedAt])
   @@map("expenses")
+}
+
+model ReceiptDraft {
+  id          String        @id @db.Uuid
+  tripId      String        @map("trip_id") @db.Uuid
+  creatorId   String        @map("creator_id") @db.Uuid
+  expenseId   String?       @unique @map("expense_id") @db.Uuid
+  title       String
+  total       BigInt
+  tax         BigInt        @default(0)
+  fee         BigInt        @default(0)
+  discount    BigInt        @default(0)
+  version     Int           @default(0)
+  finalizedAt DateTime?     @map("finalized_at")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  trip        Trip          @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  expense     Expense?      @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  lines       ReceiptLine[]
+
+  @@index([tripId, createdAt])
+  @@map("receipt_drafts")
+}
+
+model ReceiptLine {
+  id           String       @id @default(uuid()) @db.Uuid
+  draftId      String       @map("draft_id") @db.Uuid
+  name         String
+  amount       BigInt
+  position     Int
+  version      Int          @default(0)
+  assignedById String?      @map("assigned_by") @db.Uuid
+  assigneeIds  String[]     @default([]) @map("assignee_ids") @db.Uuid
+  draft        ReceiptDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@unique([draftId, position])
+  @@map("receipt_lines")
 }
 
 model ExpenseSplit {
@@ -836,6 +875,43 @@ model Notification {
   @@index([userId, isRead])
   @@index([userId, createdAt])
   @@map("notifications")
+}
+
+model AnnouncementCampaign {
+  id          String             @id @default(uuid()) @db.Uuid
+  title       String
+  body        String
+  imageUrl    String?            @map("image_url")
+  cta         String
+  platform    String
+  startsAt    DateTime           @map("starts_at")
+  endsAt      DateTime           @map("ends_at")
+  status      String             @default("DRAFT")
+  popup       Boolean            @default(false)
+  push        Boolean            @default(false)
+  createdAt   DateTime           @default(now()) @map("created_at")
+  deliveries  CampaignDelivery[]
+
+  @@map("announcement_campaigns")
+}
+
+model CampaignDelivery {
+  id          String               @id @default(uuid()) @db.Uuid
+  campaignId  String               @map("campaign_id") @db.Uuid
+  userId      String               @map("user_id") @db.Uuid
+  inAppAt     DateTime?            @map("in_app_at")
+  shownAt     DateTime?            @map("shown_at")
+  nextAttempt DateTime             @map("next_attempt")
+  completedAt DateTime?            @map("completed_at")
+  attempts    Int                  @default(0)
+  pushAccepted Int                 @default(0) @map("push_accepted")
+  campaign    AnnouncementCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, userId])
+  @@index([completedAt, nextAttempt])
+  @@index([userId, shownAt])
+  @@map("campaign_deliveries")
 }
 
 /// Token FCM của từng máy. Một người có thể có nhiều máy; một token chỉ thuộc
@@ -1491,6 +1567,10 @@ model ItineraryTemplate {
   dayCount     Int                       @map("day_count")
   stopCount    Int                       @map("stop_count")
   isPublic     Boolean                   @default(true) @map("is_public")
+  reviewStatus String                    @default("PRIVATE") @map("review_status")
+  isEditorial  Boolean                   @default(false) @map("is_editorial")
+  budgetFrom   Int?                      @map("budget_from")
+  budgetTo     Int?                      @map("budget_to")
   useCount     Int                       @default(0) @map("use_count")
   /// Thẻ từ bộ cố định (vibe + mức ngân sách) — xem TEMPLATE_TAGS ở BE.
   tags         String[]                  @default([])
@@ -1509,6 +1589,7 @@ model ItineraryTemplate {
 
   @@index([isPublic, deletedAt, useCount])
   @@index([authorId])
+  @@index([reviewStatus, deletedAt])
   @@map("itinerary_templates")
 }
 

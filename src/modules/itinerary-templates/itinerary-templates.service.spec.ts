@@ -118,10 +118,13 @@ describe('ItineraryTemplatesService', () => {
       expect(res.data.items.create[0].notes).toBeNull();
     });
 
-    it('chép ghi chú khi người đăng chủ động bật includeNotes', async () => {
+    it('không sao chép thông tin riêng khi app cũ bật includeNotes', async () => {
       prisma.trip.findUnique.mockResolvedValue(trip([item(1)]));
       const res: any = await svc.publish('trip1', 'u1', { includeNotes: true });
-      expect(res.data.items.create[0].notes).toBe('Phòng 204, SĐT chủ nhà');
+      expect(res.data.items.create[0].notes).toBeNull();
+      expect(res.data.items.create[0].placeAddress).toBeUndefined();
+      expect(res.data.isPublic).toBe(false);
+      expect(res.data.reviewStatus).toBe('PENDING');
     });
 
     it('từ chối chuyến chưa có điểm dừng', async () => {

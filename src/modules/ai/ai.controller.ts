@@ -1,4 +1,5 @@
 import type { User } from '@prisma/client';
+import { RequireCapability } from '../health/capability.guard';
 import type { Response } from 'express';
 import {
   BadRequestException,
@@ -57,6 +58,7 @@ export class AiController {
    * đẩy nội dung riêng tư vào log máy chủ.
    */
   @Post('chat/stream')
+  @RequireCapability('matey')
   @ApiOperation({ summary: 'Matey trả lời chảy từng mẩu chữ (SSE)' })
   async chatStream(
     @CurrentUser() user: User,
@@ -148,6 +150,7 @@ export class AiController {
   }
 
   @Post('request')
+  @RequireCapability('matey')
   @ApiOperation({ summary: 'Tạo yêu cầu AI (lập lịch, recap, caption...)' })
   create(@CurrentUser() user: User, @Body() dto: CreateAIRequestDto) {
     return this.aiService.createRequest(
@@ -189,6 +192,7 @@ export class AiController {
   }
 
   @Get('my-requests')
+  @RequireCapability('matey', false)
   @ApiOperation({ summary: 'Lịch sử yêu cầu AI của tôi' })
   findAll(@CurrentUser() user: User) {
     return this.aiService.findAll(user.id);
@@ -218,6 +222,7 @@ export class AiController {
   }
 
   @Get('saved-prompts')
+  @RequireCapability('matey', false)
   @ApiOperation({ summary: 'Câu lệnh AI gợi ý sẵn (danh mục do team soạn)' })
   getSuggestedPrompts() {
     return this.aiService.getSuggestedPrompts();

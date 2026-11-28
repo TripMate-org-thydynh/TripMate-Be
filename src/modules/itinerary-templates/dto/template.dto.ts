@@ -96,6 +96,9 @@ export class UpdateTemplateDto {
 }
 
 export class ListTemplatesQuery {
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(30_000_000)
+  budgetTo?: number;
+
   @ApiPropertyOptional({ description: 'Tìm theo tiêu đề / điểm đến' })
   @IsOptional()
   @IsString()

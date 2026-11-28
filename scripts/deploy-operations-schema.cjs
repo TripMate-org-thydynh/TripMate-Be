@@ -5,6 +5,9 @@ const { PrismaClient } = require('@prisma/client');
 const migrations = [
   '20261126120000_app_policy_storage',
   '20261126121000_observability_storage',
+  '20261128120000_receipt_drafts',
+  '20261128121000_announcement_campaigns',
+  '20261128122000_template_review',
 ];
 
 async function prepareOperationsSchema(prisma) {

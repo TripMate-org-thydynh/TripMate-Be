@@ -91,6 +91,9 @@ describe('PushService', () => {
     });
     const svc = new PushService(prisma);
     await svc.sendToUsers(['u1'], { title: 't', body: 'b' });
+    await expect(svc.sendToUsers(
+      ['u1'], { title: 't', body: 'b' }, undefined, { retryIfNoneAccepted: true },
+    )).rejects.toMatchObject({ code: 'messaging/internal-error' });
     expect(prisma.deviceToken.deleteMany).not.toHaveBeenCalled();
   });
 
