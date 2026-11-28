@@ -115,24 +115,21 @@ export class ItineraryTemplatesService {
         authorId: userId,
         sourceTripId: trip.id,
         title: dto.title?.trim() || trip.name,
-        description: dto.description?.trim() || trip.description,
+        description: dto.description?.trim() || null,
         destination: trip.destination,
-        coverImage: trip.coverImage,
         vibe: trip.vibe,
         dayCount: Math.max(...days),
         stopCount: trip.itineraries.length,
-        isPublic: dto.isPublic ?? true,
+        isPublic: false,
+        reviewStatus: dto.isPublic == false ? 'PRIVATE' : 'PENDING',
         tags: dto.tags ?? [],
         items: {
           create: trip.itineraries.map((i) => ({
             day: i.day,
             startTime: i.startTime,
             placeName: i.placeName,
-            placeAddress: i.placeAddress,
-            latitude: i.latitude,
-            longitude: i.longitude,
             durationMinutes: i.durationMinutes,
-            notes: dto.includeNotes ? i.notes : null,
+            notes: null,
             category: i.category,
           })),
         },
@@ -156,6 +153,7 @@ export class ItineraryTemplatesService {
       deletedAt: null,
       ...(q.days ? { dayCount: q.days } : {}),
       ...(q.tag ? { tags: { has: q.tag } } : {}),
+      ...(q.budgetTo != null ? { budgetFrom: { lte: q.budgetTo } } : {}),
       ...(term
         ? {
             OR: [
@@ -180,7 +178,61 @@ export class ItineraryTemplatesService {
         include: { author: AUTHOR_SELECT },
       }),
     ]);
-    return { total, items };
+    return { total, items: items.map(item => ({ ...item, sourceTripId: null })) };
+  }
+
+  async editorial(id?: string) {
+    const items = await this.prisma.itineraryTemplate.findMany({
+      where: { isPublic: true, isEditorial: true, reviewStatus: 'APPROVED', deletedAt: null, ...(id ? { id } : {}) },
+      select: {
+        id: true, title: true, description: true, destination: true, dayCount: true,
+        budgetFrom: true, budgetTo: true, updatedAt: true,
+        items: {
+          orderBy: [{ day: 'asc' }, { startTime: 'asc' }],
+          select: { id: true, day: true, startTime: true, placeName: true, durationMinutes: true, notes: true },
+        },
+      },
+      orderBy: [{ destination: 'asc' }, { dayCount: 'asc' }], take: 24,
+    });
+    if (!id) return items;
+    if (!items[0]) throw new NotFoundException('errors.templates.notFound');
+    return items[0];
+  }
+
+  reviewQueue() {
+    return this.prisma.itineraryTemplate.findMany({
+      where: { deletedAt: null, isEditorial: false, reviewStatus: { in: ['PENDING', 'APPROVED', 'REJECTED'] } },
+      orderBy: [{ updatedAt: 'desc' }], take: 60,
+      select: {
+        id: true, title: true, description: true, destination: true, reviewStatus: true,
+        author: AUTHOR_SELECT,
+        items: { orderBy: [{ day: 'asc' }, { startTime: 'asc' }],
+          select: { id: true, day: true, startTime: true, placeName: true, durationMinutes: true, notes: true } },
+      },
+    });
+  }
+
+  async review(id: string, approve: boolean, reason: string, adminId: string) {
+    const status = approve ? 'APPROVED' : 'REJECTED';
+    const result = await this.prisma.$transaction(async tx => {
+      const where = { id, deletedAt: null, isEditorial: false,
+        reviewStatus: { in: approve ? ['PENDING'] : ['PENDING', 'APPROVED'] } };
+      const saved = await tx.itineraryTemplate.updateMany({
+        where, data: { isPublic: approve, reviewStatus: status, ...(!approve ? { isFeatured: false } : {}) },
+      });
+      if (!saved.count) throw new NotFoundException('errors.templates.notFound');
+      await tx.adminAuditLog.create({ data: {
+        adminId, action: 'TEMPLATE_REVIEWED', targetType: 'itineraryTemplate',
+        targetId: id, reason, details: { status },
+      } });
+      return { status };
+    });
+    if (approve) {
+      void this.embeddings.indexTemplate(id).catch(() => undefined);
+    } else {
+      void this.embeddings.removeTemplate(id).catch(() => undefined);
+    }
+    return result;
   }
 
   async listMine(userId: string) {
@@ -204,17 +256,19 @@ export class ItineraryTemplatesService {
     if (!t || (!t.isPublic && t.authorId !== userId)) {
       throw new NotFoundException('errors.templates.notFound');
     }
-    return t;
+    return t.authorId === userId ? t : { ...t, sourceTripId: null };
   }
 
   async update(id: string, userId: string, dto: UpdateTemplateDto) {
-    await this.ensureAuthor(id, userId);
+    const current = await this.ensureAuthor(id, userId);
+    const wantsPublic = dto.isPublic ?? (current.isPublic || current.reviewStatus === 'PENDING');
     return this.prisma.itineraryTemplate.update({
       where: { id },
       data: {
         title: dto.title?.trim(),
         description: dto.description?.trim(),
-        isPublic: dto.isPublic,
+        isPublic: false,
+        reviewStatus: wantsPublic ? 'PENDING' : 'PRIVATE',
         tags: dto.tags,
       },
       include: { author: AUTHOR_SELECT },
@@ -373,7 +427,8 @@ export class ItineraryTemplatesService {
       (t.isFeatured ? 100 : 0) +
       (t.ratingCount * t.ratingAvg + m * prior) / (t.ratingCount + m) +
       Math.log10(1 + t.useCount) * 0.3;
-    return pool.sort((a, b) => score(b) - score(a)).slice(0, limit);
+    return pool.sort((a, b) => score(b) - score(a)).slice(0, limit)
+      .map(item => ({ ...item, sourceTripId: null }));
   }
 
   /**
@@ -453,11 +508,12 @@ export class ItineraryTemplatesService {
   private async ensureAuthor(id: string, userId: string) {
     const t = await this.prisma.itineraryTemplate.findUnique({
       where: { id, deletedAt: null },
-      select: { authorId: true },
+      select: { authorId: true, isPublic: true, reviewStatus: true },
     });
     if (!t) throw new NotFoundException('errors.templates.notFound');
     if (t.authorId !== userId) {
       throw new ForbiddenException('errors.templates.notAuthor');
     }
+    return t;
   }
 }

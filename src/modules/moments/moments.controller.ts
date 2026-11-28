@@ -6,8 +6,11 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
+  Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -20,7 +23,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
 import { ResourceOwnerGuard } from '../../common/guards/resource-owner.guard';
 import { OwnedResource } from '../../common/decorators/resource-owner.decorator';
-import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { InTrip } from '../../common/guards/trip-resource.guard';
 
@@ -33,6 +36,11 @@ class ReactionDto {
   @IsNotEmpty()
   @MaxLength(16)
   emoji: string;
+}
+
+class SetFavoriteDto {
+  @IsBoolean()
+  isFavorite!: boolean;
 }
 
 @ApiTags('Moments')
@@ -63,6 +71,15 @@ export class MomentsController {
   @ApiOperation({ summary: 'Ghost Cam: số ảnh đang chờ tráng và mốc tráng' })
   developing(@Param('tripId') tripId: string, @CurrentUser() user: User) {
     return this.momentsService.developing(tripId, user.id);
+  }
+
+  @Get('gallery')
+  gallery(
+    @Param('tripId', ParseUUIDPipe) tripId: string,
+    @CurrentUser() user: User,
+    @Query('cursor', new ParseUUIDPipe({ optional: true })) cursor?: string,
+  ) {
+    return this.momentsService.gallery(tripId, user.id, cursor);
   }
 
   @InTrip('moment', 'id')
@@ -96,6 +113,17 @@ export class MomentsController {
     @CurrentUser() user: User,
   ) {
     return this.momentsService.toggleFavorite(tripId, id, user.id);
+  }
+
+  @InTrip('moment', 'id')
+  @Put(':id/favorite')
+  setFavorite(
+    @Param('tripId') tripId: string,
+    @Param('id') id: string,
+    @CurrentUser() user: User,
+    @Body() dto: SetFavoriteDto,
+  ) {
+    return this.momentsService.setFavorite(tripId, id, user.id, dto.isFavorite);
   }
 
   @UseGuards(ResourceOwnerGuard)

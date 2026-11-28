@@ -129,7 +129,7 @@ export class ReportsService {
       if (targetType === 'TEMPLATE') {
         await this.prisma.itineraryTemplate.updateMany({
           where: { id: targetId },
-          data: { isPublic: false },
+          data: { isPublic: false, reviewStatus: 'REJECTED', isFeatured: false },
         });
       } else if (targetType === 'MOMENT') {
         await this.prisma.moment.updateMany({
@@ -141,7 +141,7 @@ export class ReportsService {
     // Bác báo cáo về mẫu đã bị tự ẩn → mở lại công khai.
     if (decision === 'DISMISSED' && targetType === 'TEMPLATE') {
       await this.prisma.itineraryTemplate.updateMany({
-        where: { id: targetId, deletedAt: null },
+        where: { id: targetId, deletedAt: null, reviewStatus: 'APPROVED' },
         data: { isPublic: true },
       });
     }

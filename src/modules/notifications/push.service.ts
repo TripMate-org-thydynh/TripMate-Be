@@ -30,6 +30,10 @@ const DEAD_TOKEN_CODES = new Set([
 /** FCM giới hạn 500 token mỗi lần gửi. */
 const FCM_BATCH = 500;
 
+export function isRetryablePushError(code?: string): boolean {
+  return !code || /internal|server-unavailable|quota|rate|unknown/.test(code);
+}
+
 /**
  * Gửi thông báo đẩy qua FCM để đánh thức điện thoại khi app đang đóng.
  *
@@ -111,14 +115,19 @@ export class PushService {
     await this.prisma.deviceToken.deleteMany({ where: { userId, token } });
   }
 
-  async sendToUsers(userIds: string[], msg: PushMessage): Promise<PushResult> {
+  async sendToUsers(
+    userIds: string[],
+    msg: PushMessage,
+    platform?: string,
+    options?: { retryIfNoneAccepted: boolean },
+  ): Promise<PushResult> {
     const messaging = this.client();
     if (!messaging || userIds.length === 0) {
       return { enabled: messaging !== null, attempted: 0, delivered: 0 };
     }
 
     const rows = await this.prisma.deviceToken.findMany({
-      where: { userId: { in: userIds } },
+      where: { userId: { in: userIds }, platform },
       select: { token: true },
     });
     const tokens = rows.map((r) => r.token);
@@ -131,6 +140,7 @@ export class PushService {
     );
     let delivered = 0;
     const dead: string[] = [];
+    let transientFailure: { code: string } | undefined;
 
     for (let i = 0; i < tokens.length; i += FCM_BATCH) {
       const batch = tokens.slice(i, i + FCM_BATCH);
@@ -142,8 +152,9 @@ export class PushService {
       });
       delivered += res.successCount;
       res.responses.forEach((r, j) => {
-        if (!r.success && r.error && DEAD_TOKEN_CODES.has(r.error.code)) {
-          dead.push(batch[j]);
+        if (!r.success && r.error) {
+          if (DEAD_TOKEN_CODES.has(r.error.code)) dead.push(batch[j]);
+          if (isRetryablePushError(r.error.code)) transientFailure ??= r.error;
         }
       });
     }
@@ -153,6 +164,9 @@ export class PushService {
         where: { token: { in: dead } },
       });
       this.logger.log(`Gỡ ${dead.length} token đã chết`);
+    }
+    if (options?.retryIfNoneAccepted && delivered === 0 && transientFailure) {
+      throw transientFailure;
     }
     return { enabled: true, attempted: tokens.length, delivered };
   }

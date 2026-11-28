@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { User } from '@prisma/client';
+import { RequireCapability } from '../health/capability.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TripMemberGuard } from '../../common/guards/trip-member.guard';
@@ -93,6 +94,7 @@ export class ItineraryTemplatesController {
   }
 
   @Patch(':id')
+  @RequireCapability('publishTemplate')
   @ApiOperation({ summary: 'Sửa tiêu đề / mô tả / công khai (tác giả)' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -109,6 +111,7 @@ export class ItineraryTemplatesController {
   }
 
   @Post(':id/customize')
+  @RequireCapability('matey')
   @ApiOperation({
     summary: 'AI chỉnh mẫu theo nhóm (xem trước, không ghi) — tính hạn mức AI',
   })
@@ -142,6 +145,7 @@ export class TripTemplatePublishController {
   constructor(private readonly service: ItineraryTemplatesService) {}
 
   @Post()
+  @RequireCapability('publishTemplate')
   @ApiOperation({ summary: 'Đăng lịch trình chuyến này thành mẫu' })
   publish(
     @Param('tripId') tripId: string,

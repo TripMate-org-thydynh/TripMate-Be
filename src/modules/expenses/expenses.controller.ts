@@ -23,6 +23,7 @@ import { ResourceOwnerGuard } from '../../common/guards/resource-owner.guard';
 import { OwnedResource } from '../../common/decorators/resource-owner.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { InTrip } from '../../common/guards/trip-resource.guard';
+import { RequireCapability } from '../health/capability.guard';
 @ApiTags('Expenses')
 @UseGuards(JwtAuthGuard, TripMemberGuard)
 @ApiBearerAuth('JWT')
@@ -140,6 +141,7 @@ export class ExpensesController {
   }
 
   @Post('ocr')
+  @RequireCapability('receiptOcr')
   @ApiOperation({ summary: 'Quét hóa đơn bằng AI' })
   scanReceipt(
     @Param('tripId') tripId: string,

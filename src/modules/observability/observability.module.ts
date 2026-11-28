@@ -5,10 +5,11 @@ import { MetricsBufferService } from './metrics-buffer.service';
 import { ObservabilityService } from './observability.service';
 import { ObservabilityController } from './observability.controller';
 import { RequestFailuresService } from './request-failures.service';
+import { BetaEventsController } from './beta-events.controller';
 
 @Module({
   imports: [PrismaModule],
-  controllers: [ObservabilityController, ClientErrorsController],
+  controllers: [ObservabilityController, ClientErrorsController, BetaEventsController],
   providers: [
     MetricsBufferService,
     ObservabilityService,

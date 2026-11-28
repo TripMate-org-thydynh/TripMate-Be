@@ -7,10 +7,11 @@ import {
   TripTemplatePublishController,
 } from './itinerary-templates.controller';
 import { ItineraryTemplatesService } from './itinerary-templates.service';
+import { TemplateCatalogController, TemplateReviewController } from './template-catalog.controller';
 
 @Module({
   imports: [TripsModule, AiModule, ItinerariesModule],
-  controllers: [ItineraryTemplatesController, TripTemplatePublishController],
+  controllers: [ItineraryTemplatesController, TripTemplatePublishController, TemplateCatalogController, TemplateReviewController],
   providers: [ItineraryTemplatesService],
 })
 export class ItineraryTemplatesModule {}
